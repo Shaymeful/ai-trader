@@ -46,6 +46,16 @@ class Config(BaseModel):
     # Logging
     log_level: str = Field(default="INFO", description="Logging level")
 
+    # Live trading safety flags
+    enable_live_trading: bool = Field(
+        default=False,
+        description="Enable live trading (required for live mode)"
+    )
+    i_understand_live_trading_risk: bool = Field(
+        default=False,
+        description="Acknowledge understanding of live trading risks"
+    )
+
 
 def load_config() -> Config:
     """Load configuration from .env file and environment variables."""
@@ -67,6 +77,8 @@ def load_config() -> Config:
         "sma_fast_period": int(os.getenv("SMA_FAST_PERIOD", "10")),
         "sma_slow_period": int(os.getenv("SMA_SLOW_PERIOD", "30")),
         "log_level": os.getenv("LOG_LEVEL", "INFO"),
+        "enable_live_trading": os.getenv("ENABLE_LIVE_TRADING", "false").lower() == "true",
+        "i_understand_live_trading_risk": os.getenv("I_UNDERSTAND_LIVE_TRADING_RISK", "false").lower() == "true",
     }
 
     # Parse allowed symbols
@@ -74,3 +86,23 @@ def load_config() -> Config:
     config_dict["allowed_symbols"] = [s.strip() for s in symbols_str.split(",")]
 
     return Config(**config_dict)
+
+
+def is_live_trading_mode(config: Config) -> bool:
+    """
+    Detect if configuration is for live trading (real money).
+
+    Live trading mode is detected when:
+    - mode is "alpaca" AND
+    - alpaca_base_url is the live API (not paper trading)
+
+    Args:
+        config: Configuration object
+
+    Returns:
+        True if live trading mode, False otherwise
+    """
+    return (
+        config.mode == "alpaca"
+        and "paper" not in config.alpaca_base_url.lower()
+    )

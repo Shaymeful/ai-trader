@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from src.app.config import load_config
+from src.app.config import load_config, is_live_trading_mode
 from src.app.models import TradeRecord, OrderSide, OrderRecord, FillRecord
 from src.app.state import BotState, load_state, save_state, build_client_order_id
 from src.broker import MockBroker, AlpacaBroker
@@ -158,6 +158,19 @@ def run_trading_loop(iterations: int = 5):
             logger.info(f"Loaded previous state with {len(state.submitted_client_order_ids)} known orders")
             # Update run_id for new session
             state.run_id = run_id
+
+        # SAFETY GATE: Check live trading requirements
+        if is_live_trading_mode(config):
+            if not config.enable_live_trading or not config.i_understand_live_trading_risk:
+                error_msg = (
+                    "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
+                    "I_UNDERSTAND_LIVE_TRADING_RISK=true to proceed."
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            logger.warning("=" * 60)
+            logger.warning("LIVE TRADING MODE ENABLED - REAL MONEY AT RISK")
+            logger.warning("=" * 60)
 
         # Initialize components based on mode
         if config.mode == "mock":
