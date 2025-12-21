@@ -141,6 +141,10 @@ def run_trading_loop(iterations: int = 5):
         logger.info("AI Trader Starting")
         logger.info("=" * 60)
         logger.info(f"Mode: {config.mode}")
+        if config.dry_run:
+            logger.warning("=" * 60)
+            logger.warning("DRY-RUN MODE ENABLED - NO ORDERS WILL BE SUBMITTED")
+            logger.warning("=" * 60)
         logger.info(f"Allowed symbols: {config.allowed_symbols}")
         logger.info(f"Max positions: {config.max_positions}")
         logger.info(f"Max order quantity: {config.max_order_quantity}")
@@ -307,7 +311,7 @@ def run_trading_loop(iterations: int = 5):
                             strategy_name="SMA"
                         )
 
-                        if result.success:
+                        if result.success and result.order is not None:
                             trades_executed += 1
 
                             # Update last processed timestamp

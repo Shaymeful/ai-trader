@@ -56,6 +56,12 @@ class Config(BaseModel):
         description="Acknowledge understanding of live trading risks"
     )
 
+    # Dry-run mode
+    dry_run: bool = Field(
+        default=False,
+        description="Dry-run mode: simulate trading without submitting orders"
+    )
+
 
 def load_config() -> Config:
     """Load configuration from .env file and environment variables."""
@@ -79,6 +85,7 @@ def load_config() -> Config:
         "log_level": os.getenv("LOG_LEVEL", "INFO"),
         "enable_live_trading": os.getenv("ENABLE_LIVE_TRADING", "false").lower() == "true",
         "i_understand_live_trading_risk": os.getenv("I_UNDERSTAND_LIVE_TRADING_RISK", "false").lower() == "true",
+        "dry_run": os.getenv("DRY_RUN", "false").lower() == "true",
     }
 
     # Parse allowed symbols
