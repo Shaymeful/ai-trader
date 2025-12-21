@@ -11,6 +11,7 @@ from typing import List
 from src.app.config import load_config, is_live_trading_mode
 from src.app.models import TradeRecord, OrderSide, OrderRecord, FillRecord
 from src.app.state import BotState, load_state, save_state, build_client_order_id
+from src.app.order_pipeline import submit_signal_order
 from src.broker import MockBroker, AlpacaBroker
 from src.data import MockDataProvider, AlpacaDataProvider
 from src.risk import RiskManager
@@ -287,126 +288,33 @@ def run_trading_loop(iterations: int = 5):
                         logger.info(f"    Signal: {signal.side.value.upper()}")
                         logger.info(f"    Reason: {signal.reason}")
 
-                        # Risk checks
-                        risk_check = risk_manager.check_signal(signal)
-                        if not risk_check:
-                            logger.warning(f"    Risk check FAILED: {risk_check.reason}")
-                            continue
-
-                        logger.info(f"    Risk check: PASSED")
-
                         # Determine quantity (simple fixed quantity for MVP)
                         quantity = 10
 
-                        qty_check = risk_manager.check_order_quantity(quantity)
-                        if not qty_check:
-                            logger.warning(f"    Quantity check FAILED: {qty_check.reason}")
-                            continue
-
-                        logger.info(f"    Quantity check: PASSED")
-
-                        # Build deterministic idempotency key (client_order_id)
-                        client_order_id = build_client_order_id(
-                            symbol=signal.symbol,
-                            side=signal.side.value,
-                            signal_timestamp=signal.timestamp,
+                        # Submit order through centralized pipeline
+                        # This enforces ALL risk checks and idempotency before broker calls
+                        result = submit_signal_order(
+                            signal=signal,
+                            quantity=quantity,
+                            config=config,
+                            broker=broker,
+                            risk_manager=risk_manager,
+                            state=state,
+                            run_id=run_id,
+                            write_order_to_csv_fn=write_order_to_csv,
+                            write_fill_to_csv_fn=write_fill_to_csv,
+                            write_trade_to_csv_fn=write_trade_to_csv,
                             strategy_name="SMA"
                         )
 
-                        logger.info(f"    Client Order ID: {client_order_id}")
-
-                        # Idempotency check
-                        if client_order_id in state.submitted_client_order_ids:
-                            logger.warning(f"    Skipping duplicate order (idempotency key already submitted): {client_order_id}")
-                            continue
-
-                        if broker.order_exists(client_order_id):
-                            logger.warning(f"    Skipping duplicate order (idempotency key exists in broker): {client_order_id}")
-                            state.submitted_client_order_ids.add(client_order_id)
-                            save_state(state)
-                            continue
-
-                        logger.info(f"    Idempotency check: PASSED")
-
-                        # Submit order
-                        try:
-                            order = broker.submit_order(
-                                symbol=signal.symbol,
-                                side=signal.side,
-                                quantity=quantity,
-                                client_order_id=client_order_id
-                            )
-                            logger.info(
-                                f"    Order submitted: {order.side.value.upper()} {order.quantity} "
-                                f"shares @ ${order.filled_price}"
-                            )
-
-                            # Record order
-                            order_record = OrderRecord(
-                                timestamp=order.submitted_at,
-                                symbol=order.symbol,
-                                side=order.side.value,
-                                quantity=order.quantity,
-                                order_type=order.type.value,
-                                limit_price=order.price,
-                                client_order_id=client_order_id,
-                                broker_order_id=order.id,
-                                run_id=run_id,
-                                status=order.status.value
-                            )
-                            write_order_to_csv(order_record)
-
-                            # Add to state
-                            state.submitted_client_order_ids.add(client_order_id)
-
-                            # Update risk manager if filled
-                            if order.status.value == "filled":
-                                # Record fill
-                                fill_record = FillRecord(
-                                    timestamp=order.filled_at,
-                                    symbol=order.symbol,
-                                    side=order.side.value,
-                                    quantity=order.quantity,
-                                    price=order.filled_price,
-                                    client_order_id=client_order_id,
-                                    broker_order_id=order.id,
-                                    run_id=run_id
-                                )
-                                write_fill_to_csv(fill_record)
-
-                                qty_signed = quantity if signal.side == OrderSide.BUY else -quantity
-                                risk_manager.update_position(
-                                    symbol,
-                                    qty_signed,
-                                    order.filled_price
-                                )
-
-                                # Record trade (legacy format)
-                                trade = TradeRecord(
-                                    timestamp=order.filled_at,
-                                    symbol=order.symbol,
-                                    side=order.side.value,
-                                    quantity=order.quantity,
-                                    price=order.filled_price,
-                                    order_id=order.id,
-                                    client_order_id=client_order_id,
-                                    run_id=run_id,
-                                    reason=signal.reason
-                                )
-                                write_trade_to_csv(trade)
-                                trades_executed += 1
-                                logger.info(f"    Trade recorded to out/trades.csv")
+                        if result.success:
+                            trades_executed += 1
 
                             # Update last processed timestamp
                             state.last_processed_timestamp[symbol] = current_time.isoformat()
 
                             # Save state after each order
                             save_state(state)
-
-                        except ValueError as e:
-                            logger.error(f"    Error submitting order (duplicate?): {e}")
-                        except Exception as e:
-                            logger.error(f"    Error submitting order: {e}")
                     else:
                         logger.info(f"    Signal: HOLD (no crossover detected)")
 
