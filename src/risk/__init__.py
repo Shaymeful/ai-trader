@@ -1,0 +1,4 @@
+"""Risk management module."""
+from src.risk.manager import RiskManager
+
+__all__ = ["RiskManager"]

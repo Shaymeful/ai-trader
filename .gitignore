@@ -1,6 +1,28 @@
-﻿.venv/
+﻿# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Env / secrets
 .env
+*.env
+.env.*
+!.env.example
+
+# Logs / outputs
 logs/
 out/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# AI tooling / local metadata
+.claude/
