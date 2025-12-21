@@ -292,9 +292,8 @@ def run_trading_loop(iterations: int = 5):
 
                         logger.info(f"    Quantity check: PASSED")
 
-                        # Build deterministic client_order_id
+                        # Build deterministic idempotency key (client_order_id)
                         client_order_id = build_client_order_id(
-                            run_id=run_id,
                             symbol=signal.symbol,
                             side=signal.side.value,
                             signal_timestamp=signal.timestamp,
@@ -305,11 +304,11 @@ def run_trading_loop(iterations: int = 5):
 
                         # Idempotency check
                         if client_order_id in state.submitted_client_order_ids:
-                            logger.warning(f"    SKIP_DUPLICATE_ORDER: {client_order_id} already submitted")
+                            logger.warning(f"    Skipping duplicate order (idempotency key already submitted): {client_order_id}")
                             continue
 
                         if broker.order_exists(client_order_id):
-                            logger.warning(f"    SKIP_DUPLICATE_ORDER: {client_order_id} exists in broker")
+                            logger.warning(f"    Skipping duplicate order (idempotency key exists in broker): {client_order_id}")
                             state.submitted_client_order_ids.add(client_order_id)
                             save_state(state)
                             continue

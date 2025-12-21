@@ -63,32 +63,36 @@ def save_state(state: BotState, state_file: Path = Path("out/state.json")):
 
 
 def build_client_order_id(
-    run_id: str,
     symbol: str,
     side: str,
     signal_timestamp: datetime,
     strategy_name: str = "SMA"
 ) -> str:
     """
-    Build deterministic client order ID.
+    Build deterministic idempotency key for order deduplication.
 
-    Format: {strategy}_{symbol}_{side}_{timestamp}_{run_id_prefix}
+    The key is stable across program restarts and computed from:
+    - strategy identifier (e.g., "SMA")
+    - symbol (e.g., "AAPL")
+    - side (e.g., "buy" or "sell")
+    - signal bar timestamp (not wall-clock time)
+
+    This ensures the same signal always produces the same key, preventing
+    duplicate orders across multiple runs, loop iterations, or restarts.
+
+    Format: {strategy}_{symbol}_{side}_{timestamp}
 
     Args:
-        run_id: Run ID for this session
-        symbol: Trading symbol
-        side: Order side (buy/sell)
-        signal_timestamp: Timestamp of the signal
-        strategy_name: Strategy name (default: SMA)
+        symbol: Trading symbol (e.g., "AAPL")
+        side: Order side ("buy" or "sell")
+        signal_timestamp: Timestamp of the bar that produced the signal
+        strategy_name: Strategy identifier (default: "SMA")
 
     Returns:
-        Deterministic client order ID
+        Deterministic idempotency key / client_order_id
     """
-    # Use only first 8 chars of run_id for brevity
-    run_id_prefix = run_id[:8]
-
     # Format timestamp as compact string (no special chars)
     ts_str = signal_timestamp.strftime("%Y%m%d%H%M%S")
 
-    # Build deterministic ID
-    return f"{strategy_name}_{symbol}_{side}_{ts_str}_{run_id_prefix}"
+    # Build deterministic key from stable inputs only
+    return f"{strategy_name}_{symbol}_{side}_{ts_str}"
