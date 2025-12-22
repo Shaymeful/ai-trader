@@ -51,6 +51,13 @@ def submit_signal_order(
     4. State is only updated after successful submission
     5. CSV files are only written after successful submission
 
+    In DRY_RUN mode:
+    - All checks are performed (idempotency, risk, quantity)
+    - Broker is NOT called
+    - CSV files are NOT written
+    - State is NOT modified
+    - Logs what WOULD have happened
+
     Args:
         signal: Trading signal to execute
         quantity: Order quantity
@@ -128,7 +135,20 @@ def submit_signal_order(
 
     logger.info(f"    Quantity check: PASSED")
 
-    # Step 6: Submit order to broker (ONLY if all checks passed)
+    # DRY-RUN MODE: Stop before broker call
+    if config.dry_run:
+        logger.warning(
+            f"    DRY_RUN: would submit {signal.side.value.upper()} {quantity} {signal.symbol} "
+            f"with client_order_id={client_order_id} (reason={signal.reason})"
+        )
+        return OrderSubmissionResult(
+            success=True,  # Successful dry-run
+            reason="Dry-run: order would have been submitted",
+            order=None,
+            client_order_id=client_order_id
+        )
+
+    # Step 6: Submit order to broker (ONLY if all checks passed and NOT dry-run)
     try:
         order = broker.submit_order(
             symbol=signal.symbol,
