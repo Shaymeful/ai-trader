@@ -152,6 +152,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # Environment preflight check: paper/live modes require Alpaca API credentials
+    if args.mode in ("paper", "live"):
+        import os
+
+        if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
+            print(
+                f"ERROR: {args.mode.capitalize()} mode requires Alpaca API credentials.\n"
+                "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+                file=sys.stderr,
+            )
+            return 1
+
     # Parse symbols if provided
     symbols = None
     if args.symbols:
@@ -343,6 +355,12 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         elif config.mode == "alpaca":
             if not config.alpaca_api_key or not config.alpaca_secret_key:
                 logger.error("Alpaca mode requires ALPACA_API_KEY and ALPACA_SECRET_KEY")
+                # If user explicitly requested paper/live mode, fail instead of fallback
+                if mode_override in ("paper", "live"):
+                    raise RuntimeError(
+                        f"Cannot use {mode_override} mode: ALPACA_API_KEY and ALPACA_SECRET_KEY "
+                        "environment variables are required but not set."
+                    )
                 logger.info("Falling back to Mock mode")
                 data_provider = MockDataProvider()
                 broker = MockBroker()
@@ -356,6 +374,12 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                         config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
                     )
                 except NotImplementedError:
+                    # If user explicitly requested paper/live mode, fail instead of fallback
+                    if mode_override in ("paper", "live"):
+                        raise RuntimeError(
+                            f"Cannot use {mode_override} mode: alpaca-py library is required but not installed. "
+                            "Install with: pip install alpaca-py"
+                        ) from None
                     logger.warning("Alpaca implementation requires alpaca-py library")
                     logger.info("Falling back to Mock mode")
                     data_provider = MockDataProvider()

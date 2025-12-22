@@ -84,6 +84,10 @@ def test_main_live_with_ack_succeeds(monkeypatch):
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
 
+    # Set API keys for live mode
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+
     result = main(["--mode", "live", "--i-understand-live-trading"])
 
     assert result == 0
@@ -96,6 +100,10 @@ def test_main_paper_mode(monkeypatch):
     """Test that paper mode calls loop with correct mode."""
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set API keys for paper mode
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
 
     result = main(["--mode", "paper"])
 
@@ -167,3 +175,45 @@ def test_main_exception_handling(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "ERROR" in captured.err
     assert "Test error" in captured.err
+
+
+def test_main_paper_mode_without_keys_fails(monkeypatch, capsys):
+    """Test that paper mode without API keys returns non-zero and doesn't call loop."""
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Clear any existing API key environment variables
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+    result = main(["--mode", "paper"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "paper mode requires alpaca api credentials" in captured.err.lower()
+    assert "ALPACA_API_KEY" in captured.err
+    assert "ALPACA_SECRET_KEY" in captured.err
+
+
+def test_main_live_mode_with_ack_without_keys_fails(monkeypatch, capsys):
+    """Test that live mode with ack but without API keys returns non-zero and doesn't call loop."""
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Clear any existing API key environment variables
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+    result = main(["--mode", "live", "--i-understand-live-trading"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "live mode requires alpaca api credentials" in captured.err.lower()
+    assert "ALPACA_API_KEY" in captured.err
+    assert "ALPACA_SECRET_KEY" in captured.err
