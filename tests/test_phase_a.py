@@ -108,24 +108,27 @@ def test_state_load_nonexistent(temp_dir):
 
 def test_setup_outputs_creates_all_csvs(temp_dir):
     """Test that setup_outputs creates all required CSVs."""
-    setup_outputs()
+    test_run_id = "test-run-123"
+    setup_outputs(test_run_id)
 
-    assert Path("out/trades.csv").exists()
-    assert Path("out/orders.csv").exists()
-    assert Path("out/fills.csv").exists()
+    # Check files exist in run directory
+    run_dir = Path(f"out/runs/{test_run_id}")
+    assert (run_dir / "trades.csv").exists()
+    assert (run_dir / "orders.csv").exists()
+    assert (run_dir / "fills.csv").exists()
 
     # Check headers
-    with open("out/trades.csv") as f:
+    with open(run_dir / "trades.csv") as f:
         header = f.readline().strip()
         assert "run_id" in header
         assert "client_order_id" in header
 
-    with open("out/orders.csv") as f:
+    with open(run_dir / "orders.csv") as f:
         header = f.readline().strip()
         assert "client_order_id" in header
         assert "run_id" in header
 
-    with open("out/fills.csv") as f:
+    with open(run_dir / "fills.csv") as f:
         header = f.readline().strip()
         assert "client_order_id" in header
         assert "run_id" in header
@@ -137,8 +140,13 @@ def test_run_trading_loop_creates_run_id(temp_dir, monkeypatch):
 
     run_trading_loop(iterations=1)
 
-    # Check summary.json contains run_id
-    with open("out/summary.json") as f:
+    # Find the run directory
+    run_dirs = list(Path("out/runs").iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+
+    # Check summary.json contains run_id in run directory
+    with open(run_dir / "summary.json") as f:
         summary = json.load(f)
 
     assert "run_id" in summary
@@ -151,8 +159,13 @@ def test_run_trading_loop_writes_run_id_to_trades(temp_dir, monkeypatch):
 
     run_trading_loop(iterations=1)
 
-    # Check trades.csv header
-    with open("out/trades.csv") as f:
+    # Find the run directory
+    run_dirs = list(Path("out/runs").iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+
+    # Check trades.csv header in run directory
+    with open(run_dir / "trades.csv") as f:
         header = f.readline().strip()
         lines = f.readlines()
 
@@ -253,8 +266,12 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
     # First run - should produce exactly 1 order
     run_trading_loop(iterations=1)
 
-    # Count orders after first run
-    with open("out/orders.csv") as f:
+    # Find first run directory and count orders
+    run_dirs = list(Path("out/runs").iterdir())
+    assert len(run_dirs) == 1
+    run_dir_1 = run_dirs[0]
+
+    with open(run_dir_1 / "orders.csv") as f:
         lines1 = f.readlines()
         order_count1 = len(lines1) - 1  # Subtract header
 
@@ -277,20 +294,26 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
     # Idempotency should prevent duplicate order submission
     run_trading_loop(iterations=1)
 
-    # Count orders after second run
-    with open("out/orders.csv") as f:
+    # Find second run directory and count orders
+    run_dirs_after_2 = list(Path("out/runs").iterdir())
+    assert len(run_dirs_after_2) == 2
+    run_dir_2 = [d for d in run_dirs_after_2 if d != run_dir_1][0]
+
+    with open(run_dir_2 / "orders.csv") as f:
         lines2 = f.readlines()
-        order_count2 = len(lines2) - 1
+        order_count2 = len(lines2) - 1  # Subtract header
 
     # Verify state after second run
     state2 = load_state()
     final_order_ids = state2.submitted_client_order_ids
 
     # CRITICAL ASSERTIONS: Verify idempotency worked
-    # 1. Order count should NOT increase (no new orders submitted)
-    assert order_count2 == order_count1, (
-        f"Expected no new orders (idempotency should prevent duplicates), "
-        f"but order count increased from {order_count1} to {order_count2}"
+    # With per-run directories:
+    # - First run creates 1 order in its directory
+    # - Second run should create 0 orders (idempotency prevents duplicate)
+    assert order_count2 == 0, (
+        f"Expected no new orders in second run (idempotency should prevent duplicates), "
+        f"but second run created {order_count2} orders"
     )
 
     # 2. State should contain the same idempotency keys (no new keys added)
@@ -299,8 +322,7 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
         f"but keys changed from {initial_order_ids} to {final_order_ids}"
     )
 
-    # 3. Verify the count is still exactly 1
-    assert order_count2 == 1, f"Expected exactly 1 order total, got {order_count2}"
+    # 3. Verify we still have exactly 1 key in state
     assert len(final_order_ids) == 1, f"Expected exactly 1 key in state, got {len(final_order_ids)}"
 
 
@@ -332,16 +354,21 @@ def test_orders_csv_and_fills_csv_populated(temp_dir, monkeypatch):
 
     run_trading_loop(iterations=2)
 
-    # Check orders.csv exists and has content
-    orders_path = Path("out/orders.csv")
+    # Find the run directory
+    run_dirs = list(Path("out/runs").iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+
+    # Check orders.csv exists and has content in run directory
+    orders_path = run_dir / "orders.csv"
     assert orders_path.exists()
 
     with open(orders_path) as f:
         lines = f.readlines()
         assert len(lines) >= 1  # At least header
 
-    # Check fills.csv exists and has content
-    fills_path = Path("out/fills.csv")
+    # Check fills.csv exists and has content in run directory
+    fills_path = run_dir / "fills.csv"
     assert fills_path.exists()
 
     with open(fills_path) as f:

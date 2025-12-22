@@ -402,12 +402,14 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
     # Create real CSV write functions that write to files
     from src.app.__main__ import setup_outputs, write_order_to_csv, write_fill_to_csv, write_trade_to_csv
 
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
-    # Get initial line counts
-    orders_before = len(Path("out/orders.csv").read_text().splitlines())
-    fills_before = len(Path("out/fills.csv").read_text().splitlines())
-    trades_before = len(Path("out/trades.csv").read_text().splitlines())
+    # Get initial line counts from run directory
+    run_dir = Path(f"out/runs/{test_run_id}")
+    orders_before = len((run_dir / "orders.csv").read_text().splitlines())
+    fills_before = len((run_dir / "fills.csv").read_text().splitlines())
+    trades_before = len((run_dir / "trades.csv").read_text().splitlines())
 
     # Submit with invalid symbol (should fail risk check)
     signal_invalid = Signal(
@@ -424,7 +426,7 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -434,9 +436,9 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
     assert result_fail.success is False
 
     # Verify CSV files were NOT modified
-    orders_after_fail = len(Path("out/orders.csv").read_text().splitlines())
-    fills_after_fail = len(Path("out/fills.csv").read_text().splitlines())
-    trades_after_fail = len(Path("out/trades.csv").read_text().splitlines())
+    orders_after_fail = len((run_dir / "orders.csv").read_text().splitlines())
+    fills_after_fail = len((run_dir / "fills.csv").read_text().splitlines())
+    trades_after_fail = len((run_dir / "trades.csv").read_text().splitlines())
 
     assert orders_after_fail == orders_before
     assert fills_after_fail == fills_before
@@ -450,7 +452,7 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -460,9 +462,9 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
     assert result_success.success is True
 
     # Verify CSV files were NOW modified
-    orders_after_success = len(Path("out/orders.csv").read_text().splitlines())
-    fills_after_success = len(Path("out/fills.csv").read_text().splitlines())
-    trades_after_success = len(Path("out/trades.csv").read_text().splitlines())
+    orders_after_success = len((run_dir / "orders.csv").read_text().splitlines())
+    fills_after_success = len((run_dir / "fills.csv").read_text().splitlines())
+    trades_after_success = len((run_dir / "trades.csv").read_text().splitlines())
 
     assert orders_after_success == orders_before + 1  # One new order
     assert fills_after_success == fills_before + 1     # One new fill

@@ -19,6 +19,24 @@ from src.signals import SMAStrategy, is_market_hours
 from src.signals.strategy import calculate_sma
 
 
+def get_run_output_dir(run_id: str) -> Path:
+    """
+    Get the output directory for a specific run.
+
+    Creates directory structure: out/runs/<run_id>/
+    All run-scoped artifacts (CSV files, logs, summary) go here.
+
+    Args:
+        run_id: Unique run identifier
+
+    Returns:
+        Path to the run's output directory
+    """
+    run_dir = Path("out") / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
 def close_logging_handlers():
     """
     Close and remove all logging handlers to release file locks.
@@ -48,13 +66,9 @@ def close_logging_handlers():
 
 def setup_logging(log_level: str, run_id: str) -> logging.Logger:
     """Set up logging configuration."""
-    # Create logs directory
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-
-    # Create log file with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"trading_{timestamp}_{run_id[:8]}.log"
+    # Create log file in run-specific directory
+    run_dir = get_run_output_dir(run_id)
+    log_file = run_dir / "trading.log"
 
     # Configure logging with run_id in format
     logging.basicConfig(
@@ -73,50 +87,54 @@ def setup_logging(log_level: str, run_id: str) -> logging.Logger:
     return logger
 
 
-def setup_outputs():
-    """Ensure output directories exist and initialize CSV files."""
+def setup_outputs(run_id: str):
+    """Ensure output directories exist and initialize CSV files for this run."""
+    # Create global out directory and run-specific directory
     Path("out").mkdir(exist_ok=True)
-    Path("logs").mkdir(exist_ok=True)
+    run_dir = get_run_output_dir(run_id)
 
-    # Always create trades.csv with header on startup
-    csv_path = Path("out/trades.csv")
+    # Always create trades.csv with header in run directory
+    csv_path = run_dir / "trades.csv"
     if not csv_path.exists():
         with open(csv_path, "w") as f:
             f.write(TradeRecord.csv_header() + "\n")
 
-    # Always create orders.csv with header on startup
-    orders_path = Path("out/orders.csv")
+    # Always create orders.csv with header in run directory
+    orders_path = run_dir / "orders.csv"
     if not orders_path.exists():
         with open(orders_path, "w") as f:
             f.write(OrderRecord.csv_header() + "\n")
 
-    # Always create fills.csv with header on startup
-    fills_path = Path("out/fills.csv")
+    # Always create fills.csv with header in run directory
+    fills_path = run_dir / "fills.csv"
     if not fills_path.exists():
         with open(fills_path, "w") as f:
             f.write(FillRecord.csv_header() + "\n")
 
 
-def write_trade_to_csv(trade: TradeRecord):
-    """Append trade to CSV file (assumes header already exists)."""
-    csv_path = Path("out/trades.csv")
+def write_trade_to_csv(trade: TradeRecord, run_id: str):
+    """Append trade to CSV file in run directory."""
+    run_dir = get_run_output_dir(run_id)
+    csv_path = run_dir / "trades.csv"
 
     # Append trade
     with open(csv_path, "a") as f:
         f.write(trade.to_csv_row() + "\n")
 
 
-def write_order_to_csv(order: OrderRecord):
-    """Append order to orders.csv."""
-    csv_path = Path("out/orders.csv")
+def write_order_to_csv(order: OrderRecord, run_id: str):
+    """Append order to orders.csv in run directory."""
+    run_dir = get_run_output_dir(run_id)
+    csv_path = run_dir / "orders.csv"
 
     with open(csv_path, "a") as f:
         f.write(order.to_csv_row() + "\n")
 
 
-def write_fill_to_csv(fill: FillRecord):
-    """Append fill to fills.csv."""
-    csv_path = Path("out/fills.csv")
+def write_fill_to_csv(fill: FillRecord, run_id: str):
+    """Append fill to fills.csv in run directory."""
+    run_dir = get_run_output_dir(run_id)
+    csv_path = run_dir / "fills.csv"
 
     with open(csv_path, "a") as f:
         f.write(fill.to_csv_row() + "\n")
@@ -152,7 +170,7 @@ def run_trading_loop(iterations: int = 5):
         logger.info(f"SMA periods: fast={config.sma_fast_period}, slow={config.sma_slow_period}")
 
         # Ensure output directories exist
-        setup_outputs()
+        setup_outputs(run_id)
 
         # Load or initialize state
         state = load_state()
@@ -339,15 +357,16 @@ def run_trading_loop(iterations: int = 5):
                 f"(current: ${pos.current_price:.2f}, PnL: ${pos.unrealized_pnl:.2f})"
             )
 
-        # Count total trades in CSV file (including historical)
-        csv_path = Path("out/trades.csv")
+        # Count total trades in this run's CSV file
+        run_dir = get_run_output_dir(run_id)
+        csv_path = run_dir / "trades.csv"
         total_trades_in_file = 0
         if csv_path.exists():
             with open(csv_path, "r") as f:
                 # Count lines (subtract 1 for header)
                 total_trades_in_file = len(f.readlines()) - 1
 
-        # Write summary JSON
+        # Write summary JSON to run directory
         summary = {
             "timestamp": datetime.now().isoformat(),
             "run_id": run_id,
@@ -368,25 +387,25 @@ def run_trading_loop(iterations: int = 5):
             ]
         }
 
-        summary_file = Path("out/summary.json")
+        summary_file = run_dir / "summary.json"
         with open(summary_file, "w") as f:
             json.dump(summary, f, indent=2)
 
         logger.info(f"\nSummary written to {summary_file}")
-        logger.info("Logs available in logs/ directory")
+        logger.info(f"Logs available in {run_dir}")
 
         # Report trade counts
         if csv_path.exists():
             logger.info(f"Trades executed this session: {trades_executed}")
             if total_trades_in_file > 0:
-                logger.info(f"Total trades in out/trades.csv: {total_trades_in_file}")
+                logger.info(f"Total trades in {csv_path}: {total_trades_in_file}")
             else:
-                logger.info("Trades file created at out/trades.csv (empty)")
+                logger.info(f"Trades file created at {csv_path} (empty)")
         else:
             logger.warning("Trades file not created (unexpected)")
 
-        logger.info(f"Orders available in out/orders.csv")
-        logger.info(f"Fills available in out/fills.csv")
+        logger.info(f"Orders available in {run_dir / 'orders.csv'}")
+        logger.info(f"Fills available in {run_dir / 'fills.csv'}")
         logger.info(f"State saved to out/state.json")
 
 

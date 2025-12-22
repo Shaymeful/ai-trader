@@ -108,7 +108,8 @@ def test_dry_run_flag_case_insensitive(monkeypatch):
 
 def test_dry_run_broker_not_called(temp_dir, config_dry_run, broker, risk_manager, state, signal):
     """Test that broker is NOT called in dry-run mode."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
     result = submit_signal_order(
         signal=signal,
@@ -117,7 +118,7 @@ def test_dry_run_broker_not_called(temp_dir, config_dry_run, broker, risk_manage
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -134,12 +135,14 @@ def test_dry_run_broker_not_called(temp_dir, config_dry_run, broker, risk_manage
 
 def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_manager, state, signal):
     """Test that CSV files are NOT modified in dry-run mode."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
-    # Get initial line counts
-    orders_before = len(Path("out/orders.csv").read_text().splitlines())
-    fills_before = len(Path("out/fills.csv").read_text().splitlines())
-    trades_before = len(Path("out/trades.csv").read_text().splitlines())
+    # Get initial line counts from run directory
+    run_dir = Path(f"out/runs/{test_run_id}")
+    orders_before = len((run_dir / "orders.csv").read_text().splitlines())
+    fills_before = len((run_dir / "fills.csv").read_text().splitlines())
+    trades_before = len((run_dir / "trades.csv").read_text().splitlines())
 
     result = submit_signal_order(
         signal=signal,
@@ -148,7 +151,7 @@ def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_mana
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -158,9 +161,9 @@ def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_mana
     assert result.success is True
 
     # CRITICAL: Verify CSV files were NOT modified
-    orders_after = len(Path("out/orders.csv").read_text().splitlines())
-    fills_after = len(Path("out/fills.csv").read_text().splitlines())
-    trades_after = len(Path("out/trades.csv").read_text().splitlines())
+    orders_after = len((run_dir / "orders.csv").read_text().splitlines())
+    fills_after = len((run_dir / "fills.csv").read_text().splitlines())
+    trades_after = len((run_dir / "trades.csv").read_text().splitlines())
 
     assert orders_after == orders_before
     assert fills_after == fills_before
@@ -169,10 +172,11 @@ def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_mana
 
 def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manager, signal):
     """Test that state is NOT modified in dry-run mode."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
     # Create and save initial state
-    state = BotState(run_id="test-run-id")
+    state = BotState(run_id=test_run_id)
     initial_ids = {"existing-order-1", "existing-order-2"}
     state.submitted_client_order_ids = initial_ids.copy()
     save_state(state)
@@ -188,7 +192,7 @@ def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manag
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -197,7 +201,7 @@ def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manag
 
     assert result.success is True
 
-    # CRITICAL: Verify state file was NOT modified
+    # CRITICAL: Verify state file was NOT modified (state.json is global, not per-run)
     loaded_state = load_state()
     assert loaded_state.submitted_client_order_ids == initial_ids
     assert result.client_order_id not in loaded_state.submitted_client_order_ids
@@ -205,7 +209,8 @@ def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manag
 
 def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, risk_manager, state):
     """Test that risk checks are still enforced in dry-run mode."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
     # Create signal for invalid symbol
     signal = Signal(
@@ -222,7 +227,7 @@ def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, ri
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -240,7 +245,8 @@ def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, ri
 
 def test_dry_run_quantity_checks_still_enforced(temp_dir, config_dry_run, broker, risk_manager, state, signal):
     """Test that quantity checks are still enforced in dry-run mode."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
     result = submit_signal_order(
         signal=signal,
@@ -249,7 +255,7 @@ def test_dry_run_quantity_checks_still_enforced(temp_dir, config_dry_run, broker
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -267,10 +273,11 @@ def test_dry_run_quantity_checks_still_enforced(temp_dir, config_dry_run, broker
 
 def test_dry_run_idempotency_checks_still_enforced(temp_dir, config_dry_run, broker, risk_manager, signal):
     """Test that idempotency checks are still enforced in dry-run mode."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
     # Pre-populate state with client_order_id
-    state = BotState(run_id="test-run-id")
+    state = BotState(run_id=test_run_id)
     client_order_id = "TEST_AAPL_buy_20240115103000"
     state.submitted_client_order_ids.add(client_order_id)
 
@@ -281,7 +288,7 @@ def test_dry_run_idempotency_checks_still_enforced(temp_dir, config_dry_run, bro
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -298,7 +305,8 @@ def test_dry_run_idempotency_checks_still_enforced(temp_dir, config_dry_run, bro
 
 def test_normal_mode_still_works(temp_dir, config_normal, broker, risk_manager, state, signal):
     """Test that normal mode (dry_run=False) still works correctly."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
     result = submit_signal_order(
         signal=signal,
@@ -307,7 +315,7 @@ def test_normal_mode_still_works(temp_dir, config_normal, broker, risk_manager, 
         broker=broker,
         risk_manager=risk_manager,
         state=state,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -321,10 +329,11 @@ def test_normal_mode_still_works(temp_dir, config_normal, broker, risk_manager, 
     # CRITICAL: Verify broker WAS called in normal mode
     assert len(broker.orders) == 1
 
-    # Verify CSV files WERE written
-    orders_count = len(Path("out/orders.csv").read_text().splitlines())
-    fills_count = len(Path("out/fills.csv").read_text().splitlines())
-    trades_count = len(Path("out/trades.csv").read_text().splitlines())
+    # Verify CSV files WERE written to run directory
+    run_dir = Path(f"out/runs/{test_run_id}")
+    orders_count = len((run_dir / "orders.csv").read_text().splitlines())
+    fills_count = len((run_dir / "fills.csv").read_text().splitlines())
+    trades_count = len((run_dir / "trades.csv").read_text().splitlines())
 
     assert orders_count == 2  # Header + 1 order
     assert fills_count == 2    # Header + 1 fill
@@ -339,31 +348,30 @@ def test_dry_run_full_trading_loop(temp_dir, monkeypatch):
     monkeypatch.setenv("MODE", "mock")
     monkeypatch.setenv("DRY_RUN", "true")
 
-    setup_outputs()
-
     # Save initial state
     initial_state = BotState(run_id="initial")
     save_state(initial_state)
-
-    # Get initial line counts
-    orders_before = len(Path("out/orders.csv").read_text().splitlines())
-    fills_before = len(Path("out/fills.csv").read_text().splitlines())
-    trades_before = len(Path("out/trades.csv").read_text().splitlines())
     state_before = Path("out/state.json").read_text()
 
-    # Run trading loop
+    # Run trading loop (creates its own run directory)
     run_trading_loop(iterations=1)
 
-    # CRITICAL: Verify CSV files were NOT modified
-    orders_after = len(Path("out/orders.csv").read_text().splitlines())
-    fills_after = len(Path("out/fills.csv").read_text().splitlines())
-    trades_after = len(Path("out/trades.csv").read_text().splitlines())
+    # Find the run directory
+    run_dirs = list(Path("out/runs").iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
 
-    assert orders_after == orders_before
-    assert fills_after == fills_before
-    assert trades_after == trades_before
+    # In dry-run mode, CSV files should exist but only have headers (no data rows)
+    orders_count = len((run_dir / "orders.csv").read_text().splitlines())
+    fills_count = len((run_dir / "fills.csv").read_text().splitlines())
+    trades_count = len((run_dir / "trades.csv").read_text().splitlines())
 
-    # CRITICAL: Verify state file was NOT modified
+    # Each CSV should have exactly 1 line (header only, no trades in dry-run)
+    assert orders_count == 1  # Header only
+    assert fills_count == 1    # Header only
+    assert trades_count == 1   # Header only
+
+    # CRITICAL: Verify state file was NOT modified (state is global)
     state_after = Path("out/state.json").read_text()
     assert state_after == state_before
 
@@ -373,17 +381,20 @@ def test_dry_run_trades_executed_is_zero(temp_dir, monkeypatch):
     monkeypatch.setenv("MODE", "mock")
     monkeypatch.setenv("DRY_RUN", "true")
 
-    setup_outputs()
-
     # Run trading loop
     from src.app.__main__ import run_trading_loop
 
     # Capture the trades_executed count from summary.json
     run_trading_loop(iterations=2)
 
-    # Check summary.json
+    # Find the run directory
+    run_dirs = list(Path("out/runs").iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+
+    # Check summary.json in run directory
     import json
-    with open("out/summary.json") as f:
+    with open(run_dir / "summary.json") as f:
         summary = json.load(f)
 
     # CRITICAL: Verify trades_executed is 0 in dry-run mode
@@ -395,16 +406,19 @@ def test_normal_mode_trades_executed_is_nonzero(temp_dir, monkeypatch):
     monkeypatch.setenv("MODE", "mock")
     monkeypatch.setenv("DRY_RUN", "false")
 
-    setup_outputs()
-
     # Run trading loop
     from src.app.__main__ import run_trading_loop
 
     run_trading_loop(iterations=2)
 
-    # Check summary.json
+    # Find the run directory
+    run_dirs = list(Path("out/runs").iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+
+    # Check summary.json in run directory
     import json
-    with open("out/summary.json") as f:
+    with open(run_dir / "summary.json") as f:
         summary = json.load(f)
 
     # In normal mode with mock data, we typically get some trades
@@ -415,7 +429,8 @@ def test_normal_mode_trades_executed_is_nonzero(temp_dir, monkeypatch):
 
 def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, broker, signal):
     """Test that dry-run and normal mode behave identically up to broker call."""
-    setup_outputs()
+    test_run_id = "test-run-id"
+    setup_outputs(test_run_id)
 
     # Scenario 1: Dry-run mode
     state_dry = BotState(run_id="test-dry")
@@ -428,7 +443,7 @@ def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, b
         broker=broker,
         risk_manager=risk_manager_dry,
         state=state_dry,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
@@ -447,7 +462,7 @@ def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, b
         broker=broker_normal,
         risk_manager=risk_manager_normal,
         state=state_normal,
-        run_id="test-run-id",
+        run_id=test_run_id,
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
