@@ -6,4 +6,4 @@ python-dotenv>=1.0.0
 pytest>=7.4.0
 
 # Optional: Alpaca integration (not required for mock mode)
-# alpaca-py>=0.20.0
+alpaca-py>=0.20.0
