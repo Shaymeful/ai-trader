@@ -1,15 +1,15 @@
 """Tests for main application module."""
+
 import os
-from pathlib import Path
-import shutil
 import tempfile
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
-from src.app.__main__ import setup_outputs, write_trade_to_csv, run_trading_loop
-from src.app.models import TradeRecord, OrderSide
-from datetime import datetime
-from decimal import Decimal
+from src.app.__main__ import run_trading_loop, setup_outputs, write_trade_to_csv
+from src.app.models import TradeRecord
 
 
 @pytest.fixture
@@ -48,9 +48,11 @@ def test_setup_outputs_creates_trades_csv(temp_dir, test_run_id):
     assert csv_path.exists()
 
     # Check header is present
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         header = f.readline().strip()
-        assert header == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason"
+        assert (
+            header == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason"
+        )
 
 
 def test_setup_outputs_idempotent(temp_dir, test_run_id):
@@ -62,7 +64,7 @@ def test_setup_outputs_idempotent(temp_dir, test_run_id):
     assert csv_path.exists()
 
     # Should still have only one header line
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         lines = f.readlines()
         assert len(lines) == 1
 
@@ -80,13 +82,13 @@ def test_write_trade_to_csv(temp_dir, test_run_id):
         order_id="test-order-1",
         client_order_id="test-client-order-1",
         run_id=test_run_id,
-        reason="Test trade"
+        reason="Test trade",
     )
 
     write_trade_to_csv(trade, test_run_id)
 
     csv_path = Path(f"out/runs/{test_run_id}/trades.csv")
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         lines = f.readlines()
 
     # Should have header + 1 trade
@@ -110,7 +112,7 @@ def test_write_multiple_trades_to_csv(temp_dir, test_run_id):
             order_id="order-1",
             client_order_id="client-order-1",
             run_id=test_run_id,
-            reason="Trade 1"
+            reason="Trade 1",
         ),
         TradeRecord(
             timestamp=datetime(2024, 1, 15, 11, 30),
@@ -121,7 +123,7 @@ def test_write_multiple_trades_to_csv(temp_dir, test_run_id):
             order_id="order-2",
             client_order_id="client-order-2",
             run_id=test_run_id,
-            reason="Trade 2"
+            reason="Trade 2",
         ),
     ]
 
@@ -129,7 +131,7 @@ def test_write_multiple_trades_to_csv(temp_dir, test_run_id):
         write_trade_to_csv(trade, test_run_id)
 
     csv_path = Path(f"out/runs/{test_run_id}/trades.csv")
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         lines = f.readlines()
 
     # Should have header + 2 trades
@@ -156,7 +158,7 @@ def test_run_trading_loop_creates_trades_csv(temp_dir, monkeypatch):
     assert csv_path.exists()
 
     # Check it has at least the header
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         lines = f.readlines()
         assert len(lines) >= 1
         assert "timestamp" in lines[0]
@@ -190,13 +192,16 @@ def test_trades_csv_empty_if_no_signals(temp_dir, monkeypatch):
     run_dir = run_dirs[0]
 
     csv_path = run_dir / "trades.csv"
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         lines = f.readlines()
 
     # Likely only header since mock data rarely triggers signals
     # But at minimum, we should have the header
     assert len(lines) >= 1
-    assert lines[0].strip() == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason"
+    assert (
+        lines[0].strip()
+        == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason"
+    )
 
 
 def test_summary_contains_session_and_total_counts(temp_dir, monkeypatch):
@@ -214,7 +219,7 @@ def test_summary_contains_session_and_total_counts(temp_dir, monkeypatch):
     run_dir = run_dirs[0]
 
     summary_path = run_dir / "summary.json"
-    with open(summary_path, "r") as f:
+    with open(summary_path) as f:
         summary = json.load(f)
 
     # Check both fields exist
@@ -246,7 +251,7 @@ def test_session_count_vs_file_count_after_multiple_runs(temp_dir, monkeypatch, 
             order_id="historical-1",
             client_order_id="historical-client-1",
             run_id=test_run_id,
-            reason="Historical trade 1"
+            reason="Historical trade 1",
         ),
         TradeRecord(
             timestamp=datetime(2024, 1, 14, 11, 30),
@@ -257,7 +262,7 @@ def test_session_count_vs_file_count_after_multiple_runs(temp_dir, monkeypatch, 
             order_id="historical-2",
             client_order_id="historical-client-2",
             run_id=test_run_id,
-            reason="Historical trade 2"
+            reason="Historical trade 2",
         ),
     ]
 
@@ -266,7 +271,7 @@ def test_session_count_vs_file_count_after_multiple_runs(temp_dir, monkeypatch, 
 
     # Verify we have 2 trades in run directory
     csv_path = Path(f"out/runs/{test_run_id}/trades.csv")
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         initial_lines = len(f.readlines()) - 1  # Subtract header
     assert initial_lines == 2
 
@@ -281,7 +286,7 @@ def test_session_count_vs_file_count_after_multiple_runs(temp_dir, monkeypatch, 
 
     # Read summary from the NEW run
     summary_path = new_run_dir / "summary.json"
-    with open(summary_path, "r") as f:
+    with open(summary_path) as f:
         summary = json.load(f)
 
     # Session count should equal file count (per-run isolation)
@@ -290,14 +295,13 @@ def test_session_count_vs_file_count_after_multiple_runs(temp_dir, monkeypatch, 
     assert total_count == session_count
 
     # Verify the original run's CSV is unchanged
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         final_lines = len(f.readlines()) - 1  # Subtract header
     assert final_lines == 2  # Should still be 2, not affected by new run
 
 
 def test_session_trade_count_tracks_correctly(temp_dir, monkeypatch, test_run_id):
     """Test that session trade count increments correctly during execution."""
-    import json
 
     monkeypatch.setenv("MODE", "mock")
     setup_outputs(test_run_id)
@@ -313,7 +317,7 @@ def test_session_trade_count_tracks_correctly(temp_dir, monkeypatch, test_run_id
             order_id="test-1",
             client_order_id="test-client-1",
             run_id=test_run_id,
-            reason="Test trade 1"
+            reason="Test trade 1",
         ),
         TradeRecord(
             timestamp=datetime(2024, 1, 15, 11, 30),
@@ -324,7 +328,7 @@ def test_session_trade_count_tracks_correctly(temp_dir, monkeypatch, test_run_id
             order_id="test-2",
             client_order_id="test-client-2",
             run_id=test_run_id,
-            reason="Test trade 2"
+            reason="Test trade 2",
         ),
         TradeRecord(
             timestamp=datetime(2024, 1, 15, 12, 30),
@@ -335,7 +339,7 @@ def test_session_trade_count_tracks_correctly(temp_dir, monkeypatch, test_run_id
             order_id="test-3",
             client_order_id="test-client-3",
             run_id=test_run_id,
-            reason="Test trade 3"
+            reason="Test trade 3",
         ),
     ]
 
@@ -344,7 +348,7 @@ def test_session_trade_count_tracks_correctly(temp_dir, monkeypatch, test_run_id
 
     # Verify CSV has 3 trades in run directory
     csv_path = Path(f"out/runs/{test_run_id}/trades.csv")
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         lines = len(f.readlines()) - 1
     assert lines == 3
 

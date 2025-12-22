@@ -1,11 +1,12 @@
 """Tests for risk management module."""
+
 from datetime import datetime
 from decimal import Decimal
 
 import pytest
 
 from src.app.config import Config
-from src.app.models import Signal, OrderSide
+from src.app.models import OrderSide, Signal
 from src.risk import RiskManager
 
 
@@ -16,7 +17,7 @@ def config():
         max_positions=3,
         max_order_quantity=50,
         max_daily_loss=Decimal("500"),
-        allowed_symbols=["AAPL", "MSFT", "GOOGL"]
+        allowed_symbols=["AAPL", "MSFT", "GOOGL"],
     )
 
 
@@ -29,10 +30,7 @@ def risk_manager(config):
 def test_signal_passes_basic_checks(risk_manager):
     """Test that valid signal passes all checks."""
     signal = Signal(
-        symbol="AAPL",
-        side=OrderSide.BUY,
-        timestamp=datetime.now(),
-        reason="Test signal"
+        symbol="AAPL", side=OrderSide.BUY, timestamp=datetime.now(), reason="Test signal"
     )
 
     result = risk_manager.check_signal(signal)
@@ -42,10 +40,7 @@ def test_signal_passes_basic_checks(risk_manager):
 def test_symbol_not_in_allowlist(risk_manager):
     """Test that signal for non-allowed symbol is rejected."""
     signal = Signal(
-        symbol="INVALID",
-        side=OrderSide.BUY,
-        timestamp=datetime.now(),
-        reason="Test signal"
+        symbol="INVALID", side=OrderSide.BUY, timestamp=datetime.now(), reason="Test signal"
     )
 
     result = risk_manager.check_signal(signal)
@@ -56,15 +51,12 @@ def test_symbol_not_in_allowlist(risk_manager):
 def test_max_positions_limit(risk_manager):
     """Test that max positions limit is enforced."""
     # Fill up to max positions
-    for i, symbol in enumerate(["AAPL", "MSFT", "GOOGL"]):
+    for _i, symbol in enumerate(["AAPL", "MSFT", "GOOGL"]):
         risk_manager.update_position(symbol, 10, Decimal("100"))
 
     # Try to add one more
     signal = Signal(
-        symbol="AAPL",
-        side=OrderSide.BUY,
-        timestamp=datetime.now(),
-        reason="Test signal"
+        symbol="AAPL", side=OrderSide.BUY, timestamp=datetime.now(), reason="Test signal"
     )
 
     result = risk_manager.check_signal(signal)
@@ -78,10 +70,7 @@ def test_daily_loss_limit(risk_manager):
     risk_manager.daily_pnl = Decimal("-600")
 
     signal = Signal(
-        symbol="AAPL",
-        side=OrderSide.BUY,
-        timestamp=datetime.now(),
-        reason="Test signal"
+        symbol="AAPL", side=OrderSide.BUY, timestamp=datetime.now(), reason="Test signal"
     )
 
     result = risk_manager.check_signal(signal)

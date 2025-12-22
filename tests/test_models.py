@@ -1,12 +1,17 @@
 """Tests for data models."""
+
 from datetime import datetime
 from decimal import Decimal
 
-import pytest
-
 from src.app.models import (
-    Bar, Signal, Order, Position, TradeRecord,
-    OrderSide, OrderType, OrderStatus
+    Bar,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    Position,
+    Signal,
+    TradeRecord,
 )
 
 
@@ -19,7 +24,7 @@ def test_bar_creation():
         high=Decimal("101.00"),
         low=Decimal("100.00"),
         close=Decimal("100.75"),
-        volume=1000000
+        volume=1000000,
     )
 
     assert bar.symbol == "AAPL"
@@ -35,7 +40,7 @@ def test_bar_converts_float_to_decimal():
         high=101.0,
         low=100.0,
         close=100.75,
-        volume=500000
+        volume=500000,
     )
 
     assert isinstance(bar.close, Decimal)
@@ -45,10 +50,7 @@ def test_bar_converts_float_to_decimal():
 def test_signal_creation():
     """Test creating a Signal instance."""
     signal = Signal(
-        symbol="GOOGL",
-        side=OrderSide.BUY,
-        timestamp=datetime.now(),
-        reason="Test signal"
+        symbol="GOOGL", side=OrderSide.BUY, timestamp=datetime.now(), reason="Test signal"
     )
 
     assert signal.symbol == "GOOGL"
@@ -65,7 +67,7 @@ def test_order_creation():
         type=OrderType.MARKET,
         quantity=10,
         status=OrderStatus.PENDING,
-        submitted_at=now
+        submitted_at=now,
     )
 
     assert order.symbol == "TSLA"
@@ -76,10 +78,7 @@ def test_order_creation():
 def test_position_update_price():
     """Test updating position price and PnL."""
     pos = Position(
-        symbol="AMZN",
-        quantity=10,
-        avg_price=Decimal("100"),
-        current_price=Decimal("100")
+        symbol="AMZN", quantity=10, avg_price=Decimal("100"), current_price=Decimal("100")
     )
 
     pos.update_price(Decimal("110"))
@@ -99,7 +98,7 @@ def test_trade_record_csv_conversion():
         order_id="order-123",
         client_order_id="client-order-123",
         run_id="test-run-id",
-        reason="Test trade"
+        reason="Test trade",
     )
 
     csv_row = trade.to_csv_row()

@@ -1,9 +1,9 @@
 """Risk management and position validation."""
+
 from decimal import Decimal
-from typing import Dict, List
 
 from src.app.config import Config
-from src.app.models import Position, Signal, OrderSide
+from src.app.models import OrderSide, Position, Signal
 
 
 class RiskCheckResult:
@@ -23,7 +23,7 @@ class RiskManager:
     def __init__(self, config: Config):
         self.config = config
         self.daily_pnl = Decimal("0")
-        self.positions: Dict[str, Position] = {}
+        self.positions: dict[str, Position] = {}
 
     def check_signal(self, signal: Signal) -> RiskCheckResult:
         """
@@ -37,24 +37,16 @@ class RiskManager:
         """
         # Check symbol allowlist
         if signal.symbol not in self.config.allowed_symbols:
-            return RiskCheckResult(
-                False,
-                f"Symbol {signal.symbol} not in allowlist"
-            )
+            return RiskCheckResult(False, f"Symbol {signal.symbol} not in allowlist")
 
         # Check max positions
-        if signal.side == OrderSide.BUY:
-            if len(self.positions) >= self.config.max_positions:
-                return RiskCheckResult(
-                    False,
-                    f"Max positions ({self.config.max_positions}) reached"
-                )
+        if signal.side == OrderSide.BUY and len(self.positions) >= self.config.max_positions:
+            return RiskCheckResult(False, f"Max positions ({self.config.max_positions}) reached")
 
         # Check daily loss limit
         if self.daily_pnl <= -self.config.max_daily_loss:
             return RiskCheckResult(
-                False,
-                f"Daily loss limit ({self.config.max_daily_loss}) exceeded"
+                False, f"Daily loss limit ({self.config.max_daily_loss}) exceeded"
             )
 
         return RiskCheckResult(True, "All checks passed")
@@ -71,8 +63,7 @@ class RiskManager:
         """
         if quantity > self.config.max_order_quantity:
             return RiskCheckResult(
-                False,
-                f"Order quantity {quantity} exceeds max {self.config.max_order_quantity}"
+                False, f"Order quantity {quantity} exceeds max {self.config.max_order_quantity}"
             )
 
         if quantity <= 0:
@@ -120,13 +111,10 @@ class RiskManager:
             # New position
             if quantity > 0:
                 self.positions[symbol] = Position(
-                    symbol=symbol,
-                    quantity=quantity,
-                    avg_price=price,
-                    current_price=price
+                    symbol=symbol, quantity=quantity, avg_price=price, current_price=price
                 )
 
-    def get_positions(self) -> List[Position]:
+    def get_positions(self) -> list[Position]:
         """Get all current positions."""
         return list(self.positions.values())
 

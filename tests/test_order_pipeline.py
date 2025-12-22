@@ -1,17 +1,18 @@
 """Tests for centralized order submission pipeline."""
+
 import os
 import tempfile
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, call
+from unittest.mock import Mock
 
 import pytest
 
 from src.app.config import Config
-from src.app.models import Signal, OrderSide, Bar, Order, OrderType, OrderStatus
-from src.app.order_pipeline import submit_signal_order, OrderSubmissionResult
-from src.app.state import BotState, save_state, load_state
+from src.app.models import OrderSide, Signal
+from src.app.order_pipeline import submit_signal_order
+from src.app.state import BotState, load_state
 from src.broker import MockBroker
 from src.risk import RiskManager
 
@@ -35,7 +36,7 @@ def config():
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=Decimal("1000"),
-        allowed_symbols=["AAPL", "MSFT"]
+        allowed_symbols=["AAPL", "MSFT"],
     )
 
 
@@ -64,21 +65,19 @@ def signal():
         symbol="AAPL",
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        reason="Test signal"
+        reason="Test signal",
     )
 
 
 @pytest.fixture
 def write_fns():
     """Create mock CSV write functions."""
-    return {
-        "order": Mock(),
-        "fill": Mock(),
-        "trade": Mock()
-    }
+    return {"order": Mock(), "fill": Mock(), "trade": Mock()}
 
 
-def test_successful_order_submission(temp_dir, config, broker, risk_manager, state, signal, write_fns):
+def test_successful_order_submission(
+    temp_dir, config, broker, risk_manager, state, signal, write_fns
+):
     """Test successful order submission when all checks pass."""
     result = submit_signal_order(
         signal=signal,
@@ -91,7 +90,7 @@ def test_successful_order_submission(temp_dir, config, broker, risk_manager, sta
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify success
@@ -117,14 +116,16 @@ def test_successful_order_submission(temp_dir, config, broker, risk_manager, sta
     assert result.client_order_id in loaded_state.submitted_client_order_ids
 
 
-def test_risk_check_signal_fails_broker_not_called(temp_dir, config, broker, risk_manager, state, write_fns):
+def test_risk_check_signal_fails_broker_not_called(
+    temp_dir, config, broker, risk_manager, state, write_fns
+):
     """Test that risk check failure prevents broker call."""
     # Create signal for symbol not in allowlist
     signal = Signal(
         symbol="INVALID",  # Not in allowed_symbols
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        reason="Invalid symbol"
+        reason="Invalid symbol",
     )
 
     result = submit_signal_order(
@@ -138,7 +139,7 @@ def test_risk_check_signal_fails_broker_not_called(temp_dir, config, broker, ris
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify failure
@@ -158,7 +159,9 @@ def test_risk_check_signal_fails_broker_not_called(temp_dir, config, broker, ris
     assert result.client_order_id not in state.submitted_client_order_ids
 
 
-def test_risk_check_max_positions_fails_broker_not_called(temp_dir, config, broker, risk_manager, state, signal, write_fns):
+def test_risk_check_max_positions_fails_broker_not_called(
+    temp_dir, config, broker, risk_manager, state, signal, write_fns
+):
     """Test that max positions check prevents broker call."""
     # Fill up max positions
     for i in range(config.max_positions):
@@ -175,7 +178,7 @@ def test_risk_check_max_positions_fails_broker_not_called(temp_dir, config, brok
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify failure
@@ -189,7 +192,9 @@ def test_risk_check_max_positions_fails_broker_not_called(temp_dir, config, brok
     assert write_fns["order"].call_count == 0
 
 
-def test_risk_check_daily_loss_fails_broker_not_called(temp_dir, config, broker, risk_manager, state, signal, write_fns):
+def test_risk_check_daily_loss_fails_broker_not_called(
+    temp_dir, config, broker, risk_manager, state, signal, write_fns
+):
     """Test that daily loss limit prevents broker call."""
     # Set daily PnL to exceed limit
     risk_manager.daily_pnl = -Decimal("1001")
@@ -205,7 +210,7 @@ def test_risk_check_daily_loss_fails_broker_not_called(temp_dir, config, broker,
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify failure
@@ -219,7 +224,9 @@ def test_risk_check_daily_loss_fails_broker_not_called(temp_dir, config, broker,
     assert write_fns["order"].call_count == 0
 
 
-def test_quantity_check_fails_broker_not_called(temp_dir, config, broker, risk_manager, state, signal, write_fns):
+def test_quantity_check_fails_broker_not_called(
+    temp_dir, config, broker, risk_manager, state, signal, write_fns
+):
     """Test that quantity check prevents broker call."""
     # Request quantity that exceeds max
     result = submit_signal_order(
@@ -233,7 +240,7 @@ def test_quantity_check_fails_broker_not_called(temp_dir, config, broker, risk_m
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify failure
@@ -248,7 +255,9 @@ def test_quantity_check_fails_broker_not_called(temp_dir, config, broker, risk_m
     assert write_fns["order"].call_count == 0
 
 
-def test_idempotency_state_prevents_broker_call(temp_dir, config, broker, risk_manager, state, signal, write_fns):
+def test_idempotency_state_prevents_broker_call(
+    temp_dir, config, broker, risk_manager, state, signal, write_fns
+):
     """Test that idempotency check (state) prevents duplicate broker call."""
     # Pre-populate state with client_order_id
     client_order_id = "TEST_AAPL_buy_20240115103000"
@@ -265,7 +274,7 @@ def test_idempotency_state_prevents_broker_call(temp_dir, config, broker, risk_m
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify failure
@@ -280,7 +289,9 @@ def test_idempotency_state_prevents_broker_call(temp_dir, config, broker, risk_m
     assert write_fns["order"].call_count == 0
 
 
-def test_idempotency_broker_prevents_duplicate(temp_dir, config, broker, risk_manager, state, signal, write_fns):
+def test_idempotency_broker_prevents_duplicate(
+    temp_dir, config, broker, risk_manager, state, signal, write_fns
+):
     """Test that idempotency check (broker) prevents duplicate submission."""
     # First submission
     result1 = submit_signal_order(
@@ -294,7 +305,7 @@ def test_idempotency_broker_prevents_duplicate(temp_dir, config, broker, risk_ma
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     assert result1.success is True
@@ -315,7 +326,7 @@ def test_idempotency_broker_prevents_duplicate(temp_dir, config, broker, risk_ma
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify second submission was rejected
@@ -357,11 +368,7 @@ def test_all_checks_executed_in_order(temp_dir, config, state, signal):
     risk_manager.check_order_quantity = Mock(side_effect=mock_check_quantity)
 
     # Mock CSV write functions
-    write_fns = {
-        "order": Mock(),
-        "fill": Mock(),
-        "trade": Mock()
-    }
+    write_fns = {"order": Mock(), "fill": Mock(), "trade": Mock()}
 
     result = submit_signal_order(
         signal=signal,
@@ -374,7 +381,7 @@ def test_all_checks_executed_in_order(temp_dir, config, state, signal):
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify failure at risk check
@@ -400,7 +407,12 @@ def test_all_checks_executed_in_order(temp_dir, config, state, signal):
 def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manager, state, signal):
     """Test that CSV files are only written after successful submission."""
     # Create real CSV write functions that write to files
-    from src.app.__main__ import setup_outputs, write_order_to_csv, write_fill_to_csv, write_trade_to_csv
+    from src.app.__main__ import (
+        setup_outputs,
+        write_fill_to_csv,
+        write_order_to_csv,
+        write_trade_to_csv,
+    )
 
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -416,7 +428,7 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
         symbol="INVALID",
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        reason="Invalid"
+        reason="Invalid",
     )
 
     result_fail = submit_signal_order(
@@ -430,7 +442,7 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     assert result_fail.success is False
@@ -456,7 +468,7 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     assert result_success.success is True
@@ -467,24 +479,21 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
     trades_after_success = len((run_dir / "trades.csv").read_text().splitlines())
 
     assert orders_after_success == orders_before + 1  # One new order
-    assert fills_after_success == fills_before + 1     # One new fill
-    assert trades_after_success == trades_before + 1   # One new trade
+    assert fills_after_success == fills_before + 1  # One new fill
+    assert trades_after_success == trades_before + 1  # One new trade
 
 
 def test_deterministic_client_order_id(temp_dir, config, broker, risk_manager, state, write_fns):
     """Test that client_order_id is deterministic based on signal."""
     signal1 = Signal(
-        symbol="AAPL",
-        side=OrderSide.BUY,
-        timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        reason="Test"
+        symbol="AAPL", side=OrderSide.BUY, timestamp=datetime(2024, 1, 15, 10, 30, 0), reason="Test"
     )
 
     signal2 = Signal(
         symbol="AAPL",
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),  # Same timestamp
-        reason="Different reason"  # Reason doesn't affect ID
+        reason="Different reason",  # Reason doesn't affect ID
     )
 
     result1 = submit_signal_order(
@@ -498,7 +507,7 @@ def test_deterministic_client_order_id(temp_dir, config, broker, risk_manager, s
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Clear state for second attempt
@@ -517,7 +526,7 @@ def test_deterministic_client_order_id(temp_dir, config, broker, risk_manager, s
         write_order_to_csv_fn=write_fns["order"],
         write_fill_to_csv_fn=write_fns["fill"],
         write_trade_to_csv_fn=write_fns["trade"],
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Both should succeed but have same client_order_id

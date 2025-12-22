@@ -1,9 +1,10 @@
 """Tests for broker module."""
+
 from decimal import Decimal
 
 import pytest
 
-from src.app.models import OrderSide, OrderType, OrderStatus
+from src.app.models import OrderSide, OrderStatus, OrderType
 from src.broker import MockBroker
 
 
@@ -20,7 +21,7 @@ def test_submit_market_order(broker):
         side=OrderSide.BUY,
         quantity=10,
         client_order_id="test-order-1",
-        order_type=OrderType.MARKET
+        order_type=OrderType.MARKET,
     )
 
     assert order.symbol == "AAPL"
@@ -41,7 +42,7 @@ def test_submit_limit_order(broker):
         quantity=5,
         client_order_id="test-order-2",
         order_type=OrderType.LIMIT,
-        limit_price=limit_price
+        limit_price=limit_price,
     )
 
     assert order.symbol == "MSFT"
@@ -55,10 +56,7 @@ def test_submit_limit_order(broker):
 def test_get_order_status(broker):
     """Test retrieving order status."""
     order = broker.submit_order(
-        symbol="GOOGL",
-        side=OrderSide.BUY,
-        quantity=20,
-        client_order_id="test-order-3"
+        symbol="GOOGL", side=OrderSide.BUY, quantity=20, client_order_id="test-order-3"
     )
 
     retrieved_order = broker.get_order_status(order.id)

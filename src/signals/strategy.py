@@ -1,10 +1,10 @@
 """SMA crossover trading strategy."""
+
 from datetime import datetime, time
 from decimal import Decimal
-from typing import List, Optional
 
 from src.app.config import Config
-from src.app.models import Bar, Signal, OrderSide
+from src.app.models import Bar, OrderSide, Signal
 
 
 def is_market_hours(dt: datetime, config: Config) -> bool:
@@ -18,14 +18,8 @@ def is_market_hours(dt: datetime, config: Config) -> bool:
     Returns:
         True if within market hours
     """
-    market_open = time(
-        hour=config.market_open_hour,
-        minute=config.market_open_minute
-    )
-    market_close = time(
-        hour=config.market_close_hour,
-        minute=config.market_close_minute
-    )
+    market_open = time(hour=config.market_open_hour, minute=config.market_open_minute)
+    market_close = time(hour=config.market_close_hour, minute=config.market_close_minute)
 
     current_time = dt.time()
 
@@ -36,7 +30,7 @@ def is_market_hours(dt: datetime, config: Config) -> bool:
     return market_open <= current_time <= market_close
 
 
-def calculate_sma(bars: List[Bar], period: int) -> Optional[Decimal]:
+def calculate_sma(bars: list[Bar], period: int) -> Decimal | None:
     """
     Calculate Simple Moving Average.
 
@@ -71,12 +65,7 @@ class SMAStrategy:
         self.slow_period = config.sma_slow_period
         self.last_signal = {}  # Track last signal per symbol to avoid duplicates
 
-    def generate_signals(
-        self,
-        symbol: str,
-        bars: List[Bar],
-        has_position: bool
-    ) -> Optional[Signal]:
+    def generate_signals(self, symbol: str, bars: list[Bar], has_position: bool) -> Signal | None:
         """
         Generate trading signal based on SMA crossover.
 
@@ -115,29 +104,27 @@ class SMAStrategy:
 
         # Check for crossover
         # BUY signal: fast was below slow, now above (golden cross)
-        if not has_position:
-            if previous_fast <= previous_slow and current_fast > current_slow:
-                signal = Signal(
-                    symbol=symbol,
-                    side=OrderSide.BUY,
-                    timestamp=latest_bar.timestamp,
-                    reason=f"SMA golden cross: fast={current_fast:.2f} > slow={current_slow:.2f}",
-                    price=latest_bar.close
-                )
-                self.last_signal[symbol] = signal
-                return signal
+        if not has_position and previous_fast <= previous_slow and current_fast > current_slow:
+            signal = Signal(
+                symbol=symbol,
+                side=OrderSide.BUY,
+                timestamp=latest_bar.timestamp,
+                reason=f"SMA golden cross: fast={current_fast:.2f} > slow={current_slow:.2f}",
+                price=latest_bar.close,
+            )
+            self.last_signal[symbol] = signal
+            return signal
 
         # SELL signal: fast was above slow, now below (death cross)
-        if has_position:
-            if previous_fast >= previous_slow and current_fast < current_slow:
-                signal = Signal(
-                    symbol=symbol,
-                    side=OrderSide.SELL,
-                    timestamp=latest_bar.timestamp,
-                    reason=f"SMA death cross: fast={current_fast:.2f} < slow={current_slow:.2f}",
-                    price=latest_bar.close
-                )
-                self.last_signal[symbol] = signal
-                return signal
+        if has_position and previous_fast >= previous_slow and current_fast < current_slow:
+            signal = Signal(
+                symbol=symbol,
+                side=OrderSide.SELL,
+                timestamp=latest_bar.timestamp,
+                reason=f"SMA death cross: fast={current_fast:.2f} < slow={current_slow:.2f}",
+                price=latest_bar.close,
+            )
+            self.last_signal[symbol] = signal
+            return signal
 
         return None

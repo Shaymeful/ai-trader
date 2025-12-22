@@ -1,8 +1,7 @@
 """Tests for configuration module."""
+
 import os
 from decimal import Decimal
-
-import pytest
 
 from src.app.config import Config, load_config
 
@@ -25,7 +24,7 @@ def test_config_custom_values():
         max_positions=10,
         max_order_quantity=200,
         max_daily_loss=Decimal("2000"),
-        allowed_symbols=["AAPL", "MSFT"]
+        allowed_symbols=["AAPL", "MSFT"],
     )
 
     assert config.mode == "alpaca"

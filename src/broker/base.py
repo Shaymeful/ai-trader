@@ -1,11 +1,11 @@
 """Broker abstraction and implementations."""
+
+import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, Set
-import uuid
 
-from src.app.models import Order, OrderSide, OrderType, OrderStatus
+from src.app.models import Order, OrderSide, OrderStatus, OrderType
 
 
 class Broker(ABC):
@@ -19,7 +19,7 @@ class Broker(ABC):
         quantity: int,
         client_order_id: str,
         order_type: OrderType = OrderType.MARKET,
-        limit_price: Optional[Decimal] = None
+        limit_price: Decimal | None = None,
     ) -> Order:
         """
         Submit an order to the broker.
@@ -51,7 +51,7 @@ class Broker(ABC):
         pass
 
     @abstractmethod
-    def get_open_orders(self) -> Set[str]:
+    def get_open_orders(self) -> set[str]:
         """
         Get set of client order IDs for all open orders.
 
@@ -89,7 +89,7 @@ class MockBroker(Broker):
         quantity: int,
         client_order_id: str,
         order_type: OrderType = OrderType.MARKET,
-        limit_price: Optional[Decimal] = None
+        limit_price: Decimal | None = None,
     ) -> Order:
         """
         Submit a mock order that fills immediately.
@@ -110,8 +110,6 @@ class MockBroker(Broker):
         """
         # Check if order already exists
         if client_order_id in self.client_order_map:
-            broker_order_id = self.client_order_map[client_order_id]
-            existing_order = self.orders[broker_order_id]
             raise ValueError(f"Order with client_order_id {client_order_id} already exists")
 
         broker_order_id = str(uuid.uuid4())
@@ -130,7 +128,7 @@ class MockBroker(Broker):
             status=OrderStatus.FILLED,  # Mock orders fill immediately
             submitted_at=now,
             filled_at=now,
-            filled_price=fill_price
+            filled_price=fill_price,
         )
 
         self.orders[broker_order_id] = order
@@ -152,7 +150,7 @@ class MockBroker(Broker):
         """
         return self.orders[order_id]
 
-    def get_open_orders(self) -> Set[str]:
+    def get_open_orders(self) -> set[str]:
         """
         Get set of client order IDs for all open orders.
 
@@ -203,7 +201,7 @@ class AlpacaBroker(Broker):
         quantity: int,
         client_order_id: str,
         order_type: OrderType = OrderType.MARKET,
-        limit_price: Optional[Decimal] = None
+        limit_price: Decimal | None = None,
     ) -> Order:
         """
         Submit order to Alpaca.
@@ -238,27 +236,23 @@ class AlpacaBroker(Broker):
             # Convert to our Order model...
         """
         raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. "
-            "Use MockBroker for offline testing."
+            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
         )
 
     def get_order_status(self, order_id: str) -> Order:
         """Get order status from Alpaca."""
         raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. "
-            "Use MockBroker for offline testing."
+            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
         )
 
-    def get_open_orders(self) -> Set[str]:
+    def get_open_orders(self) -> set[str]:
         """Get open orders from Alpaca."""
         raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. "
-            "Use MockBroker for offline testing."
+            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
         )
 
     def order_exists(self, client_order_id: str) -> bool:
         """Check if order exists in Alpaca."""
         raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. "
-            "Use MockBroker for offline testing."
+            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
         )

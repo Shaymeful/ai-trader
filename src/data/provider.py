@@ -1,9 +1,9 @@
 """Market data provider abstraction and implementations."""
+
+import random
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import List
-import random
 
 from src.app.models import Bar
 
@@ -12,7 +12,7 @@ class DataProvider(ABC):
     """Abstract base class for market data providers."""
 
     @abstractmethod
-    def get_latest_bars(self, symbols: List[str], limit: int = 1) -> dict[str, List[Bar]]:
+    def get_latest_bars(self, symbols: list[str], limit: int = 1) -> dict[str, list[Bar]]:
         """
         Get latest bars for given symbols.
 
@@ -32,7 +32,7 @@ class MockDataProvider(DataProvider):
     def __init__(self):
         self.call_count = 0
 
-    def get_latest_bars(self, symbols: List[str], limit: int = 1) -> dict[str, List[Bar]]:
+    def get_latest_bars(self, symbols: list[str], limit: int = 1) -> dict[str, list[Bar]]:
         """
         Generate mock bars with simulated price movement.
 
@@ -79,7 +79,7 @@ class MockDataProvider(DataProvider):
                     high=Decimal(str(round(high_price, 2))),
                     low=Decimal(str(round(low_price, 2))),
                     close=Decimal(str(round(close_price, 2))),
-                    volume=volume
+                    volume=volume,
                 )
                 bars.append(bar)
 
@@ -108,7 +108,7 @@ class AlpacaDataProvider(DataProvider):
         # For this MVP, we keep it simple and just store credentials
         # Actual implementation would import: from alpaca.data import StockHistoricalDataClient
 
-    def get_latest_bars(self, symbols: List[str], limit: int = 1) -> dict[str, List[Bar]]:
+    def get_latest_bars(self, symbols: list[str], limit: int = 1) -> dict[str, list[Bar]]:
         """
         Get latest bars from Alpaca API.
 

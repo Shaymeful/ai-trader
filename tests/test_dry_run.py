@@ -1,4 +1,5 @@
 """Tests for dry-run mode."""
+
 import os
 import tempfile
 from datetime import datetime
@@ -7,11 +8,17 @@ from pathlib import Path
 
 import pytest
 
+from src.app.__main__ import (
+    run_trading_loop,
+    setup_outputs,
+    write_fill_to_csv,
+    write_order_to_csv,
+    write_trade_to_csv,
+)
 from src.app.config import Config
-from src.app.models import Signal, OrderSide
+from src.app.models import OrderSide, Signal
 from src.app.order_pipeline import submit_signal_order
 from src.app.state import BotState, load_state, save_state
-from src.app.__main__ import run_trading_loop, setup_outputs, write_order_to_csv, write_fill_to_csv, write_trade_to_csv
 from src.broker import MockBroker
 from src.risk import RiskManager
 
@@ -36,7 +43,7 @@ def config_dry_run():
         max_order_quantity=100,
         max_daily_loss=Decimal("1000"),
         allowed_symbols=["AAPL", "MSFT"],
-        dry_run=True
+        dry_run=True,
     )
 
 
@@ -49,7 +56,7 @@ def config_normal():
         max_order_quantity=100,
         max_daily_loss=Decimal("1000"),
         allowed_symbols=["AAPL", "MSFT"],
-        dry_run=False
+        dry_run=False,
     )
 
 
@@ -78,7 +85,7 @@ def signal():
         symbol="AAPL",
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        reason="Test signal"
+        reason="Test signal",
     )
 
 
@@ -122,7 +129,7 @@ def test_dry_run_broker_not_called(temp_dir, config_dry_run, broker, risk_manage
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify success (dry-run counts as success)
@@ -155,7 +162,7 @@ def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_mana
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     assert result.success is True
@@ -196,7 +203,7 @@ def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manag
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     assert result.success is True
@@ -217,7 +224,7 @@ def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, ri
         symbol="INVALID",  # Not in allowed_symbols
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        reason="Invalid symbol"
+        reason="Invalid symbol",
     )
 
     result = submit_signal_order(
@@ -231,7 +238,7 @@ def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, ri
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # CRITICAL: Verify risk check blocked the order
@@ -243,7 +250,9 @@ def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, ri
     assert len(broker.orders) == 0
 
 
-def test_dry_run_quantity_checks_still_enforced(temp_dir, config_dry_run, broker, risk_manager, state, signal):
+def test_dry_run_quantity_checks_still_enforced(
+    temp_dir, config_dry_run, broker, risk_manager, state, signal
+):
     """Test that quantity checks are still enforced in dry-run mode."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -259,7 +268,7 @@ def test_dry_run_quantity_checks_still_enforced(temp_dir, config_dry_run, broker
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # CRITICAL: Verify quantity check blocked the order
@@ -271,7 +280,9 @@ def test_dry_run_quantity_checks_still_enforced(temp_dir, config_dry_run, broker
     assert len(broker.orders) == 0
 
 
-def test_dry_run_idempotency_checks_still_enforced(temp_dir, config_dry_run, broker, risk_manager, signal):
+def test_dry_run_idempotency_checks_still_enforced(
+    temp_dir, config_dry_run, broker, risk_manager, signal
+):
     """Test that idempotency checks are still enforced in dry-run mode."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -292,7 +303,7 @@ def test_dry_run_idempotency_checks_still_enforced(temp_dir, config_dry_run, bro
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # CRITICAL: Verify idempotency check blocked the order
@@ -319,7 +330,7 @@ def test_normal_mode_still_works(temp_dir, config_normal, broker, risk_manager, 
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Verify success
@@ -336,8 +347,8 @@ def test_normal_mode_still_works(temp_dir, config_normal, broker, risk_manager, 
     trades_count = len((run_dir / "trades.csv").read_text().splitlines())
 
     assert orders_count == 2  # Header + 1 order
-    assert fills_count == 2    # Header + 1 fill
-    assert trades_count == 2   # Header + 1 trade
+    assert fills_count == 2  # Header + 1 fill
+    assert trades_count == 2  # Header + 1 trade
 
     # Verify state WAS updated
     assert result.client_order_id in state.submitted_client_order_ids
@@ -368,8 +379,8 @@ def test_dry_run_full_trading_loop(temp_dir, monkeypatch):
 
     # Each CSV should have exactly 1 line (header only, no trades in dry-run)
     assert orders_count == 1  # Header only
-    assert fills_count == 1    # Header only
-    assert trades_count == 1   # Header only
+    assert fills_count == 1  # Header only
+    assert trades_count == 1  # Header only
 
     # CRITICAL: Verify state file was NOT modified (state is global)
     state_after = Path("out/state.json").read_text()
@@ -394,6 +405,7 @@ def test_dry_run_trades_executed_is_zero(temp_dir, monkeypatch):
 
     # Check summary.json in run directory
     import json
+
     with open(run_dir / "summary.json") as f:
         summary = json.load(f)
 
@@ -418,6 +430,7 @@ def test_normal_mode_trades_executed_is_nonzero(temp_dir, monkeypatch):
 
     # Check summary.json in run directory
     import json
+
     with open(run_dir / "summary.json") as f:
         summary = json.load(f)
 
@@ -447,7 +460,7 @@ def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, b
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Scenario 2: Normal mode
@@ -466,7 +479,7 @@ def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, b
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
-        strategy_name="TEST"
+        strategy_name="TEST",
     )
 
     # Both should succeed

@@ -1,8 +1,8 @@
 """State persistence for restart-safety and idempotency."""
+
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Set
 
 from pydantic import BaseModel, Field
 
@@ -11,13 +11,11 @@ class BotState(BaseModel):
     """Persistent state for the trading bot."""
 
     run_id: str = Field(description="Current run ID")
-    last_processed_timestamp: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Last processed timestamp per symbol (ISO format)"
+    last_processed_timestamp: dict[str, str] = Field(
+        default_factory=dict, description="Last processed timestamp per symbol (ISO format)"
     )
-    submitted_client_order_ids: Set[str] = Field(
-        default_factory=set,
-        description="Client order IDs submitted across runs"
+    submitted_client_order_ids: set[str] = Field(
+        default_factory=set, description="Client order IDs submitted across runs"
     )
 
 
@@ -35,7 +33,7 @@ def load_state(state_file: Path = Path("out/state.json")) -> BotState:
         return BotState(run_id="initial")
 
     try:
-        with open(state_file, "r") as f:
+        with open(state_file) as f:
             data = json.load(f)
             return BotState(**data)
     except Exception:
@@ -63,10 +61,7 @@ def save_state(state: BotState, state_file: Path = Path("out/state.json")):
 
 
 def build_client_order_id(
-    symbol: str,
-    side: str,
-    signal_timestamp: datetime,
-    strategy_name: str = "SMA"
+    symbol: str, side: str, signal_timestamp: datetime, strategy_name: str = "SMA"
 ) -> str:
     """
     Build deterministic idempotency key for order deduplication.

@@ -1,16 +1,17 @@
 """Tests for Phase A: restart-safety and auditable artifacts."""
+
 import json
 import os
-from pathlib import Path
 import tempfile
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
-from src.app.state import BotState, load_state, save_state, build_client_order_id
-from src.app.models import TradeRecord, OrderRecord, FillRecord
-from src.app.__main__ import setup_outputs, run_trading_loop
+from src.app.__main__ import run_trading_loop, setup_outputs
+from src.app.models import FillRecord, OrderRecord, TradeRecord
+from src.app.state import BotState, build_client_order_id, load_state, save_state
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ def test_state_save_and_load(temp_dir):
     state = BotState(
         run_id="test-run-id",
         last_processed_timestamp={"AAPL": "2024-01-15T10:30:00"},
-        submitted_client_order_ids={"order-1", "order-2"}
+        submitted_client_order_ids={"order-1", "order-2"},
     )
 
     save_state(state)
@@ -174,7 +175,9 @@ def test_run_trading_loop_writes_run_id_to_trades(temp_dir, monkeypatch):
     # If trades were executed, check they have run_id
     if len(lines) > 0:
         # CSV should have run_id column
-        assert len(lines[0].split(",")) >= 9  # timestamp,symbol,side,qty,price,order_id,client_order_id,run_id,reason
+        assert (
+            len(lines[0].split(",")) >= 9
+        )  # timestamp,symbol,side,qty,price,order_id,client_order_id,run_id,reason
 
 
 def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
@@ -188,6 +191,7 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
     3. State persists idempotency keys across restarts
     """
     from decimal import Decimal
+
     from src.app.models import Bar
     from src.data import MockDataProvider
 
@@ -240,7 +244,7 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
                         high=Decimal(str(price + 0.5)),
                         low=Decimal(str(price - 0.5)),
                         close=Decimal(str(price)),
-                        volume=100000
+                        volume=100000,
                     )
                     bars.append(bar)
             else:
@@ -254,7 +258,7 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
                         high=Decimal("100.5"),
                         low=Decimal("99.5"),
                         close=Decimal("100.0"),
-                        volume=100000
+                        volume=100000,
                     )
                     bars.append(bar)
             result[symbol] = bars
@@ -283,7 +287,9 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
     initial_order_ids = state1.submitted_client_order_ids.copy()
 
     # Should have exactly 1 idempotency key
-    assert len(initial_order_ids) == 1, f"Expected exactly 1 idempotency key, got {len(initial_order_ids)}"
+    assert len(initial_order_ids) == 1, (
+        f"Expected exactly 1 idempotency key, got {len(initial_order_ids)}"
+    )
 
     # Verify the key format: SMA_AAPL_buy_YYYYMMDDHHMMSS
     key = list(initial_order_ids)[0]
@@ -387,7 +393,7 @@ def test_trade_record_with_run_id_and_client_order_id():
         order_id="broker-123",
         client_order_id="SMA_AAPL_buy_20240115103000_12345678",
         run_id="12345678-1234-1234-1234-123456789012",
-        reason="Test trade"
+        reason="Test trade",
     )
 
     csv_row = trade.to_csv_row()
@@ -408,7 +414,7 @@ def test_order_record_csv():
         client_order_id="test-client-order",
         broker_order_id="test-broker-order",
         run_id="test-run-id",
-        status="filled"
+        status="filled",
     )
 
     csv_row = order.to_csv_row()
@@ -429,7 +435,7 @@ def test_fill_record_csv():
         price=Decimal("150.00"),
         client_order_id="test-client-order",
         broker_order_id="test-broker-order",
-        run_id="test-run-id"
+        run_id="test-run-id",
     )
 
     csv_row = fill.to_csv_row()
