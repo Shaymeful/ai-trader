@@ -1,19 +1,18 @@
 """Main entry point for the trading bot."""
+
 import json
 import logging
-import os
 import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List
 
-from src.app.config import load_config, is_live_trading_mode
-from src.app.models import TradeRecord, OrderSide, OrderRecord, FillRecord
-from src.app.state import BotState, load_state, save_state, build_client_order_id
+from src.app.config import is_live_trading_mode, load_config
+from src.app.models import FillRecord, OrderRecord, TradeRecord
 from src.app.order_pipeline import submit_signal_order
-from src.broker import MockBroker, AlpacaBroker
-from src.data import MockDataProvider, AlpacaDataProvider
+from src.app.state import load_state, save_state
+from src.broker import AlpacaBroker, MockBroker
+from src.data import AlpacaDataProvider, MockDataProvider
 from src.risk import RiskManager
 from src.signals import SMAStrategy, is_market_hours
 from src.signals.strategy import calculate_sma
@@ -74,11 +73,8 @@ def setup_logging(log_level: str, run_id: str) -> logging.Logger:
     logging.basicConfig(
         level=getattr(logging, log_level),
         format=f"%(asctime)s - [RUN:{run_id[:8]}] - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)
-        ],
-        force=True  # Force reconfiguration
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
+        force=True,  # Force reconfiguration
     )
 
     logger = logging.getLogger("ai-trader")
@@ -178,7 +174,9 @@ def run_trading_loop(iterations: int = 5):
             logger.info("No previous state found, starting fresh")
             state.run_id = run_id
         else:
-            logger.info(f"Loaded previous state with {len(state.submitted_client_order_ids)} known orders")
+            logger.info(
+                f"Loaded previous state with {len(state.submitted_client_order_ids)} known orders"
+            )
             # Update run_id for new session
             state.run_id = run_id
 
@@ -210,14 +208,10 @@ def run_trading_loop(iterations: int = 5):
                 logger.info("Using Alpaca data provider and broker")
                 try:
                     data_provider = AlpacaDataProvider(
-                        config.alpaca_api_key,
-                        config.alpaca_secret_key,
-                        config.alpaca_base_url
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
                     )
                     broker = AlpacaBroker(
-                        config.alpaca_api_key,
-                    config.alpaca_secret_key,
-                        config.alpaca_base_url
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
                     )
                 except NotImplementedError:
                     logger.warning("Alpaca implementation requires alpaca-py library")
@@ -242,8 +236,7 @@ def run_trading_loop(iterations: int = 5):
             try:
                 # Fetch market data
                 bars_data = data_provider.get_latest_bars(
-                    config.allowed_symbols,
-                    limit=config.sma_slow_period + 1
+                    config.allowed_symbols, limit=config.sma_slow_period + 1
                 )
 
                 # Process each symbol
@@ -261,21 +254,25 @@ def run_trading_loop(iterations: int = 5):
 
                     # Log symbol processing start
                     logger.info(f"\n  Processing {symbol}:")
-                    logger.info(f"    Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')} ({current_time.strftime('%A')})")
+                    logger.info(
+                        f"    Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')} ({current_time.strftime('%A')})"
+                    )
                     logger.info(f"    Bars fetched: {len(bars)}")
                     logger.info(f"    Current price: ${latest_bar.close}")
 
                     # Check market hours
                     in_market_hours = is_market_hours(current_time, config)
                     market_open = f"{config.market_open_hour:02d}:{config.market_open_minute:02d}"
-                    market_close = f"{config.market_close_hour:02d}:{config.market_close_minute:02d}"
+                    market_close = (
+                        f"{config.market_close_hour:02d}:{config.market_close_minute:02d}"
+                    )
 
                     if not in_market_hours:
                         logger.info(
                             f"    Market hours: CLOSED (current: {current_time.strftime('%H:%M')}, "
                             f"allowed: {market_open}-{market_close} on weekdays)"
                         )
-                        logger.info(f"    Signal: HOLD (market closed)")
+                        logger.info("    Signal: HOLD (market closed)")
                         continue
                     else:
                         logger.info(
@@ -293,7 +290,7 @@ def run_trading_loop(iterations: int = 5):
                         logger.info(
                             f"    SMA Slow ({config.sma_slow_period}): insufficient data (need {config.sma_slow_period} bars)"
                         )
-                        logger.info(f"    Signal: HOLD (insufficient data)")
+                        logger.info("    Signal: HOLD (insufficient data)")
                         continue
                     else:
                         logger.info(f"    SMA Fast ({config.sma_fast_period}): ${fast_sma:.2f}")
@@ -326,7 +323,7 @@ def run_trading_loop(iterations: int = 5):
                             write_order_to_csv_fn=write_order_to_csv,
                             write_fill_to_csv_fn=write_fill_to_csv,
                             write_trade_to_csv_fn=write_trade_to_csv,
-                            strategy_name="SMA"
+                            strategy_name="SMA",
                         )
 
                         if result.success and result.order is not None and not config.dry_run:
@@ -338,7 +335,7 @@ def run_trading_loop(iterations: int = 5):
                             # Save state after each order
                             save_state(state)
                     else:
-                        logger.info(f"    Signal: HOLD (no crossover detected)")
+                        logger.info("    Signal: HOLD (no crossover detected)")
 
             except Exception as e:
                 logger.error(f"Error in trading loop iteration: {e}", exc_info=True)
@@ -362,7 +359,7 @@ def run_trading_loop(iterations: int = 5):
         csv_path = run_dir / "trades.csv"
         total_trades_in_file = 0
         if csv_path.exists():
-            with open(csv_path, "r") as f:
+            with open(csv_path) as f:
                 # Count lines (subtract 1 for header)
                 total_trades_in_file = len(f.readlines()) - 1
 
@@ -381,10 +378,10 @@ def run_trading_loop(iterations: int = 5):
                     "quantity": pos.quantity,
                     "avg_price": float(pos.avg_price),
                     "current_price": float(pos.current_price),
-                    "unrealized_pnl": float(pos.unrealized_pnl)
+                    "unrealized_pnl": float(pos.unrealized_pnl),
                 }
                 for pos in risk_manager.get_positions()
-            ]
+            ],
         }
 
         summary_file = run_dir / "summary.json"
@@ -406,8 +403,7 @@ def run_trading_loop(iterations: int = 5):
 
         logger.info(f"Orders available in {run_dir / 'orders.csv'}")
         logger.info(f"Fills available in {run_dir / 'fills.csv'}")
-        logger.info(f"State saved to out/state.json")
-
+        logger.info("State saved to out/state.json")
 
     finally:
         # Always close logging handlers to release file locks (critical on Windows)

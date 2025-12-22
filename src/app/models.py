@@ -1,26 +1,29 @@
 """Core data models for the trading system."""
+
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 
 class OrderSide(str, Enum):
     """Order side."""
+
     BUY = "buy"
     SELL = "sell"
 
 
 class OrderType(str, Enum):
     """Order type."""
+
     MARKET = "market"
     LIMIT = "limit"
 
 
 class OrderStatus(str, Enum):
     """Order status."""
+
     PENDING = "pending"
     FILLED = "filled"
     REJECTED = "rejected"
@@ -29,6 +32,7 @@ class OrderStatus(str, Enum):
 
 class Bar(BaseModel):
     """Market data bar (OHLCV)."""
+
     symbol: str
     timestamp: datetime
     open: Decimal
@@ -48,30 +52,33 @@ class Bar(BaseModel):
 
 class Signal(BaseModel):
     """Trading signal from a strategy."""
+
     symbol: str
     side: OrderSide
     timestamp: datetime
     reason: str
-    price: Optional[Decimal] = None
+    price: Decimal | None = None
 
 
 class Order(BaseModel):
     """Trading order."""
+
     id: str
     symbol: str
     side: OrderSide
     type: OrderType
     quantity: int
-    price: Optional[Decimal] = None
+    price: Decimal | None = None
     status: OrderStatus = OrderStatus.PENDING
     submitted_at: datetime
-    filled_at: Optional[datetime] = None
-    filled_price: Optional[Decimal] = None
-    rejected_reason: Optional[str] = None
+    filled_at: datetime | None = None
+    filled_price: Decimal | None = None
+    rejected_reason: str | None = None
 
 
 class Position(BaseModel):
     """Current position."""
+
     symbol: str
     quantity: int
     avg_price: Decimal
@@ -86,6 +93,7 @@ class Position(BaseModel):
 
 class TradeRecord(BaseModel):
     """Trade record for CSV output."""
+
     timestamp: datetime
     symbol: str
     side: str
@@ -108,12 +116,13 @@ class TradeRecord(BaseModel):
 
 class OrderRecord(BaseModel):
     """Order record for orders.csv."""
+
     timestamp: datetime
     symbol: str
     side: str
     quantity: int
     order_type: str
-    limit_price: Optional[Decimal] = None
+    limit_price: Decimal | None = None
     client_order_id: str
     broker_order_id: str
     run_id: str
@@ -132,6 +141,7 @@ class OrderRecord(BaseModel):
 
 class FillRecord(BaseModel):
     """Fill record for fills.csv."""
+
     timestamp: datetime
     symbol: str
     side: str

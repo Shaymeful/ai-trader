@@ -1,11 +1,11 @@
 """Tests for live trading safety gate."""
+
 import os
-import tempfile
 
 import pytest
 
-from src.app.config import Config, is_live_trading_mode, load_config
 from src.app.__main__ import run_trading_loop
+from src.app.config import Config, is_live_trading_mode, load_config
 
 
 def test_is_live_trading_mode_mock():
@@ -16,28 +16,19 @@ def test_is_live_trading_mode_mock():
 
 def test_is_live_trading_mode_paper():
     """Test that alpaca paper trading is not considered live trading."""
-    config = Config(
-        mode="alpaca",
-        alpaca_base_url="https://paper-api.alpaca.markets"
-    )
+    config = Config(mode="alpaca", alpaca_base_url="https://paper-api.alpaca.markets")
     assert not is_live_trading_mode(config)
 
 
 def test_is_live_trading_mode_live():
     """Test that alpaca live trading is detected."""
-    config = Config(
-        mode="alpaca",
-        alpaca_base_url="https://api.alpaca.markets"
-    )
+    config = Config(mode="alpaca", alpaca_base_url="https://api.alpaca.markets")
     assert is_live_trading_mode(config)
 
 
 def test_is_live_trading_mode_live_case_insensitive():
     """Test that live mode detection is case-insensitive."""
-    config = Config(
-        mode="alpaca",
-        alpaca_base_url="https://API.ALPACA.MARKETS"
-    )
+    config = Config(mode="alpaca", alpaca_base_url="https://API.ALPACA.MARKETS")
     assert is_live_trading_mode(config)
 
 

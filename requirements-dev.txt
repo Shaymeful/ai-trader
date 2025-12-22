@@ -1,0 +1,9 @@
+# Development dependencies
+-r requirements.txt
+
+# Linting and formatting
+ruff>=0.1.0
+
+# Testing tooling
+pytest>=7.4.0
+pytest-cov>=4.1.0

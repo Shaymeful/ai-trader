@@ -1,10 +1,10 @@
 """Centralized order submission pipeline with enforced risk checks."""
+
 import logging
-from typing import Optional
 
 from src.app.config import Config
-from src.app.models import Signal, OrderSide, OrderRecord, FillRecord, TradeRecord
-from src.app.state import BotState, save_state, build_client_order_id
+from src.app.models import FillRecord, OrderRecord, OrderSide, Signal, TradeRecord
+from src.app.state import BotState, build_client_order_id, save_state
 from src.broker.base import Broker
 from src.risk import RiskManager
 
@@ -14,13 +14,7 @@ logger = logging.getLogger("ai-trader.order_pipeline")
 class OrderSubmissionResult:
     """Result of an order submission attempt."""
 
-    def __init__(
-        self,
-        success: bool,
-        reason: str,
-        order=None,
-        client_order_id: Optional[str] = None
-    ):
+    def __init__(self, success: bool, reason: str, order=None, client_order_id: str | None = None):
         self.success = success
         self.reason = reason
         self.order = order
@@ -38,7 +32,7 @@ def submit_signal_order(
     write_order_to_csv_fn,
     write_fill_to_csv_fn,
     write_trade_to_csv_fn,
-    strategy_name: str = "SMA"
+    strategy_name: str = "SMA",
 ) -> OrderSubmissionResult:
     """
     Centralized order submission pipeline with enforced risk checks.
@@ -79,7 +73,7 @@ def submit_signal_order(
         symbol=signal.symbol,
         side=signal.side.value,
         signal_timestamp=signal.timestamp,
-        strategy_name=strategy_name
+        strategy_name=strategy_name,
     )
 
     logger.info(f"    Client Order ID: {client_order_id}")
@@ -92,7 +86,7 @@ def submit_signal_order(
         return OrderSubmissionResult(
             success=False,
             reason="Duplicate order (already in state)",
-            client_order_id=client_order_id
+            client_order_id=client_order_id,
         )
 
     # Step 3: Idempotency check - broker
@@ -106,10 +100,10 @@ def submit_signal_order(
         return OrderSubmissionResult(
             success=False,
             reason="Duplicate order (already in broker)",
-            client_order_id=client_order_id
+            client_order_id=client_order_id,
         )
 
-    logger.info(f"    Idempotency check: PASSED")
+    logger.info("    Idempotency check: PASSED")
 
     # Step 4: Risk check - signal
     risk_check = risk_manager.check_signal(signal)
@@ -118,10 +112,10 @@ def submit_signal_order(
         return OrderSubmissionResult(
             success=False,
             reason=f"Risk check failed: {risk_check.reason}",
-            client_order_id=client_order_id
+            client_order_id=client_order_id,
         )
 
-    logger.info(f"    Risk check: PASSED")
+    logger.info("    Risk check: PASSED")
 
     # Step 5: Risk check - quantity
     qty_check = risk_manager.check_order_quantity(quantity)
@@ -130,10 +124,10 @@ def submit_signal_order(
         return OrderSubmissionResult(
             success=False,
             reason=f"Quantity check failed: {qty_check.reason}",
-            client_order_id=client_order_id
+            client_order_id=client_order_id,
         )
 
-    logger.info(f"    Quantity check: PASSED")
+    logger.info("    Quantity check: PASSED")
 
     # DRY-RUN MODE: Stop before broker call
     if config.dry_run:
@@ -145,7 +139,7 @@ def submit_signal_order(
             success=True,  # Successful dry-run
             reason="Dry-run: order would have been submitted",
             order=None,
-            client_order_id=client_order_id
+            client_order_id=client_order_id,
         )
 
     # Step 6: Submit order to broker (ONLY if all checks passed and NOT dry-run)
@@ -154,7 +148,7 @@ def submit_signal_order(
             symbol=signal.symbol,
             side=signal.side,
             quantity=quantity,
-            client_order_id=client_order_id
+            client_order_id=client_order_id,
         )
         logger.info(
             f"    Order submitted: {order.side.value.upper()} {order.quantity} "
@@ -163,9 +157,7 @@ def submit_signal_order(
     except Exception as e:
         logger.error(f"    Error submitting order: {e}")
         return OrderSubmissionResult(
-            success=False,
-            reason=f"Broker error: {e}",
-            client_order_id=client_order_id
+            success=False, reason=f"Broker error: {e}", client_order_id=client_order_id
         )
 
     # Step 7: Record order to CSV (ONLY after successful submission)
@@ -179,7 +171,7 @@ def submit_signal_order(
         client_order_id=client_order_id,
         broker_order_id=order.id,
         run_id=run_id,
-        status=order.status.value
+        status=order.status.value,
     )
     write_order_to_csv_fn(order_record, run_id)
 
@@ -198,17 +190,13 @@ def submit_signal_order(
             price=order.filled_price,
             client_order_id=client_order_id,
             broker_order_id=order.id,
-            run_id=run_id
+            run_id=run_id,
         )
         write_fill_to_csv_fn(fill_record, run_id)
 
         # Update position
         qty_signed = quantity if signal.side == OrderSide.BUY else -quantity
-        risk_manager.update_position(
-            signal.symbol,
-            qty_signed,
-            order.filled_price
-        )
+        risk_manager.update_position(signal.symbol, qty_signed, order.filled_price)
 
         # Record trade (legacy format)
         trade = TradeRecord(
@@ -220,14 +208,14 @@ def submit_signal_order(
             order_id=order.id,
             client_order_id=client_order_id,
             run_id=run_id,
-            reason=signal.reason
+            reason=signal.reason,
         )
         write_trade_to_csv_fn(trade, run_id)
-        logger.info(f"    Trade recorded to CSV")
+        logger.info("    Trade recorded to CSV")
 
     return OrderSubmissionResult(
         success=True,
         reason="Order submitted successfully",
         order=order,
-        client_order_id=client_order_id
+        client_order_id=client_order_id,
     )

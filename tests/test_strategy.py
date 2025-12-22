@@ -1,4 +1,5 @@
 """Tests for trading strategy module."""
+
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -19,7 +20,7 @@ def config():
         market_open_hour=9,
         market_open_minute=30,
         market_close_hour=16,
-        market_close_minute=0
+        market_close_minute=0,
     )
 
 
@@ -43,7 +44,7 @@ def create_bars(symbol: str, prices: list, start_time: datetime = None) -> list:
             high=Decimal(str(price + 1)),
             low=Decimal(str(price - 1)),
             close=Decimal(str(price)),
-            volume=100000
+            volume=100000,
         )
         bars.append(bar)
     return bars

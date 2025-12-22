@@ -1,4 +1,5 @@
 """Tests for data provider module."""
+
 import pytest
 
 from src.data import MockDataProvider

@@ -1,7 +1,7 @@
 """Configuration loader for the trading bot."""
+
 import os
 from decimal import Decimal
-from typing import List
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -17,20 +17,15 @@ class Config(BaseModel):
     alpaca_api_key: str = Field(default="", description="Alpaca API key")
     alpaca_secret_key: str = Field(default="", description="Alpaca secret key")
     alpaca_base_url: str = Field(
-        default="https://paper-api.alpaca.markets",
-        description="Alpaca base URL"
+        default="https://paper-api.alpaca.markets", description="Alpaca base URL"
     )
 
     # Risk parameters
     max_positions: int = Field(default=5, description="Max concurrent positions")
     max_order_quantity: int = Field(default=100, description="Max shares per order")
-    max_daily_loss: Decimal = Field(
-        default=Decimal("1000"),
-        description="Max daily loss threshold"
-    )
-    allowed_symbols: List[str] = Field(
-        default=["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"],
-        description="Allowed trading symbols"
+    max_daily_loss: Decimal = Field(default=Decimal("1000"), description="Max daily loss threshold")
+    allowed_symbols: list[str] = Field(
+        default=["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"], description="Allowed trading symbols"
     )
 
     # Strategy parameters
@@ -48,18 +43,15 @@ class Config(BaseModel):
 
     # Live trading safety flags
     enable_live_trading: bool = Field(
-        default=False,
-        description="Enable live trading (required for live mode)"
+        default=False, description="Enable live trading (required for live mode)"
     )
     i_understand_live_trading_risk: bool = Field(
-        default=False,
-        description="Acknowledge understanding of live trading risks"
+        default=False, description="Acknowledge understanding of live trading risks"
     )
 
     # Dry-run mode
     dry_run: bool = Field(
-        default=False,
-        description="Dry-run mode: simulate trading without submitting orders"
+        default=False, description="Dry-run mode: simulate trading without submitting orders"
     )
 
 
@@ -73,10 +65,7 @@ def load_config() -> Config:
         "mode": os.getenv("MODE", "mock"),
         "alpaca_api_key": os.getenv("ALPACA_API_KEY", ""),
         "alpaca_secret_key": os.getenv("ALPACA_SECRET_KEY", ""),
-        "alpaca_base_url": os.getenv(
-            "ALPACA_BASE_URL",
-            "https://paper-api.alpaca.markets"
-        ),
+        "alpaca_base_url": os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
         "max_positions": int(os.getenv("MAX_POSITIONS", "5")),
         "max_order_quantity": int(os.getenv("MAX_ORDER_QUANTITY", "100")),
         "max_daily_loss": Decimal(os.getenv("MAX_DAILY_LOSS", "1000")),
@@ -84,7 +73,10 @@ def load_config() -> Config:
         "sma_slow_period": int(os.getenv("SMA_SLOW_PERIOD", "30")),
         "log_level": os.getenv("LOG_LEVEL", "INFO"),
         "enable_live_trading": os.getenv("ENABLE_LIVE_TRADING", "false").lower() == "true",
-        "i_understand_live_trading_risk": os.getenv("I_UNDERSTAND_LIVE_TRADING_RISK", "false").lower() == "true",
+        "i_understand_live_trading_risk": os.getenv(
+            "I_UNDERSTAND_LIVE_TRADING_RISK", "false"
+        ).lower()
+        == "true",
         "dry_run": os.getenv("DRY_RUN", "false").lower() == "true",
     }
 
@@ -109,7 +101,4 @@ def is_live_trading_mode(config: Config) -> bool:
     Returns:
         True if live trading mode, False otherwise
     """
-    return (
-        config.mode == "alpaca"
-        and "paper" not in config.alpaca_base_url.lower()
-    )
+    return config.mode == "alpaca" and "paper" not in config.alpaca_base_url.lower()
