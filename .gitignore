@@ -26,3 +26,7 @@ Thumbs.db
 
 # AI tooling / local metadata
 .claude/
+
+# Tooling artifacts
+tall*
+
