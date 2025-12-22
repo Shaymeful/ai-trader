@@ -190,9 +190,12 @@ class AlpacaBroker(Broker):
         self.secret_key = secret_key
         self.base_url = base_url
 
-        # Note: In a real implementation, you would use the alpaca-py library here
-        # For this MVP, we keep it simple and just store credentials
-        # Actual implementation would import: from alpaca.trading import TradingClient
+        # Initialize Alpaca trading client
+        from alpaca.trading import TradingClient
+
+        # Determine if paper trading based on base_url
+        is_paper = "paper" in base_url.lower()
+        self.client = TradingClient(api_key, secret_key, paper=is_paper)
 
     def submit_order(
         self,
@@ -216,43 +219,133 @@ class AlpacaBroker(Broker):
 
         Returns:
             Order object
+        """
+        from alpaca.trading.enums import OrderSide as AlpacaOrderSide
+        from alpaca.trading.enums import TimeInForce
+        from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
-        Note:
-            This is a placeholder. Real implementation would use alpaca-py library:
+        # Convert our OrderSide to Alpaca's OrderSide
+        alpaca_side = AlpacaOrderSide.BUY if side == OrderSide.BUY else AlpacaOrderSide.SELL
 
-            from alpaca.trading import TradingClient
-            from alpaca.trading.requests import MarketOrderRequest
-            from alpaca.trading.enums import OrderSide, TimeInForce
-
-            client = TradingClient(self.api_key, self.secret_key, paper=True)
-            order_data = MarketOrderRequest(
+        # Submit order based on type
+        if order_type == OrderType.MARKET:
+            order_request = MarketOrderRequest(
                 symbol=symbol,
                 qty=quantity,
-                side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
+                side=alpaca_side,
                 time_in_force=TimeInForce.DAY,
-                client_order_id=client_order_id
+                client_order_id=client_order_id,
             )
-            alpaca_order = client.submit_order(order_data)
-            # Convert to our Order model...
-        """
-        raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
-        )
+        else:  # LIMIT
+            if limit_price is None:
+                raise ValueError("Limit price required for limit orders")
+            order_request = LimitOrderRequest(
+                symbol=symbol,
+                qty=quantity,
+                side=alpaca_side,
+                time_in_force=TimeInForce.DAY,
+                limit_price=float(limit_price),
+                client_order_id=client_order_id,
+            )
+
+        # Submit to Alpaca
+        alpaca_order = self.client.submit_order(order_request)
+
+        # Convert to our Order model
+        return self._convert_alpaca_order(alpaca_order)
 
     def get_order_status(self, order_id: str) -> Order:
-        """Get order status from Alpaca."""
-        raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
-        )
+        """
+        Get order status from Alpaca.
+
+        Args:
+            order_id: Alpaca order ID
+
+        Returns:
+            Order object with current status
+        """
+        alpaca_order = self.client.get_order_by_id(order_id)
+        return self._convert_alpaca_order(alpaca_order)
 
     def get_open_orders(self) -> set[str]:
-        """Get open orders from Alpaca."""
-        raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
-        )
+        """
+        Get set of client order IDs for all open orders.
+
+        Returns:
+            Set of client order IDs
+        """
+        from alpaca.trading.enums import QueryOrderStatus
+
+        open_orders = self.client.get_orders(filter=QueryOrderStatus.OPEN)
+        return {order.client_order_id for order in open_orders if order.client_order_id}
 
     def order_exists(self, client_order_id: str) -> bool:
-        """Check if order exists in Alpaca."""
-        raise NotImplementedError(
-            "Alpaca broker requires alpaca-py library. Use MockBroker for offline testing."
+        """
+        Check if order exists in Alpaca.
+
+        Args:
+            client_order_id: Client order ID to check
+
+        Returns:
+            True if order exists
+        """
+        try:
+            self.client.get_order_by_client_id(client_order_id)
+            return True
+        except Exception:
+            return False
+
+    def _convert_alpaca_order(self, alpaca_order) -> Order:
+        """
+        Convert Alpaca order to our Order model.
+
+        Args:
+            alpaca_order: Alpaca order object
+
+        Returns:
+            Our Order model
+        """
+        from alpaca.trading.enums import OrderStatus as AlpacaOrderStatus
+
+        # Map Alpaca status to our status
+        status_map = {
+            AlpacaOrderStatus.NEW: OrderStatus.PENDING,
+            AlpacaOrderStatus.ACCEPTED: OrderStatus.PENDING,
+            AlpacaOrderStatus.PARTIALLY_FILLED: OrderStatus.PENDING,
+            AlpacaOrderStatus.FILLED: OrderStatus.FILLED,
+            AlpacaOrderStatus.CANCELED: OrderStatus.CANCELED,
+            AlpacaOrderStatus.REJECTED: OrderStatus.REJECTED,
+            AlpacaOrderStatus.EXPIRED: OrderStatus.CANCELED,
+        }
+
+        status = status_map.get(alpaca_order.status, OrderStatus.PENDING)
+
+        # Map Alpaca side to our side
+        our_side = OrderSide.BUY if alpaca_order.side.name == "BUY" else OrderSide.SELL
+
+        # Map Alpaca order type to our type
+        our_type = OrderType.MARKET if alpaca_order.type.name == "MARKET" else OrderType.LIMIT
+
+        # Get filled info if available
+        filled_at = None
+        filled_price = None
+        if alpaca_order.filled_at:
+            filled_at = alpaca_order.filled_at.replace(tzinfo=None)
+        if alpaca_order.filled_avg_price:
+            filled_price = Decimal(str(alpaca_order.filled_avg_price))
+
+        # Get submitted time
+        submitted_at = alpaca_order.submitted_at.replace(tzinfo=None)
+
+        return Order(
+            id=str(alpaca_order.id),
+            symbol=alpaca_order.symbol,
+            side=our_side,
+            type=our_type,
+            quantity=int(alpaca_order.qty),
+            price=Decimal(str(alpaca_order.limit_price)) if alpaca_order.limit_price else None,
+            status=status,
+            submitted_at=submitted_at,
+            filled_at=filled_at,
+            filled_price=filled_price,
         )

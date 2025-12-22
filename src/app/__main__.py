@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from src.app.config import is_live_trading_mode, load_config
 from src.app.models import FillRecord, OrderRecord, TradeRecord
 from src.app.order_pipeline import submit_signal_order
@@ -17,6 +19,12 @@ from src.data import AlpacaDataProvider, MockDataProvider
 from src.risk import RiskManager
 from src.signals import SMAStrategy, is_market_hours
 from src.signals.strategy import calculate_sma
+
+# Load .env file from repo root BEFORE any config/env checks
+# This ensures environment variables are available for both --preflight and normal execution
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DOTENV_PATH = _REPO_ROOT / ".env"
+load_dotenv(dotenv_path=_DOTENV_PATH, override=False)
 
 
 def get_run_output_dir(run_id: str) -> Path:
@@ -127,7 +135,180 @@ Examples:
         help="Acknowledge understanding of live trading risks (required for --mode live)",
     )
 
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Validate configuration and connectivity without running the trading loop",
+    )
+
+    parser.add_argument(
+        "--paper-test-order",
+        nargs=2,
+        metavar=("SYMBOL", "QTY"),
+        help="Submit a single test MARKET order in paper mode and exit (e.g., --paper-test-order AAPL 1)",
+    )
+
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run exactly 1 trading loop iteration (default: 5 iterations)",
+    )
+
+    parser.add_argument(
+        "--compute-after-hours",
+        action="store_true",
+        help="Fetch bars and compute indicators even when market is closed (for diagnostics)",
+    )
+
+    parser.add_argument(
+        "--allow-after-hours-orders",
+        action="store_true",
+        help="Allow order submission when market is closed (requires --compute-after-hours, refused in live mode)",
+    )
+
     return parser.parse_args(argv)
+
+
+def run_paper_test_order(symbol: str, quantity: int) -> int:
+    """
+    Submit a single test MARKET order in paper mode.
+
+    Args:
+        symbol: Stock symbol to trade
+        quantity: Number of shares
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    import os
+
+    print(f"Paper test order: {symbol} x {quantity}")
+
+    # Check for API credentials
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        print(
+            "ERROR: Paper test order requires Alpaca API credentials.\n"
+            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("  [OK] API credentials found")
+
+    # Initialize Alpaca broker for paper trading
+    try:
+        broker = AlpacaBroker(api_key, secret_key, "https://paper-api.alpaca.markets")
+        print("  [OK] Alpaca broker initialized (paper mode)")
+    except Exception as e:
+        print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
+        return 1
+
+    # Generate client order ID
+    client_order_id = f"test-{uuid.uuid4()}"
+    print(f"  Client order ID: {client_order_id}")
+
+    # Submit order
+    try:
+        from src.app.models import OrderSide
+
+        order = broker.submit_order(
+            symbol=symbol,
+            side=OrderSide.BUY,
+            quantity=quantity,
+            client_order_id=client_order_id,
+        )
+        print("  [OK] Order submitted successfully!")
+        print(f"  Order ID: {order.id}")
+        print(f"  Status: {order.status.value}")
+        print(f"  Symbol: {order.symbol}")
+        print(f"  Side: {order.side.value}")
+        print(f"  Quantity: {order.quantity}")
+        if order.filled_price:
+            print(f"  Filled Price: ${order.filled_price}")
+        print("\nTest order completed successfully!")
+        return 0
+    except Exception as e:
+        print(f"ERROR: Failed to submit order: {e}", file=sys.stderr)
+        return 1
+
+
+def run_preflight_check(mode: str, base_url: str | None = None) -> int:
+    """
+    Run preflight checks for the given mode.
+
+    Args:
+        mode: Trading mode (dry-run, paper, or live)
+        base_url: Alpaca base URL (required for paper/live modes)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    import os
+    import urllib.request
+
+    if mode == "dry-run":
+        print("Preflight check: dry-run mode")
+        print("  [OK] Dry-run/mock mode requires no Alpaca connectivity")
+        print("  Status: OK")
+        return 0
+
+    # For paper/live modes, check API keys
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        print(
+            f"ERROR: {mode.capitalize()} mode requires Alpaca API credentials.\n"
+            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Preflight check: {mode} mode")
+    print("  [OK] API credentials found")
+
+    # Test connectivity to Alpaca
+    print(f"  Testing connectivity to {base_url}...")
+
+    account_url = f"{base_url}/v2/account"
+    req = urllib.request.Request(account_url)
+    req.add_header("APCA-API-KEY-ID", api_key)
+    req.add_header("APCA-API-SECRET-KEY", secret_key)
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status == 200:
+                import json
+
+                data = json.loads(response.read().decode("utf-8"))
+                print(f"  [OK] Connection successful (HTTP {response.status})")
+                print(f"  Account ID: {data.get('id', 'N/A')}")
+                print(f"  Status: {data.get('status', 'N/A')}")
+                print(f"  Currency: {data.get('currency', 'N/A')}")
+                print(f"  Buying Power: ${data.get('buying_power', 'N/A')}")
+                print("\nPreflight status: OK")
+                return 0
+            else:
+                print(
+                    f"ERROR: Unexpected response status: {response.status}",
+                    file=sys.stderr,
+                )
+                return 1
+    except urllib.error.HTTPError as e:
+        print(
+            f"ERROR: HTTP {e.code} - {e.reason}\nResponse: {e.read().decode('utf-8')[:200]}",
+            file=sys.stderr,
+        )
+        return 1
+    except urllib.error.URLError as e:
+        print(f"ERROR: Connection failed - {e.reason}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -142,6 +323,34 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = parse_args(argv)
 
+    # Handle paper test order (must be in paper mode)
+    if args.paper_test_order:
+        symbol, qty_str = args.paper_test_order
+        try:
+            quantity = int(qty_str)
+            if quantity <= 0:
+                print("ERROR: Quantity must be positive", file=sys.stderr)
+                return 1
+        except ValueError:
+            print(f"ERROR: Invalid quantity '{qty_str}', must be an integer", file=sys.stderr)
+            return 1
+
+        # Refuse to run in live mode
+        if args.mode == "live":
+            print(
+                "ERROR: --paper-test-order cannot be used with --mode live.\n"
+                "Test orders are only allowed in paper mode for safety.",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Default to paper mode if not specified
+        if args.mode == "dry-run":
+            print("INFO: Switching to paper mode for test order (dry-run cannot submit orders)")
+            args.mode = "paper"
+
+        return run_paper_test_order(symbol, quantity)
+
     # Safety gate: require explicit acknowledgment for live trading
     if args.mode == "live" and not args.i_understand_live_trading:
         print(
@@ -151,6 +360,36 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Safety gate: refuse after-hours orders in live mode
+    if args.allow_after_hours_orders and args.mode == "live":
+        print(
+            "ERROR: --allow-after-hours-orders cannot be used with --mode live.\n"
+            "After-hours order submission is only allowed in paper/dry-run modes for safety.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Validate: --allow-after-hours-orders requires --compute-after-hours
+    if args.allow_after_hours_orders and not args.compute_after_hours:
+        print(
+            "ERROR: --allow-after-hours-orders requires --compute-after-hours.\n"
+            "Use both flags together to enable after-hours diagnostics and orders.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # If preflight mode is enabled, run preflight checks and exit
+    if args.preflight:
+        # Determine base URL based on mode
+        if args.mode == "paper":
+            base_url = "https://paper-api.alpaca.markets"
+        elif args.mode == "live":
+            base_url = "https://api.alpaca.markets"
+        else:
+            base_url = None
+
+        return run_preflight_check(args.mode, base_url)
 
     # Environment preflight check: paper/live modes require Alpaca API credentials
     if args.mode in ("paper", "live"):
@@ -169,13 +408,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.symbols:
         symbols = [s.strip() for s in args.symbols.split(",")]
 
+    # Handle --once flag
+    iterations = 1 if args.once else None
+
     # Call the trading loop with parsed arguments
     try:
         run_trading_loop(
             mode=args.mode,
             run_id=args.run_id,
             symbols=symbols,
-            max_iterations=args.max_iterations,
+            max_iterations=args.max_iterations or iterations,
+            compute_after_hours=args.compute_after_hours,
+            allow_after_hours_orders=args.allow_after_hours_orders,
         )
         return 0
     except Exception as e:
@@ -267,12 +511,16 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             - run_id: Custom run ID (default: auto-generated)
             - symbols: List of symbols to trade (default: from config)
             - max_iterations: Maximum iterations (overrides iterations param)
+            - compute_after_hours: Fetch bars and compute signals even when market closed
+            - allow_after_hours_orders: Allow order submission when market closed (requires compute_after_hours)
     """
     # Extract CLI overrides
     mode_override = kwargs.get("mode")
     run_id_override = kwargs.get("run_id")
     symbols_override = kwargs.get("symbols")
     max_iterations = kwargs.get("max_iterations")
+    compute_after_hours = kwargs.get("compute_after_hours", False)
+    allow_after_hours_orders = kwargs.get("allow_after_hours_orders", False)
 
     # Use max_iterations if provided
     if max_iterations is not None:
@@ -405,14 +653,26 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                     config.allowed_symbols, limit=config.sma_slow_period + 1
                 )
 
+                # Log if no data fetched at all
+                if not bars_data:
+                    logger.warning(
+                        "No market data received for any symbol. "
+                        "This may indicate API issues or market closure."
+                    )
+                    continue
+
                 # Process each symbol
                 for symbol in config.allowed_symbols:
                     if symbol not in bars_data:
-                        logger.warning(f"No data for {symbol}")
+                        logger.warning(f"No data for {symbol} - symbol may be invalid or delisted")
                         continue
 
                     bars = bars_data[symbol]
                     if not bars:
+                        logger.warning(
+                            f"{symbol}: Empty bars list returned. "
+                            "Market may be closed or symbol has no recent data."
+                        )
                         continue
 
                     latest_bar = bars[-1]
@@ -438,8 +698,11 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                             f"    Market hours: CLOSED (current: {current_time.strftime('%H:%M')}, "
                             f"allowed: {market_open}-{market_close} on weekdays)"
                         )
-                        logger.info("    Signal: HOLD (market closed)")
-                        continue
+                        if not compute_after_hours:
+                            logger.info("    Signal: HOLD (market closed)")
+                            continue
+                        else:
+                            logger.info("    Note: Computing signals after-hours for diagnostics")
                     else:
                         logger.info(
                             f"    Market hours: OPEN (allowed: {market_open}-{market_close})"
@@ -472,6 +735,21 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                     if signal:
                         logger.info(f"    Signal: {signal.side.value.upper()}")
                         logger.info(f"    Reason: {signal.reason}")
+
+                        # Check if we should block after-hours order submission
+                        if not in_market_hours and not allow_after_hours_orders:
+                            logger.warning(
+                                "    Order submission BLOCKED: Market closed and --allow-after-hours-orders not set"
+                            )
+                            logger.info(
+                                "    Use --compute-after-hours --allow-after-hours-orders to submit orders after hours"
+                            )
+                            continue
+
+                        if not in_market_hours and allow_after_hours_orders:
+                            logger.warning(
+                                "    Submitting order AFTER HOURS (--allow-after-hours-orders enabled)"
+                            )
 
                         # Determine quantity (simple fixed quantity for MVP)
                         quantity = 10

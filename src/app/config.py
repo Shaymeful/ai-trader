@@ -2,6 +2,7 @@
 
 import os
 from decimal import Decimal
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -57,8 +58,11 @@ class Config(BaseModel):
 
 def load_config() -> Config:
     """Load configuration from .env file and environment variables."""
-    # Load .env file if it exists
-    load_dotenv()
+    # Load .env file from repo root (works regardless of CWD)
+    # __file__ is src/app/config.py, so we go up 2 levels to reach repo root
+    repo_root = Path(__file__).resolve().parents[2]
+    dotenv_path = repo_root / ".env"
+    load_dotenv(dotenv_path=dotenv_path, override=False)
 
     # Build config from environment variables
     config_dict = {
@@ -80,8 +84,11 @@ def load_config() -> Config:
         "dry_run": os.getenv("DRY_RUN", "false").lower() == "true",
     }
 
-    # Parse allowed symbols
-    symbols_str = os.getenv("ALLOWED_SYMBOLS", "AAPL,MSFT,GOOGL,AMZN,TSLA")
+    # Parse allowed symbols - support both WATCHLIST and ALLOWED_SYMBOLS
+    # WATCHLIST takes precedence if both are set
+    symbols_str = os.getenv("WATCHLIST") or os.getenv(
+        "ALLOWED_SYMBOLS", "AAPL,MSFT,GOOGL,AMZN,TSLA"
+    )
     config_dict["allowed_symbols"] = [s.strip() for s in symbols_str.split(",")]
 
     return Config(**config_dict)
