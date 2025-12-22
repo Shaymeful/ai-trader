@@ -181,7 +181,7 @@ def submit_signal_order(
         run_id=run_id,
         status=order.status.value
     )
-    write_order_to_csv_fn(order_record)
+    write_order_to_csv_fn(order_record, run_id)
 
     # Step 8: Add to state and save (ONLY after successful submission)
     state.submitted_client_order_ids.add(client_order_id)
@@ -200,7 +200,7 @@ def submit_signal_order(
             broker_order_id=order.id,
             run_id=run_id
         )
-        write_fill_to_csv_fn(fill_record)
+        write_fill_to_csv_fn(fill_record, run_id)
 
         # Update position
         qty_signed = quantity if signal.side == OrderSide.BUY else -quantity
@@ -222,8 +222,8 @@ def submit_signal_order(
             run_id=run_id,
             reason=signal.reason
         )
-        write_trade_to_csv_fn(trade)
-        logger.info(f"    Trade recorded to out/trades.csv")
+        write_trade_to_csv_fn(trade, run_id)
+        logger.info(f"    Trade recorded to CSV")
 
     return OrderSubmissionResult(
         success=True,

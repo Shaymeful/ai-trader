@@ -141,7 +141,10 @@ def test_live_trading_succeeds_with_both_flags(monkeypatch, tmp_path):
         run_trading_loop(iterations=1)
 
         # Verify summary.json was created (indicating successful run)
-        assert (tmp_path / "out" / "summary.json").exists()
+        # Find the run directory
+        run_dirs = list((tmp_path / "out" / "runs").iterdir())
+        assert len(run_dirs) == 1
+        assert (run_dirs[0] / "summary.json").exists()
 
     finally:
         os.chdir(original_cwd)
@@ -164,8 +167,10 @@ def test_paper_trading_works_without_flags(monkeypatch, tmp_path):
         # Should NOT raise ValueError (paper trading is safe by default)
         run_trading_loop(iterations=1)
 
-        # Verify summary.json was created
-        assert (tmp_path / "out" / "summary.json").exists()
+        # Verify summary.json was created in run directory
+        run_dirs = list((tmp_path / "out" / "runs").iterdir())
+        assert len(run_dirs) == 1
+        assert (run_dirs[0] / "summary.json").exists()
 
     finally:
         os.chdir(original_cwd)
@@ -185,8 +190,10 @@ def test_mock_mode_works_without_flags(monkeypatch, tmp_path):
         # Should NOT raise ValueError
         run_trading_loop(iterations=1)
 
-        # Verify summary.json was created
-        assert (tmp_path / "out" / "summary.json").exists()
+        # Verify summary.json was created in run directory
+        run_dirs = list((tmp_path / "out" / "runs").iterdir())
+        assert len(run_dirs) == 1
+        assert (run_dirs[0] / "summary.json").exists()
 
     finally:
         os.chdir(original_cwd)
