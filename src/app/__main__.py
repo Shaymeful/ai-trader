@@ -1,5 +1,6 @@
 """Main entry point for the trading bot."""
 
+import argparse
 import json
 import logging
 import sys
@@ -61,6 +62,113 @@ def close_logging_handlers():
 
     # Finally, call logging.shutdown() as a final cleanup
     logging.shutdown()
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """
+    Parse command line arguments.
+
+    Args:
+        argv: Command line arguments (for testing)
+
+    Returns:
+        Parsed arguments namespace
+    """
+    parser = argparse.ArgumentParser(
+        description="AI Trader - Automated trading bot",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run in dry-run mode (default, no real orders)
+  python -m src.app
+
+  # Run in paper trading mode (simulated Alpaca account)
+  python -m src.app --mode paper
+
+  # Run in live trading mode (requires explicit acknowledgment)
+  python -m src.app --mode live --i-understand-live-trading
+
+  # Run with custom symbols and max iterations
+  python -m src.app --symbols AAPL,MSFT --max-iterations 10
+""",
+    )
+
+    parser.add_argument(
+        "--mode",
+        choices=["dry-run", "paper", "live"],
+        default="dry-run",
+        help="Trading mode (default: dry-run for safety)",
+    )
+
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Optional run ID for this session (default: auto-generated UUID)",
+    )
+
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        default=None,
+        help="Comma-separated list of symbols to trade (default: from config/env)",
+    )
+
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Maximum number of trading loop iterations (default: 5)",
+    )
+
+    parser.add_argument(
+        "--i-understand-live-trading",
+        action="store_true",
+        help="Acknowledge understanding of live trading risks (required for --mode live)",
+    )
+
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """
+    Main entry point for the trading bot CLI.
+
+    Args:
+        argv: Command line arguments (for testing)
+
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    args = parse_args(argv)
+
+    # Safety gate: require explicit acknowledgment for live trading
+    if args.mode == "live" and not args.i_understand_live_trading:
+        print(
+            "ERROR: Live trading mode requires explicit acknowledgment.\n"
+            "Use --i-understand-live-trading to proceed with live trading.\n"
+            "WARNING: Live trading involves real money and real risk.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Parse symbols if provided
+    symbols = None
+    if args.symbols:
+        symbols = [s.strip() for s in args.symbols.split(",")]
+
+    # Call the trading loop with parsed arguments
+    try:
+        run_trading_loop(
+            mode=args.mode,
+            run_id=args.run_id,
+            symbols=symbols,
+            max_iterations=args.max_iterations,
+        )
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
 
 
 def setup_logging(log_level: str, run_id: str) -> logging.Logger:
@@ -136,18 +244,52 @@ def write_fill_to_csv(fill: FillRecord, run_id: str):
         f.write(fill.to_csv_row() + "\n")
 
 
-def run_trading_loop(iterations: int = 5):
+def run_trading_loop(iterations: int = 5, **kwargs):
     """
     Run the main trading loop.
 
     Args:
         iterations: Number of iterations to run (for testing/demo)
+        **kwargs: Additional options from CLI:
+            - mode: Trading mode override (dry-run, paper, live)
+            - run_id: Custom run ID (default: auto-generated)
+            - symbols: List of symbols to trade (default: from config)
+            - max_iterations: Maximum iterations (overrides iterations param)
     """
+    # Extract CLI overrides
+    mode_override = kwargs.get("mode")
+    run_id_override = kwargs.get("run_id")
+    symbols_override = kwargs.get("symbols")
+    max_iterations = kwargs.get("max_iterations")
+
+    # Use max_iterations if provided
+    if max_iterations is not None:
+        iterations = max_iterations
+
     # Generate RUN_ID for this session
-    run_id = str(uuid.uuid4())
+    run_id = run_id_override if run_id_override is not None else str(uuid.uuid4())
 
     # Load configuration
     config = load_config()
+
+    # Apply mode override from CLI
+    if mode_override is not None:
+        if mode_override == "dry-run":
+            config.dry_run = True
+            # Keep existing mode (mock or alpaca)
+        elif mode_override == "paper":
+            config.mode = "alpaca"
+            config.alpaca_base_url = "https://paper-api.alpaca.markets"
+            config.dry_run = False
+        elif mode_override == "live":
+            config.mode = "alpaca"
+            config.alpaca_base_url = "https://api.alpaca.markets"
+            config.dry_run = False
+
+    # Apply symbols override from CLI
+    if symbols_override is not None:
+        config.allowed_symbols = symbols_override
+
     logger = setup_logging(config.log_level, run_id)
 
     try:
@@ -411,4 +553,4 @@ def run_trading_loop(iterations: int = 5):
 
 
 if __name__ == "__main__":
-    run_trading_loop()
+    raise SystemExit(main())
