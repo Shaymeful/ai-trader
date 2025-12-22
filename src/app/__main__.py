@@ -311,7 +311,7 @@ def run_trading_loop(iterations: int = 5):
                             strategy_name="SMA"
                         )
 
-                        if result.success and result.order is not None:
+                        if result.success and result.order is not None and not config.dry_run:
                             trades_executed += 1
 
                             # Update last processed timestamp
