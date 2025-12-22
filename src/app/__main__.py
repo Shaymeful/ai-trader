@@ -124,6 +124,7 @@ Examples:
 
     parser.add_argument(
         "--max-iterations",
+        "--iterations",
         type=int,
         default=None,
         help="Maximum number of trading loop iterations (default: 5)",

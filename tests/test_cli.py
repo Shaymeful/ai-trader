@@ -29,6 +29,12 @@ def test_parse_args_with_max_iterations():
     assert args.max_iterations == 10
 
 
+def test_parse_args_with_iterations_alias():
+    """Test parsing --iterations as alias for --max-iterations."""
+    args = parse_args(["--iterations", "10"])
+    assert args.max_iterations == 10
+
+
 def test_parse_args_with_run_id():
     """Test parsing run-id argument."""
     args = parse_args(["--run-id", "test-123"])
@@ -144,6 +150,19 @@ def test_main_with_max_iterations(monkeypatch):
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
 
     result = main(["--max-iterations", "5"])
+
+    assert result == 0
+    mock_loop.assert_called_once()
+    call_kwargs = mock_loop.call_args.kwargs
+    assert call_kwargs["max_iterations"] == 5
+
+
+def test_main_with_iterations_alias(monkeypatch):
+    """Test that --iterations alias is passed to loop as max_iterations."""
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    result = main(["--iterations", "5"])
 
     assert result == 0
     mock_loop.assert_called_once()
