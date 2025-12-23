@@ -1091,6 +1091,17 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             else []
         )
 
+    # FAIL-FAST SAFETY GATE: Check live trading requirements before ANY operations
+    # This prevents any file I/O, logging, or API calls if safety flags are missing
+    if is_live_trading_mode(config):
+        if not config.enable_live_trading or not config.i_understand_live_trading_risk:
+            error_msg = (
+                "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
+                "I_UNDERSTAND_LIVE_TRADING_RISK=true to proceed."
+            )
+            # Raise immediately without setting up logging or state
+            raise ValueError(error_msg)
+
     logger = setup_logging(config.log_level, run_id)
 
     try:
@@ -1137,15 +1148,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             # Update run_id for new session
             state.run_id = run_id
 
-        # SAFETY GATE: Check live trading requirements
+        # Log live trading warning (safety gate already passed)
         if is_live_trading_mode(config):
-            if not config.enable_live_trading or not config.i_understand_live_trading_risk:
-                error_msg = (
-                    "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
-                    "I_UNDERSTAND_LIVE_TRADING_RISK=true to proceed."
-                )
-                logger.error(error_msg)
-                raise ValueError(error_msg)
             logger.warning("=" * 60)
             logger.warning("LIVE TRADING MODE ENABLED - REAL MONEY AT RISK")
             logger.warning("=" * 60)
