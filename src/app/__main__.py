@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.app.config import is_live_trading_mode, load_config
+from src.app.config import Config, is_live_trading_mode, load_config
 from src.app.models import FillRecord, OrderRecord, TradeRecord
 from src.app.order_pipeline import submit_signal_order
 from src.app.reconciliation import reconcile_with_broker
@@ -469,7 +469,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
 
     symbol = config.allowed_symbols[0]
     print(f"\n  Symbol: {symbol}")
-    print(f"  Quantity: 1 share")
+    print("  Quantity: 1 share")
 
     # Check for API credentials
     api_key = os.getenv("ALPACA_API_KEY")
@@ -496,7 +496,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     # Get current quote to determine limit price
     try:
         quote = broker.get_quote(symbol)
-        print(f"\n  Current quote:")
+        print("\n  Current quote:")
         print(f"    Bid: ${quote.bid}")
         print(f"    Ask: ${quote.ask}")
         print(f"    Last: ${quote.last}")
@@ -508,7 +508,10 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     # Use bid price, or fall back to last trade if bid is unavailable
     base_price = quote.bid if quote.bid > 0 else quote.last
     if base_price <= 0:
-        print(f"ERROR: Invalid price for {symbol}: bid={quote.bid}, last={quote.last}", file=sys.stderr)
+        print(
+            f"ERROR: Invalid price for {symbol}: bid={quote.bid}, last={quote.last}",
+            file=sys.stderr,
+        )
         return 1
 
     # Offset: 0.01 (1 cent) below bid to ensure we post
@@ -526,7 +529,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     if not notional_check.passed:
         print(f"ERROR: Order failed risk check: {notional_check.reason}", file=sys.stderr)
         return 1
-    print(f"    [OK] Order notional check passed")
+    print("    [OK] Order notional check passed")
 
     # Check max positions exposure
     exposure_check = risk_manager.check_positions_exposure(
@@ -535,7 +538,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     if not exposure_check.passed:
         print(f"ERROR: Order failed risk check: {exposure_check.reason}", file=sys.stderr)
         return 1
-    print(f"    [OK] Positions exposure check passed")
+    print("    [OK] Positions exposure check passed")
 
     # Generate client order ID
     client_order_id = f"test-{uuid.uuid4()}"
@@ -654,12 +657,8 @@ def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int
         print("-" * 70)
 
         # Print table header
-        print(
-            f"{'Symbol':<8} {'Side':<6} {'Qty':<6} {'Type':<8} {'Limit':<10} {'Status':<10}"
-        )
-        print(
-            f"{'Order ID':<20} {'Client Order ID':<30}"
-        )
+        print(f"{'Symbol':<8} {'Side':<6} {'Qty':<6} {'Type':<8} {'Limit':<10} {'Status':<10}")
+        print(f"{'Order ID':<20} {'Client Order ID':<30}")
         print("-" * 70)
 
         # Print each order
@@ -681,7 +680,10 @@ def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int
 
 
 def run_cancel_order(
-    config: Config, i_understand_live_trading: bool, order_id: str | None, client_order_id: str | None
+    config: Config,
+    i_understand_live_trading: bool,
+    order_id: str | None,
+    client_order_id: str | None,
 ) -> int:
     """
     Cancel an order by ID and exit.
@@ -869,10 +871,11 @@ def run_replace_order(
     try:
         existing_order = broker.get_order_status(order_id)
         print(f"\nReplacing order: {order_id}")
-        print(f"  Current: {existing_order.symbol} {existing_order.side.value} "
-              f"{existing_order.quantity} @ ${existing_order.price}")
-        print(f"  New: limit_price=${limit_price}" +
-              (f", quantity={quantity}" if quantity else ""))
+        print(
+            f"  Current: {existing_order.symbol} {existing_order.side.value} "
+            f"{existing_order.quantity} @ ${existing_order.price}"
+        )
+        print(f"  New: limit_price=${limit_price}" + (f", quantity={quantity}" if quantity else ""))
     except Exception as e:
         print(f"ERROR: Could not fetch existing order: {e}", file=sys.stderr)
         return 1
@@ -891,7 +894,7 @@ def run_replace_order(
     if not notional_check.passed:
         print(f"ERROR: Replacement failed risk check: {notional_check.reason}", file=sys.stderr)
         return 1
-    print(f"    [OK] Order notional check passed")
+    print("    [OK] Order notional check passed")
 
     # Check max positions exposure
     exposure_check = risk_manager.check_positions_exposure(
@@ -900,7 +903,7 @@ def run_replace_order(
     if not exposure_check.passed:
         print(f"ERROR: Replacement failed risk check: {exposure_check.reason}", file=sys.stderr)
         return 1
-    print(f"    [OK] Positions exposure check passed")
+    print("    [OK] Positions exposure check passed")
 
     # Replace order
     try:
@@ -1109,7 +1112,12 @@ def main(argv: list[str] | None = None) -> int:
         return run_live_test_order(config, args.i_understand_live_trading)
 
     # Handle order management commands
-    if args.list_open_orders or args.cancel_order_id or args.cancel_client_order_id or args.replace_order_id:
+    if (
+        args.list_open_orders
+        or args.cancel_order_id
+        or args.cancel_client_order_id
+        or args.replace_order_id
+    ):
         # Load config and apply mode overrides (same pattern as test-order)
         try:
             config = load_config()
@@ -1144,7 +1152,10 @@ def main(argv: list[str] | None = None) -> int:
         # Handle cancel order
         if args.cancel_order_id or args.cancel_client_order_id:
             return run_cancel_order(
-                config, args.i_understand_live_trading, args.cancel_order_id, args.cancel_client_order_id
+                config,
+                args.i_understand_live_trading,
+                args.cancel_order_id,
+                args.cancel_client_order_id,
             )
 
         # Handle replace order
@@ -1153,7 +1164,11 @@ def main(argv: list[str] | None = None) -> int:
                 print("ERROR: --replace-order-id requires --limit-price", file=sys.stderr)
                 return 1
             return run_replace_order(
-                config, args.i_understand_live_trading, args.replace_order_id, args.limit_price, args.qty
+                config,
+                args.i_understand_live_trading,
+                args.replace_order_id,
+                args.limit_price,
+                args.qty,
             )
 
     # Safety gate: require explicit acknowledgment for live trading
@@ -1532,14 +1547,15 @@ def run_trading_loop(iterations: int = 5, **kwargs):
 
     # FAIL-FAST SAFETY GATE: Check live trading requirements before ANY operations
     # This prevents any file I/O, logging, or API calls if safety flags are missing
-    if is_live_trading_mode(config):
-        if not config.enable_live_trading or not config.i_understand_live_trading_risk:
-            error_msg = (
-                "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
-                "I_UNDERSTAND_LIVE_TRADING_RISK=true to proceed."
-            )
-            # Raise immediately without setting up logging or state
-            raise ValueError(error_msg)
+    if is_live_trading_mode(config) and (
+        not config.enable_live_trading or not config.i_understand_live_trading_risk
+    ):
+        error_msg = (
+            "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
+            "I_UNDERSTAND_LIVE_TRADING_RISK=true to proceed."
+        )
+        # Raise immediately without setting up logging or state
+        raise ValueError(error_msg)
 
     logger = setup_logging(config.log_level, run_id)
 
@@ -1836,7 +1852,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                             trades_executed += 1
 
                             # Update last processed timestamp
-                            state.last_processed_timestamp[symbol] = current_time.isoformat()
+                            state.last_processed_timestamp[symbol] = exchange_time.isoformat()
 
                             # Save state after each order
                             save_state(state)

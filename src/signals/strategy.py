@@ -29,12 +29,8 @@ def get_exchange_time() -> datetime:
             # Parse ISO format datetime
             dt = datetime.fromisoformat(override)
 
-            # If naive, assume Eastern
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=eastern)
-            else:
-                # Convert to Eastern if in different timezone
-                dt = dt.astimezone(eastern)
+            # If naive, assume Eastern; otherwise convert to Eastern
+            dt = dt.replace(tzinfo=eastern) if dt.tzinfo is None else dt.astimezone(eastern)
 
             return dt
         except (ValueError, TypeError) as e:

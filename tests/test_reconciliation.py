@@ -280,7 +280,9 @@ def test_alpaca_broker_get_open_orders_uses_correct_request():
         mock_trading_client_class.return_value = mock_client
 
         broker = AlpacaBroker(
-            api_key="test_key", secret_key="test_secret", base_url="https://paper-api.alpaca.markets"
+            api_key="test_key",
+            secret_key="test_secret",
+            base_url="https://paper-api.alpaca.markets",
         )
 
         # Mock the orders response

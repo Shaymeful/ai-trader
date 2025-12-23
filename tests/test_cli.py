@@ -831,12 +831,16 @@ def test_test_order_fails_risk_check(monkeypatch, capsys):
 
     with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
         # Use CLI override to set very low limit that will fail the check
-        result = main([
-            "--mode", "live",
-            "--i-understand-live-trading",
-            "--test-order",
-            "--max-order-notional", "1"
-        ])
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--test-order",
+                "--max-order-notional",
+                "1",
+            ]
+        )
 
     assert result == 1
     mock_loop.assert_not_called()
@@ -1176,11 +1180,9 @@ def test_cancel_order_by_id_success(monkeypatch, capsys):
     mock_broker.get_order_status.return_value = mock_order
 
     with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
-        result = main([
-            "--mode", "live",
-            "--i-understand-live-trading",
-            "--cancel-order-id", "order-123"
-        ])
+        result = main(
+            ["--mode", "live", "--i-understand-live-trading", "--cancel-order-id", "order-123"]
+        )
 
     assert result == 0
     mock_loop.assert_not_called()
@@ -1237,11 +1239,15 @@ def test_cancel_order_by_client_id_success(monkeypatch, capsys):
     mock_broker.list_open_orders_detailed.return_value = [mock_order]
 
     with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
-        result = main([
-            "--mode", "live",
-            "--i-understand-live-trading",
-            "--cancel-client-order-id", "client-xyz"
-        ])
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--cancel-client-order-id",
+                "client-xyz",
+            ]
+        )
 
     assert result == 0
     mock_loop.assert_not_called()
@@ -1269,11 +1275,7 @@ def test_replace_order_requires_live_mode(monkeypatch, capsys):
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
-    result = main([
-        "--mode", "paper",
-        "--replace-order-id", "order-123",
-        "--limit-price", "150.50"
-    ])
+    result = main(["--mode", "paper", "--replace-order-id", "order-123", "--limit-price", "150.50"])
 
     assert result == 1
     mock_loop.assert_not_called()
@@ -1300,11 +1302,7 @@ def test_replace_order_requires_i_understand_live_trading(monkeypatch, capsys):
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
-    result = main([
-        "--mode", "live",
-        "--replace-order-id", "order-123",
-        "--limit-price", "150.50"
-    ])
+    result = main(["--mode", "live", "--replace-order-id", "order-123", "--limit-price", "150.50"])
 
     assert result == 1
     mock_loop.assert_not_called()
@@ -1336,12 +1334,17 @@ def test_replace_order_requires_enable_live_trading_env(monkeypatch, capsys):
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
-    result = main([
-        "--mode", "live",
-        "--i-understand-live-trading",
-        "--replace-order-id", "order-123",
-        "--limit-price", "150.50"
-    ])
+    result = main(
+        [
+            "--mode",
+            "live",
+            "--i-understand-live-trading",
+            "--replace-order-id",
+            "order-123",
+            "--limit-price",
+            "150.50",
+        ]
+    )
 
     assert result == 1
     mock_loop.assert_not_called()
@@ -1373,11 +1376,9 @@ def test_replace_order_requires_limit_price(monkeypatch, capsys):
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
-    result = main([
-        "--mode", "live",
-        "--i-understand-live-trading",
-        "--replace-order-id", "order-123"
-    ])
+    result = main(
+        ["--mode", "live", "--i-understand-live-trading", "--replace-order-id", "order-123"]
+    )
 
     assert result == 1
     mock_loop.assert_not_called()
@@ -1449,20 +1450,21 @@ def test_replace_order_success(monkeypatch, capsys):
     mock_broker.replace_order.return_value = new_order
 
     with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
-        result = main([
-            "--mode", "live",
-            "--i-understand-live-trading",
-            "--replace-order-id", "order-123",
-            "--limit-price", "105.00"
-        ])
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--replace-order-id",
+                "order-123",
+                "--limit-price",
+                "105.00",
+            ]
+        )
 
     assert result == 0
     mock_loop.assert_not_called()
-    mock_broker.replace_order.assert_called_once_with(
-        "order-123",
-        Decimal("105.00"),
-        None
-    )
+    mock_broker.replace_order.assert_called_once_with("order-123", Decimal("105.00"), None)
 
     captured = capsys.readouterr()
     assert "REPLACE ORDER" in captured.out or "ORDER REPLACED" in captured.out
@@ -1533,21 +1535,23 @@ def test_replace_order_with_quantity_success(monkeypatch, capsys):
     mock_broker.replace_order.return_value = new_order
 
     with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
-        result = main([
-            "--mode", "live",
-            "--i-understand-live-trading",
-            "--replace-order-id", "order-789",
-            "--limit-price", "95.00",
-            "--qty", "3"
-        ])
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--replace-order-id",
+                "order-789",
+                "--limit-price",
+                "95.00",
+                "--qty",
+                "3",
+            ]
+        )
 
     assert result == 0
     mock_loop.assert_not_called()
-    mock_broker.replace_order.assert_called_once_with(
-        "order-789",
-        Decimal("95.00"),
-        3
-    )
+    mock_broker.replace_order.assert_called_once_with("order-789", Decimal("95.00"), 3)
 
     captured = capsys.readouterr()
     assert "REPLACE ORDER" in captured.out or "ORDER REPLACED" in captured.out
@@ -1602,12 +1606,17 @@ def test_replace_order_fails_risk_check(monkeypatch, capsys):
     mock_broker.get_order_status.return_value = existing_order
 
     with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
-        result = main([
-            "--mode", "live",
-            "--i-understand-live-trading",
-            "--replace-order-id", "order-123",
-            "--limit-price", "150.50"
-        ])
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--replace-order-id",
+                "order-123",
+                "--limit-price",
+                "150.50",
+            ]
+        )
 
     assert result == 1
     mock_loop.assert_not_called()

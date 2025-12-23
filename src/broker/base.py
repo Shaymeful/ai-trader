@@ -590,8 +590,6 @@ class AlpacaBroker(Broker):
             True if cancellation succeeded
         """
         try:
-            from alpaca.trading.requests import CancelOrderResponse
-
             self.client.cancel_order_by_id(order_id)
             return True
         except Exception:
@@ -610,8 +608,8 @@ class AlpacaBroker(Broker):
         try:
             # Alpaca supports canceling by client order ID
             # We need to get the order first, then cancel by ID
-            from alpaca.trading.requests import GetOrdersRequest
             from alpaca.trading.enums import QueryOrderStatus
+            from alpaca.trading.requests import GetOrdersRequest
 
             # Get all orders to find the one with matching client_order_id
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
@@ -650,7 +648,7 @@ class AlpacaBroker(Broker):
             request = ReplaceOrderRequest(**replace_params)
             new_order = self.client.replace_order_by_id(order_id, request)
             return self._convert_alpaca_order(new_order)
-        except Exception as e:
+        except Exception:
             # If replace fails, fall back to cancel + new
             # Get the old order details first
             try:
@@ -683,8 +681,8 @@ class AlpacaBroker(Broker):
             List of Order objects for all open orders
         """
         try:
-            from alpaca.trading.requests import GetOrdersRequest
             from alpaca.trading.enums import QueryOrderStatus
+            from alpaca.trading.requests import GetOrdersRequest
 
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
             alpaca_orders = self.client.get_orders(filter=request)
