@@ -6,6 +6,28 @@ established behavior.
 
 ---
 
+## 📋 PR Checklist: Spec Sync Requirement
+
+**Before merging any PR that changes the following, this file MUST be updated in the same commit:**
+
+- [ ] Runtime behavior or trading logic
+- [ ] CLI flags or arguments
+- [ ] Configuration (env vars, config file structure)
+- [ ] Broker or data provider interfaces
+- [ ] Risk controls or safety gates
+- [ ] Order execution logic or pipeline
+- [ ] Output formats or logging
+
+**Verification steps:**
+1. Does the PR touch any of the areas above?
+2. If yes, are changes documented in the relevant section(s) below?
+3. Are new flags added to the CLI Flags section?
+4. Are new safety gates added to the Safety Gates section?
+
+**This is a MANDATORY requirement. PRs are incomplete without docs updates.**
+
+---
+
 ## Core Capabilities
 - Alpaca paper trading support
 - Live trading (explicit opt-in only)

@@ -1,29 +1,30 @@
 ﻿
 
 # Repo Rules (must follow)
-===
 
-# 
+## Spec Sync Rule (MANDATORY)
 
-# \## Documentation rule (MANDATORY)
+**Any change to these areas MUST update docs/ARCHITECTURE.md in the SAME commit:**
 
-# Any change that adds/changes behavior, CLI flags, providers/brokers, safety gates, env vars, outputs/logging, or tests
+- [ ] Runtime behavior or trading logic
+- [ ] CLI flags or arguments
+- [ ] Configuration (env vars, config file structure)
+- [ ] Broker or data provider interfaces
+- [ ] Risk controls or safety gates
+- [ ] Order execution logic or pipeline
+- [ ] Output formats or logging
 
-# MUST update:
+**Checklist before committing:**
+1. Did I change behavior, flags, config, interfaces, or risk controls?
+2. If yes, did I update docs/ARCHITECTURE.md to reflect the change?
+3. Did I verify the change is documented in the relevant section?
 
-# \- docs/ARCHITECTURE.md (authoritative feature/architecture log)
+**If the change is user-visible, also update:**
+- docs/CHANGELOG.md (optional but recommended)
 
-# 
+**Rule:** Pull requests/commits touching the above areas are incomplete without docs updates.
 
-# If the change is user-visible, also update:
-
-# \- docs/CHANGELOG.md (optional but recommended)
-
-# 
-
-# Pull requests/commits are not complete until docs are updated.
-
-# 
+---
 
 # AI Trader Repo Rules
 
