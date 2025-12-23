@@ -195,6 +195,48 @@ Examples:
         help="Maximum total positions exposure in dollars (default: 10000)",
     )
 
+    parser.add_argument(
+        "--use-limit-orders",
+        action="store_true",
+        default=True,
+        help="Use limit orders instead of market orders (default: true)",
+    )
+
+    parser.add_argument(
+        "--no-limit-orders",
+        action="store_false",
+        dest="use_limit_orders",
+        help="Disable limit orders, use market orders",
+    )
+
+    parser.add_argument(
+        "--max-spread-bps",
+        type=float,
+        default=20,
+        help="Maximum allowed spread in basis points (default: 20)",
+    )
+
+    parser.add_argument(
+        "--min-edge-bps",
+        type=float,
+        default=0,
+        help="Minimum edge required in basis points (default: 0, disabled)",
+    )
+
+    parser.add_argument(
+        "--cost-diagnostics",
+        action="store_true",
+        default=True,
+        help="Enable cost diagnostics reporting (default: true)",
+    )
+
+    parser.add_argument(
+        "--no-cost-diagnostics",
+        action="store_false",
+        dest="cost_diagnostics",
+        help="Disable cost diagnostics reporting",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -453,6 +495,10 @@ def main(argv: list[str] | None = None) -> int:
             max_daily_loss=args.max_daily_loss,
             max_order_notional=args.max_order_notional,
             max_positions_notional=args.max_positions_notional,
+            use_limit_orders=args.use_limit_orders,
+            max_spread_bps=args.max_spread_bps,
+            min_edge_bps=args.min_edge_bps,
+            cost_diagnostics=args.cost_diagnostics,
         )
         return 0
     except Exception as e:
@@ -533,6 +579,89 @@ def write_fill_to_csv(fill: FillRecord, run_id: str):
         f.write(fill.to_csv_row() + "\n")
 
 
+def generate_cost_diagnostics(run_id: str):
+    """
+    Generate cost diagnostics report from fills.csv.
+
+    Reads fills.csv and calculates:
+    - Total trades
+    - Total spread cost (sum of spread_bps for all trades)
+    - Total slippage (sum of abs(slippage_bps))
+    - Average spread_bps
+    - Worst slippage_bps (by absolute value)
+
+    Writes report to cost_report.txt in run directory.
+
+    Args:
+        run_id: Current run ID
+    """
+    from decimal import Decimal
+
+    run_dir = get_run_output_dir(run_id)
+    fills_path = run_dir / "fills.csv"
+
+    # Check if fills.csv exists and has data
+    if not fills_path.exists():
+        return
+
+    # Read fills and extract cost metrics
+    fills_data = []
+    with open(fills_path) as f:
+        lines = f.readlines()
+        if len(lines) <= 1:  # Only header or empty
+            return
+
+        # Parse CSV (skip header)
+        for line in lines[1:]:
+            parts = line.strip().split(",")
+            if len(parts) >= 12:  # Has cost tracking fields
+                try:
+                    # Extract cost fields: slippage_bps and spread_bps_at_submit
+                    slippage_bps = Decimal(parts[10]) if parts[10] else None
+                    spread_bps = Decimal(parts[11]) if parts[11] else None
+
+                    if slippage_bps is not None and spread_bps is not None:
+                        fills_data.append(
+                            {
+                                "slippage_bps": slippage_bps,
+                                "spread_bps": spread_bps,
+                            }
+                        )
+                except (ValueError, IndexError):
+                    # Skip malformed lines
+                    continue
+
+    # If no fills with cost data, skip report
+    if not fills_data:
+        return
+
+    # Calculate metrics
+    total_trades = len(fills_data)
+    total_spread_cost = sum(f["spread_bps"] for f in fills_data)
+    total_slippage = sum(abs(f["slippage_bps"]) for f in fills_data)
+    avg_spread_bps = total_spread_cost / Decimal(total_trades)
+
+    # Find worst slippage (by absolute value)
+    worst_slippage = max(fills_data, key=lambda f: abs(f["slippage_bps"]))["slippage_bps"]
+
+    # Write report
+    report_path = run_dir / "cost_report.txt"
+    with open(report_path, "w") as f:
+        f.write("=" * 60 + "\n")
+        f.write("TRADING COST DIAGNOSTICS\n")
+        f.write("=" * 60 + "\n\n")
+        f.write(f"Run ID: {run_id}\n")
+        f.write(f"Total Trades: {total_trades}\n\n")
+        f.write("Cost Metrics:\n")
+        f.write(f"  Total Spread Cost:    {total_spread_cost:>10.2f} bps\n")
+        f.write(f"  Total Slippage:       {total_slippage:>10.2f} bps (absolute)\n")
+        f.write(f"  Average Spread:       {avg_spread_bps:>10.2f} bps\n")
+        f.write(f"  Worst Slippage:       {worst_slippage:>10.2f} bps\n")
+        f.write("\n" + "=" * 60 + "\n")
+
+    return report_path
+
+
 def run_trading_loop(iterations: int = 5, **kwargs):
     """
     Run the main trading loop.
@@ -550,6 +679,10 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             - max_daily_loss: Maximum daily loss threshold
             - max_order_notional: Maximum order notional value
             - max_positions_notional: Maximum total positions exposure
+            - use_limit_orders: Use limit orders instead of market orders
+            - max_spread_bps: Maximum allowed spread in basis points
+            - min_edge_bps: Minimum edge required in basis points
+            - cost_diagnostics: Enable cost diagnostics reporting
     """
     # Extract CLI overrides
     mode_override = kwargs.get("mode")
@@ -562,6 +695,10 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     max_daily_loss_override = kwargs.get("max_daily_loss")
     max_order_notional_override = kwargs.get("max_order_notional")
     max_positions_notional_override = kwargs.get("max_positions_notional")
+    use_limit_orders_override = kwargs.get("use_limit_orders")
+    max_spread_bps_override = kwargs.get("max_spread_bps")
+    min_edge_bps_override = kwargs.get("min_edge_bps")
+    cost_diagnostics_override = kwargs.get("cost_diagnostics")
 
     # Use max_iterations if provided
     if max_iterations is not None:
@@ -605,6 +742,20 @@ def run_trading_loop(iterations: int = 5, **kwargs):
 
         config.max_positions_notional = Decimal(str(max_positions_notional_override))
 
+    # Apply cost control overrides from CLI
+    if use_limit_orders_override is not None:
+        config.use_limit_orders = use_limit_orders_override
+    if max_spread_bps_override is not None:
+        from decimal import Decimal
+
+        config.max_spread_bps = Decimal(str(max_spread_bps_override))
+    if min_edge_bps_override is not None:
+        from decimal import Decimal
+
+        config.min_edge_bps = Decimal(str(min_edge_bps_override))
+    if cost_diagnostics_override is not None:
+        config.cost_diagnostics = cost_diagnostics_override
+
     logger = setup_logging(config.log_level, run_id)
 
     try:
@@ -623,6 +774,10 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         logger.info(f"Max order notional: ${config.max_order_notional}")
         logger.info(f"Max positions notional: ${config.max_positions_notional}")
         logger.info(f"SMA periods: fast={config.sma_fast_period}, slow={config.sma_slow_period}")
+        logger.info(f"Use limit orders: {config.use_limit_orders}")
+        logger.info(f"Max spread (bps): {config.max_spread_bps}")
+        logger.info(f"Min edge (bps): {config.min_edge_bps}")
+        logger.info(f"Cost diagnostics: {config.cost_diagnostics}")
 
         # Ensure output directories exist
         setup_outputs(run_id)
@@ -968,6 +1123,12 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         logger.info(f"Orders available in {run_dir / 'orders.csv'}")
         logger.info(f"Fills available in {run_dir / 'fills.csv'}")
         logger.info("State saved to out/state.json")
+
+        # Generate cost diagnostics report (if enabled and trades executed)
+        if config.cost_diagnostics and total_trades_in_file > 0:
+            cost_report_path = generate_cost_diagnostics(run_id)
+            if cost_report_path:
+                logger.info(f"\nCost diagnostics report: {cost_report_path}")
 
     finally:
         # Always close logging handlers to release file locks (critical on Windows)

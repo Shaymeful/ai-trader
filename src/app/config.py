@@ -37,6 +37,16 @@ class Config(BaseModel):
         default=["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"], description="Allowed trading symbols"
     )
 
+    # Trading cost controls
+    use_limit_orders: bool = Field(
+        default=True, description="Use limit orders instead of market orders"
+    )
+    max_spread_bps: Decimal = Field(default=Decimal("20"), description="Max allowed spread in bps")
+    min_edge_bps: Decimal = Field(
+        default=Decimal("0"), description="Minimum edge required in bps (0 = disabled)"
+    )
+    cost_diagnostics: bool = Field(default=True, description="Enable cost diagnostics reporting")
+
     # Strategy parameters
     sma_fast_period: int = Field(default=10, description="Fast SMA period")
     sma_slow_period: int = Field(default=30, description="Slow SMA period")
@@ -83,6 +93,10 @@ def load_config() -> Config:
         "max_daily_loss": Decimal(os.getenv("MAX_DAILY_LOSS", "500")),
         "max_order_notional": Decimal(os.getenv("MAX_ORDER_NOTIONAL", "500")),
         "max_positions_notional": Decimal(os.getenv("MAX_POSITIONS_NOTIONAL", "10000")),
+        "use_limit_orders": os.getenv("USE_LIMIT_ORDERS", "true").lower() == "true",
+        "max_spread_bps": Decimal(os.getenv("MAX_SPREAD_BPS", "20")),
+        "min_edge_bps": Decimal(os.getenv("MIN_EDGE_BPS", "0")),
+        "cost_diagnostics": os.getenv("COST_DIAGNOSTICS", "true").lower() == "true",
         "sma_fast_period": int(os.getenv("SMA_FAST_PERIOD", "10")),
         "sma_slow_period": int(os.getenv("SMA_SLOW_PERIOD", "30")),
         "log_level": os.getenv("LOG_LEVEL", "INFO"),

@@ -47,11 +47,12 @@ def test_setup_outputs_creates_trades_csv(temp_dir, test_run_id):
     csv_path = Path(f"out/runs/{test_run_id}/trades.csv")
     assert csv_path.exists()
 
-    # Check header is present
+    # Check header is present (with cost tracking fields)
     with open(csv_path) as f:
         header = f.readline().strip()
         assert (
-            header == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason"
+            header
+            == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason,expected_price,slippage_abs,slippage_bps,spread_bps_at_submit"
         )
 
 
@@ -196,11 +197,11 @@ def test_trades_csv_empty_if_no_signals(temp_dir, monkeypatch):
         lines = f.readlines()
 
     # Likely only header since mock data rarely triggers signals
-    # But at minimum, we should have the header
+    # But at minimum, we should have the header (with cost tracking fields)
     assert len(lines) >= 1
     assert (
         lines[0].strip()
-        == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason"
+        == "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason,expected_price,slippage_abs,slippage_bps,spread_bps_at_submit"
     )
 
 

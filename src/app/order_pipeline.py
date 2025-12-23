@@ -1,9 +1,10 @@
 """Centralized order submission pipeline with enforced risk checks."""
 
 import logging
+from decimal import Decimal
 
 from src.app.config import Config
-from src.app.models import FillRecord, OrderRecord, OrderSide, Signal, TradeRecord
+from src.app.models import FillRecord, OrderRecord, OrderSide, OrderType, Signal, TradeRecord
 from src.app.state import BotState, build_client_order_id, save_state
 from src.broker.base import Broker
 from src.risk import RiskManager
@@ -161,6 +162,83 @@ def submit_signal_order(
 
     logger.info("    Exposure check: PASSED")
 
+    # Step 5c: Get quote and check spread (cost controls)
+    quote = broker.get_quote(signal.symbol)
+    logger.info(
+        f"    Quote: bid=${quote.bid}, ask=${quote.ask}, mid=${quote.mid}, "
+        f"spread={quote.spread_bps:.2f} bps"
+    )
+
+    # Check if spread exceeds maximum
+    if quote.spread_bps > config.max_spread_bps:
+        logger.warning(
+            f"    Spread check FAILED: spread={quote.spread_bps:.2f} bps > "
+            f"max={config.max_spread_bps} bps"
+        )
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Spread too wide: {quote.spread_bps:.2f} bps > {config.max_spread_bps} bps",
+            client_order_id=client_order_id,
+        )
+
+    logger.info("    Spread check: PASSED")
+
+    # Step 5d: Calculate order type and limit price
+    order_type = OrderType.LIMIT if config.use_limit_orders else OrderType.MARKET
+    limit_price = None
+    expected_price = quote.expected_entry_price(signal.side)
+
+    if order_type == OrderType.LIMIT:
+        # Calculate limit price: slightly inside spread
+        # For BUY: min(ask, mid + spread*0.25)
+        # For SELL: max(bid, mid - spread*0.25)
+        quarter_spread = quote.spread / Decimal("4")
+        if signal.side == OrderSide.BUY:
+            limit_price = min(quote.ask, quote.mid + quarter_spread)
+        else:  # SELL
+            limit_price = max(quote.bid, quote.mid - quarter_spread)
+
+        logger.info(f"    Limit price: ${limit_price} (expected entry: ${expected_price})")
+
+        # Step 5e: Check minimum edge requirement (if configured)
+        if config.min_edge_bps > 0:
+            # Edge = (limit_price - expected_price) / expected_price * 10000
+            # For BUY: negative edge is good (buying below expected)
+            # For SELL: positive edge is good (selling above expected)
+            edge_abs = limit_price - expected_price
+            if expected_price != 0:
+                edge_bps = (edge_abs / expected_price) * Decimal("10000")
+            else:
+                edge_bps = Decimal("0")
+
+            # For BUY, we want edge_bps < 0 (limit below expected)
+            # For SELL, we want edge_bps > 0 (limit above expected)
+            # Magnitude must be >= min_edge_bps
+            if signal.side == OrderSide.BUY:
+                if edge_bps > -config.min_edge_bps:
+                    logger.warning(
+                        f"    Edge check FAILED: edge={edge_bps:.2f} bps, "
+                        f"required < -{config.min_edge_bps} bps"
+                    )
+                    return OrderSubmissionResult(
+                        success=False,
+                        reason=f"Insufficient edge: {edge_bps:.2f} bps",
+                        client_order_id=client_order_id,
+                    )
+            else:  # SELL
+                if edge_bps < config.min_edge_bps:
+                    logger.warning(
+                        f"    Edge check FAILED: edge={edge_bps:.2f} bps, "
+                        f"required > {config.min_edge_bps} bps"
+                    )
+                    return OrderSubmissionResult(
+                        success=False,
+                        reason=f"Insufficient edge: {edge_bps:.2f} bps",
+                        client_order_id=client_order_id,
+                    )
+
+            logger.info(f"    Edge check: PASSED (edge={edge_bps:.2f} bps)")
+
     # DRY-RUN MODE: Stop before broker call
     if config.dry_run:
         logger.warning(
@@ -181,10 +259,12 @@ def submit_signal_order(
             side=signal.side,
             quantity=quantity,
             client_order_id=client_order_id,
+            order_type=order_type,
+            limit_price=limit_price,
         )
         logger.info(
-            f"    Order submitted: {order.side.value.upper()} {order.quantity} "
-            f"shares @ ${order.filled_price}"
+            f"    Order submitted: {order.type.value.upper()} {order.side.value.upper()} "
+            f"{order.quantity} shares @ ${order.filled_price}"
         )
     except Exception as e:
         logger.error(f"    Error submitting order: {e}")
@@ -213,7 +293,14 @@ def submit_signal_order(
 
     # Step 9: Update risk manager if filled
     if order.status.value == "filled":
-        # Record fill
+        # Calculate slippage metrics
+        slippage_abs = order.filled_price - expected_price
+        if expected_price != 0:
+            slippage_bps = (slippage_abs / expected_price) * Decimal("10000")
+        else:
+            slippage_bps = Decimal("0")
+
+        # Record fill with cost tracking
         fill_record = FillRecord(
             timestamp=order.filled_at,
             symbol=order.symbol,
@@ -223,6 +310,10 @@ def submit_signal_order(
             client_order_id=client_order_id,
             broker_order_id=order.id,
             run_id=run_id,
+            expected_price=expected_price,
+            slippage_abs=slippage_abs,
+            slippage_bps=slippage_bps,
+            spread_bps_at_submit=quote.spread_bps,
         )
         write_fill_to_csv_fn(fill_record, run_id)
 
@@ -230,7 +321,7 @@ def submit_signal_order(
         qty_signed = quantity if signal.side == OrderSide.BUY else -quantity
         risk_manager.update_position(signal.symbol, qty_signed, order.filled_price)
 
-        # Record trade (legacy format)
+        # Record trade with cost tracking
         trade = TradeRecord(
             timestamp=order.filled_at,
             symbol=order.symbol,
@@ -241,9 +332,13 @@ def submit_signal_order(
             client_order_id=client_order_id,
             run_id=run_id,
             reason=signal.reason,
+            expected_price=expected_price,
+            slippage_abs=slippage_abs,
+            slippage_bps=slippage_bps,
+            spread_bps_at_submit=quote.spread_bps,
         )
         write_trade_to_csv_fn(trade, run_id)
-        logger.info("    Trade recorded to CSV")
+        logger.info(f"    Trade recorded: slippage={slippage_bps:.2f} bps")
 
     return OrderSubmissionResult(
         success=True,
