@@ -831,15 +831,796 @@ def test_test_order_fails_risk_check(monkeypatch, capsys):
 
     with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
         # Use CLI override to set very low limit that will fail the check
-        result = main([
-            "--mode", "live",
-            "--i-understand-live-trading",
-            "--test-order",
-            "--max-order-notional", "1"
-        ])
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--test-order",
+                "--max-order-notional",
+                "1",
+            ]
+        )
 
     assert result == 1
     mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "failed risk check" in captured.err
+
+
+# Order Management Tests
+
+
+def test_parse_args_list_open_orders():
+    """Test parsing --list-open-orders flag."""
+    args = parse_args(["--list-open-orders"])
+    assert args.list_open_orders is True
+
+
+def test_parse_args_list_open_orders_default_false():
+    """Test that --list-open-orders defaults to False."""
+    args = parse_args([])
+    assert args.list_open_orders is False
+
+
+def test_parse_args_cancel_order_id():
+    """Test parsing --cancel-order-id flag."""
+    args = parse_args(["--cancel-order-id", "abc-123"])
+    assert args.cancel_order_id == "abc-123"
+
+
+def test_parse_args_cancel_client_order_id():
+    """Test parsing --cancel-client-order-id flag."""
+    args = parse_args(["--cancel-client-order-id", "client-xyz"])
+    assert args.cancel_client_order_id == "client-xyz"
+
+
+def test_parse_args_replace_order_id():
+    """Test parsing --replace-order-id flag."""
+    args = parse_args(["--replace-order-id", "order-456"])
+    assert args.replace_order_id == "order-456"
+
+
+def test_parse_args_limit_price():
+    """Test parsing --limit-price flag."""
+    args = parse_args(["--limit-price", "150.50"])
+    assert args.limit_price == 150.50
+
+
+def test_parse_args_qty():
+    """Test parsing --qty flag."""
+    args = parse_args(["--qty", "10"])
+    assert args.qty == 10
+
+
+def test_list_open_orders_requires_live_mode(monkeypatch, capsys):
+    """Test that --list-open-orders requires --mode live."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "paper", "--list-open-orders"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --mode live" in captured.err
+
+
+def test_list_open_orders_requires_i_understand_live_trading(monkeypatch, capsys):
+    """Test that --list-open-orders requires --i-understand-live-trading."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "live", "--list-open-orders"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --i-understand-live-trading" in captured.err
+
+
+def test_list_open_orders_requires_enable_live_trading_env(monkeypatch, capsys):
+    """Test that --list-open-orders requires ENABLE_LIVE_TRADING=true."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set API keys but not ENABLE_LIVE_TRADING
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.delenv("ENABLE_LIVE_TRADING", raising=False)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "live", "--i-understand-live-trading", "--list-open-orders"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires ENABLE_LIVE_TRADING=true" in captured.err
+
+
+def test_list_open_orders_success(monkeypatch, capsys):
+    """Test successful listing of open orders."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Order, OrderSide, OrderStatus, OrderType
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL", "MSFT"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock orders
+    mock_orders = [
+        Order(
+            id="order-1",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            type=OrderType.LIMIT,
+            quantity=10,
+            price=Decimal("150.00"),
+            status=OrderStatus.PENDING,
+            submitted_at=datetime.now(),
+            client_order_id="client-1",
+        ),
+        Order(
+            id="order-2",
+            symbol="MSFT",
+            side=OrderSide.SELL,
+            type=OrderType.LIMIT,
+            quantity=5,
+            price=Decimal("300.00"),
+            status=OrderStatus.PENDING,
+            submitted_at=datetime.now(),
+            client_order_id="client-2",
+        ),
+    ]
+
+    mock_broker = MagicMock()
+    mock_broker.list_open_orders_detailed.return_value = mock_orders
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        result = main(["--mode", "live", "--i-understand-live-trading", "--list-open-orders"])
+
+    assert result == 0
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "Open Orders" in captured.out
+    assert "AAPL" in captured.out
+    assert "MSFT" in captured.out
+    assert "order-1" in captured.out
+    assert "order-2" in captured.out
+
+
+def test_cancel_order_requires_live_mode(monkeypatch, capsys):
+    """Test that --cancel-order-id requires --mode live."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "paper", "--cancel-order-id", "abc-123"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --mode live" in captured.err
+
+
+def test_cancel_order_requires_i_understand_live_trading(monkeypatch, capsys):
+    """Test that --cancel-order-id requires --i-understand-live-trading."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "live", "--cancel-order-id", "abc-123"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --i-understand-live-trading" in captured.err
+
+
+def test_cancel_order_requires_enable_live_trading_env(monkeypatch, capsys):
+    """Test that --cancel-order-id requires ENABLE_LIVE_TRADING=true."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set API keys but not ENABLE_LIVE_TRADING
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.delenv("ENABLE_LIVE_TRADING", raising=False)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "live", "--i-understand-live-trading", "--cancel-order-id", "abc-123"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires ENABLE_LIVE_TRADING=true" in captured.err
+
+
+def test_cancel_order_by_id_success(monkeypatch, capsys):
+    """Test successful cancellation of order by ID."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Order, OrderSide, OrderStatus, OrderType
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock order after cancellation
+    mock_order = Order(
+        id="order-123",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=10,
+        price=Decimal("150.00"),
+        status=OrderStatus.CANCELED,
+        submitted_at=datetime.now(),
+        client_order_id="client-123",
+    )
+
+    mock_broker = MagicMock()
+    mock_broker.cancel_order.return_value = True
+    mock_broker.get_order_status.return_value = mock_order
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        result = main(
+            ["--mode", "live", "--i-understand-live-trading", "--cancel-order-id", "order-123"]
+        )
+
+    assert result == 0
+    mock_loop.assert_not_called()
+    mock_broker.cancel_order.assert_called_once_with("order-123")
+
+    captured = capsys.readouterr()
+    assert "CANCEL ORDER" in captured.out
+    assert "order-123" in captured.out
+    assert "CANCELED" in captured.out
+
+
+def test_cancel_order_by_client_id_success(monkeypatch, capsys):
+    """Test successful cancellation of order by client ID."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Order, OrderSide, OrderStatus, OrderType
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock order after cancellation
+    mock_order = Order(
+        id="order-456",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=10,
+        price=Decimal("150.00"),
+        status=OrderStatus.CANCELED,
+        submitted_at=datetime.now(),
+        client_order_id="client-xyz",
+    )
+
+    mock_broker = MagicMock()
+    mock_broker.cancel_order_by_client_id.return_value = True
+    # Return the order ID when asked to find by client ID
+    mock_broker.list_open_orders_detailed.return_value = [mock_order]
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--cancel-client-order-id",
+                "client-xyz",
+            ]
+        )
+
+    assert result == 0
+    mock_loop.assert_not_called()
+    mock_broker.cancel_order_by_client_id.assert_called_once_with("client-xyz")
+
+    captured = capsys.readouterr()
+    assert "CANCEL ORDER" in captured.out
+    assert "client-xyz" in captured.out
+
+
+def test_replace_order_requires_live_mode(monkeypatch, capsys):
+    """Test that --replace-order-id requires --mode live."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "paper", "--replace-order-id", "order-123", "--limit-price", "150.50"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --mode live" in captured.err
+
+
+def test_replace_order_requires_i_understand_live_trading(monkeypatch, capsys):
+    """Test that --replace-order-id requires --i-understand-live-trading."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "live", "--replace-order-id", "order-123", "--limit-price", "150.50"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --i-understand-live-trading" in captured.err
+
+
+def test_replace_order_requires_enable_live_trading_env(monkeypatch, capsys):
+    """Test that --replace-order-id requires ENABLE_LIVE_TRADING=true."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set API keys but not ENABLE_LIVE_TRADING
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.delenv("ENABLE_LIVE_TRADING", raising=False)
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(
+        [
+            "--mode",
+            "live",
+            "--i-understand-live-trading",
+            "--replace-order-id",
+            "order-123",
+            "--limit-price",
+            "150.50",
+        ]
+    )
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires ENABLE_LIVE_TRADING=true" in captured.err
+
+
+def test_replace_order_requires_limit_price(monkeypatch, capsys):
+    """Test that --replace-order-id requires --limit-price parameter."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(
+        ["--mode", "live", "--i-understand-live-trading", "--replace-order-id", "order-123"]
+    )
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --limit-price" in captured.err
+
+
+def test_replace_order_success(monkeypatch, capsys):
+    """Test successful order replacement with new limit price."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Order, OrderSide, OrderStatus, OrderType
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+    # Set risk limits via environment variables to ensure they're used
+    monkeypatch.setenv("MAX_ORDER_NOTIONAL", "10000")
+    monkeypatch.setenv("MAX_POSITIONS_NOTIONAL", "50000")
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=10000,
+        max_order_notional=Decimal("10000"),
+        max_positions_notional=Decimal("50000"),
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock existing order (use small values to stay under $500 default limit)
+    existing_order = Order(
+        id="order-123",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=1,
+        price=Decimal("100.00"),
+        status=OrderStatus.PENDING,
+        submitted_at=datetime.now(),
+        client_order_id="client-123",
+    )
+
+    # Mock new order after replacement
+    new_order = Order(
+        id="order-456",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=1,
+        price=Decimal("105.00"),
+        status=OrderStatus.PENDING,
+        submitted_at=datetime.now(),
+        client_order_id="client-456",
+    )
+
+    mock_broker = MagicMock()
+    mock_broker.get_order_status.return_value = existing_order
+    mock_broker.replace_order.return_value = new_order
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--replace-order-id",
+                "order-123",
+                "--limit-price",
+                "105.00",
+            ]
+        )
+
+    assert result == 0
+    mock_loop.assert_not_called()
+    mock_broker.replace_order.assert_called_once_with("order-123", Decimal("105.00"), None)
+
+    captured = capsys.readouterr()
+    assert "REPLACE ORDER" in captured.out or "ORDER REPLACED" in captured.out
+    assert "order-123" in captured.out
+    assert "105" in captured.out
+    assert "order-456" in captured.out
+
+
+def test_replace_order_with_quantity_success(monkeypatch, capsys):
+    """Test successful order replacement with new limit price and quantity."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Order, OrderSide, OrderStatus, OrderType
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+    # Set risk limits via environment variables to ensure they're used
+    monkeypatch.setenv("MAX_ORDER_NOTIONAL", "10000")
+    monkeypatch.setenv("MAX_POSITIONS_NOTIONAL", "50000")
+
+    # Mock load_config
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=10000,
+        max_order_notional=Decimal("10000"),
+        max_positions_notional=Decimal("50000"),
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock existing order (use small values to stay under $500 default limit)
+    existing_order = Order(
+        id="order-789",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=2,
+        price=Decimal("100.00"),
+        status=OrderStatus.PENDING,
+        submitted_at=datetime.now(),
+        client_order_id="client-789",
+    )
+
+    # Mock new order after replacement (3 * $95 = $285, under $500 limit)
+    new_order = Order(
+        id="order-999",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=3,
+        price=Decimal("95.00"),
+        status=OrderStatus.PENDING,
+        submitted_at=datetime.now(),
+        client_order_id="client-999",
+    )
+
+    mock_broker = MagicMock()
+    mock_broker.get_order_status.return_value = existing_order
+    mock_broker.replace_order.return_value = new_order
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--replace-order-id",
+                "order-789",
+                "--limit-price",
+                "95.00",
+                "--qty",
+                "3",
+            ]
+        )
+
+    assert result == 0
+    mock_loop.assert_not_called()
+    mock_broker.replace_order.assert_called_once_with("order-789", Decimal("95.00"), 3)
+
+    captured = capsys.readouterr()
+    assert "REPLACE ORDER" in captured.out or "ORDER REPLACED" in captured.out
+    assert "order-789" in captured.out
+    assert "95" in captured.out
+    assert "3" in captured.out
+    assert "order-999" in captured.out
+
+
+def test_replace_order_fails_risk_check(monkeypatch, capsys):
+    """Test that --replace-order-id respects RiskManager checks."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Order, OrderSide, OrderStatus, OrderType
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config with very low limits to trigger failure
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=Decimal("10000"),
+        max_order_notional=Decimal("10"),  # Very low to cause failure
+        max_positions_notional=Decimal("50000"),
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock existing order
+    existing_order = Order(
+        id="order-123",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=10,
+        price=Decimal("150.00"),
+        status=OrderStatus.PENDING,
+        submitted_at=datetime.now(),
+        client_order_id="client-123",
+    )
+
+    mock_broker = MagicMock()
+    mock_broker.get_order_status.return_value = existing_order
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        result = main(
+            [
+                "--mode",
+                "live",
+                "--i-understand-live-trading",
+                "--replace-order-id",
+                "order-123",
+                "--limit-price",
+                "150.50",
+            ]
+        )
+
+    assert result == 1
+    mock_loop.assert_not_called()
+    mock_broker.replace_order.assert_not_called()
 
     captured = capsys.readouterr()
     assert "ERROR" in captured.err

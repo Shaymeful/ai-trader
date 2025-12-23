@@ -1,5 +1,6 @@
 """SMA crossover trading strategy."""
 
+import os
 from datetime import datetime, time
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -12,10 +13,33 @@ def get_exchange_time() -> datetime:
     """
     Get current time in US Eastern timezone (America/New_York).
 
+    For testing: Set AI_TRADER_EXCHANGE_TIME environment variable to override.
+    Format: ISO 8601 datetime string (e.g., "2024-01-15T10:00:00-05:00")
+    If timezone-naive, assumes US Eastern.
+
     Returns:
-        Current datetime in US Eastern timezone
+        Current datetime in US Eastern timezone (or overridden value)
     """
     eastern = ZoneInfo("America/New_York")
+
+    # Check for test override
+    override = os.getenv("AI_TRADER_EXCHANGE_TIME")
+    if override:
+        try:
+            # Parse ISO format datetime
+            dt = datetime.fromisoformat(override)
+
+            # If naive, assume Eastern; otherwise convert to Eastern
+            dt = dt.replace(tzinfo=eastern) if dt.tzinfo is None else dt.astimezone(eastern)
+
+            return dt
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"Invalid AI_TRADER_EXCHANGE_TIME format: '{override}'. "
+                f"Expected ISO 8601 datetime (e.g., '2024-01-15T10:00:00-05:00'). Error: {e}"
+            ) from e
+
+    # Default: current time in Eastern
     return datetime.now(eastern)
 
 

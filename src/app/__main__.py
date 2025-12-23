@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.app.config import is_live_trading_mode, load_config
+from src.app.config import Config, is_live_trading_mode, load_config
 from src.app.models import FillRecord, OrderRecord, TradeRecord
 from src.app.order_pipeline import submit_signal_order
 from src.app.reconciliation import reconcile_with_broker
@@ -157,6 +157,48 @@ Examples:
         help="Submit a single test LIMIT buy (1 share) for first symbol in LIVE mode and exit. "
         "Requires: --mode live, --i-understand-live-trading, and ENABLE_LIVE_TRADING=true env var. "
         "Order must pass RiskManager checks.",
+    )
+
+    # Order management commands
+    parser.add_argument(
+        "--list-open-orders",
+        action="store_true",
+        help="List all open orders and exit. Requires live mode safety gates.",
+    )
+
+    parser.add_argument(
+        "--cancel-order-id",
+        type=str,
+        metavar="ORDER_ID",
+        help="Cancel order by broker order ID and exit. Requires live mode safety gates.",
+    )
+
+    parser.add_argument(
+        "--cancel-client-order-id",
+        type=str,
+        metavar="CLIENT_ORDER_ID",
+        help="Cancel order by client order ID and exit. Requires live mode safety gates.",
+    )
+
+    parser.add_argument(
+        "--replace-order-id",
+        type=str,
+        metavar="ORDER_ID",
+        help="Replace/modify order by broker order ID. Requires --limit-price and live mode safety gates.",
+    )
+
+    parser.add_argument(
+        "--limit-price",
+        type=float,
+        metavar="PRICE",
+        help="New limit price for --replace-order-id",
+    )
+
+    parser.add_argument(
+        "--qty",
+        type=int,
+        metavar="QUANTITY",
+        help="New quantity for --replace-order-id (optional)",
     )
 
     parser.add_argument(
@@ -427,7 +469,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
 
     symbol = config.allowed_symbols[0]
     print(f"\n  Symbol: {symbol}")
-    print(f"  Quantity: 1 share")
+    print("  Quantity: 1 share")
 
     # Check for API credentials
     api_key = os.getenv("ALPACA_API_KEY")
@@ -454,7 +496,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     # Get current quote to determine limit price
     try:
         quote = broker.get_quote(symbol)
-        print(f"\n  Current quote:")
+        print("\n  Current quote:")
         print(f"    Bid: ${quote.bid}")
         print(f"    Ask: ${quote.ask}")
         print(f"    Last: ${quote.last}")
@@ -466,7 +508,10 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     # Use bid price, or fall back to last trade if bid is unavailable
     base_price = quote.bid if quote.bid > 0 else quote.last
     if base_price <= 0:
-        print(f"ERROR: Invalid price for {symbol}: bid={quote.bid}, last={quote.last}", file=sys.stderr)
+        print(
+            f"ERROR: Invalid price for {symbol}: bid={quote.bid}, last={quote.last}",
+            file=sys.stderr,
+        )
         return 1
 
     # Offset: 0.01 (1 cent) below bid to ensure we post
@@ -484,7 +529,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     if not notional_check.passed:
         print(f"ERROR: Order failed risk check: {notional_check.reason}", file=sys.stderr)
         return 1
-    print(f"    [OK] Order notional check passed")
+    print("    [OK] Order notional check passed")
 
     # Check max positions exposure
     exposure_check = risk_manager.check_positions_exposure(
@@ -493,7 +538,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
     if not exposure_check.passed:
         print(f"ERROR: Order failed risk check: {exposure_check.reason}", file=sys.stderr)
         return 1
-    print(f"    [OK] Positions exposure check passed")
+    print("    [OK] Positions exposure check passed")
 
     # Generate client order ID
     client_order_id = f"test-{uuid.uuid4()}"
@@ -530,6 +575,355 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
         return 0
     except Exception as e:
         print(f"ERROR: Failed to submit order: {e}", file=sys.stderr)
+        return 1
+
+
+def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int:
+    """
+    List all open orders and exit.
+
+    Safety gates:
+    - Requires mode=live
+    - Requires --i-understand-live-trading flag
+    - Requires ENABLE_LIVE_TRADING=true environment variable
+
+    Args:
+        config: Configuration with broker settings
+        i_understand_live_trading: Whether user acknowledged live trading risks
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    import os
+
+    print("=" * 70)
+    print("LIST OPEN ORDERS - LIVE MODE")
+    print("=" * 70)
+
+    # Safety gate checks (same as test-order)
+    if config.alpaca_base_url != "https://api.alpaca.markets":
+        print(
+            f"ERROR: --list-open-orders requires --mode live (current base URL: {config.alpaca_base_url})",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not i_understand_live_trading:
+        print(
+            "ERROR: --list-open-orders requires --i-understand-live-trading flag.\n"
+            "This operation accesses live trading account.",
+            file=sys.stderr,
+        )
+        return 1
+
+    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
+    if enable_live_trading != "true":
+        print(
+            "ERROR: --list-open-orders requires ENABLE_LIVE_TRADING=true environment variable.\n"
+            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check for API credentials
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        print(
+            "ERROR: List orders requires Alpaca API credentials.\n"
+            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Initialize broker
+    try:
+        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
+        print("  [OK] Connected to Alpaca (LIVE mode)")
+    except Exception as e:
+        print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
+        return 1
+
+    # List open orders
+    try:
+        orders = broker.list_open_orders_detailed()
+
+        if not orders:
+            print("\nNo open orders found.")
+            return 0
+
+        print(f"\nOpen Orders ({len(orders)}):")
+        print("-" * 70)
+
+        # Print table header
+        print(f"{'Symbol':<8} {'Side':<6} {'Qty':<6} {'Type':<8} {'Limit':<10} {'Status':<10}")
+        print(f"{'Order ID':<20} {'Client Order ID':<30}")
+        print("-" * 70)
+
+        # Print each order
+        for order in orders:
+            print(
+                f"{order.symbol:<8} {order.side.value:<6} {order.quantity:<6} {order.type.value:<8} "
+                f"{('$' + str(order.price) if order.price else 'N/A'):<10} {order.status.value:<10}"
+            )
+            # Get client_order_id if available (may not be in Order model yet)
+            client_id = getattr(order, "client_order_id", "N/A")
+            print(f"{order.id:<20} {client_id:<30}")
+            print()
+
+        print("=" * 70)
+        return 0
+    except Exception as e:
+        print(f"ERROR: Failed to list orders: {e}", file=sys.stderr)
+        return 1
+
+
+def run_cancel_order(
+    config: Config,
+    i_understand_live_trading: bool,
+    order_id: str | None,
+    client_order_id: str | None,
+) -> int:
+    """
+    Cancel an order by ID and exit.
+
+    Safety gates:
+    - Requires mode=live
+    - Requires --i-understand-live-trading flag
+    - Requires ENABLE_LIVE_TRADING=true environment variable
+
+    Args:
+        config: Configuration with broker settings
+        i_understand_live_trading: Whether user acknowledged live trading risks
+        order_id: Broker order ID to cancel (if provided)
+        client_order_id: Client order ID to cancel (if provided)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    import os
+
+    print("=" * 70)
+    print("CANCEL ORDER - LIVE MODE")
+    print("=" * 70)
+
+    # Safety gate checks
+    if config.alpaca_base_url != "https://api.alpaca.markets":
+        print(
+            f"ERROR: Cancel order requires --mode live (current base URL: {config.alpaca_base_url})",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not i_understand_live_trading:
+        print(
+            "ERROR: Cancel order requires --i-understand-live-trading flag.\n"
+            "This operation affects live trading account.",
+            file=sys.stderr,
+        )
+        return 1
+
+    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
+    if enable_live_trading != "true":
+        print(
+            "ERROR: Cancel order requires ENABLE_LIVE_TRADING=true environment variable.\n"
+            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check for API credentials
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        print(
+            "ERROR: Cancel order requires Alpaca API credentials.\n"
+            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Initialize broker
+    try:
+        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
+        print("  [OK] Connected to Alpaca (LIVE mode)")
+    except Exception as e:
+        print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
+        return 1
+
+    # Cancel order
+    try:
+        if order_id:
+            print(f"\nCanceling order by ID: {order_id}")
+            success = broker.cancel_order(order_id)
+        elif client_order_id:
+            print(f"\nCanceling order by client ID: {client_order_id}")
+            success = broker.cancel_order_by_client_id(client_order_id)
+        else:
+            print("ERROR: No order ID provided", file=sys.stderr)
+            return 1
+
+        if success:
+            print("\n" + "=" * 70)
+            print("ORDER CANCELED SUCCESSFULLY")
+            print("=" * 70)
+
+            # Verify cancellation
+            if order_id:
+                try:
+                    status = broker.get_order_status(order_id)
+                    print(f"Verified status: {status.status.value}")
+                except Exception:
+                    print("Note: Could not verify final status")
+
+            return 0
+        else:
+            print(
+                "ERROR: Failed to cancel order (order may not exist or already filled)",
+                file=sys.stderr,
+            )
+            return 1
+    except Exception as e:
+        print(f"ERROR: Failed to cancel order: {e}", file=sys.stderr)
+        return 1
+
+
+def run_replace_order(
+    config: Config,
+    i_understand_live_trading: bool,
+    order_id: str,
+    limit_price: float,
+    quantity: int | None,
+) -> int:
+    """
+    Replace/modify an order and exit.
+
+    Safety gates:
+    - Requires mode=live
+    - Requires --i-understand-live-trading flag
+    - Requires ENABLE_LIVE_TRADING=true environment variable
+    - Must pass RiskManager checks
+
+    Args:
+        config: Configuration with broker settings and risk parameters
+        i_understand_live_trading: Whether user acknowledged live trading risks
+        order_id: Broker order ID to replace
+        limit_price: New limit price
+        quantity: New quantity (optional)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    import os
+
+    print("=" * 70)
+    print("REPLACE ORDER - LIVE MODE")
+    print("=" * 70)
+
+    # Safety gate checks
+    if config.alpaca_base_url != "https://api.alpaca.markets":
+        print(
+            f"ERROR: Replace order requires --mode live (current base URL: {config.alpaca_base_url})",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not i_understand_live_trading:
+        print(
+            "ERROR: Replace order requires --i-understand-live-trading flag.\n"
+            "This operation affects live trading account.",
+            file=sys.stderr,
+        )
+        return 1
+
+    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
+    if enable_live_trading != "true":
+        print(
+            "ERROR: Replace order requires ENABLE_LIVE_TRADING=true environment variable.\n"
+            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check for API credentials
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        print(
+            "ERROR: Replace order requires Alpaca API credentials.\n"
+            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Initialize broker
+    try:
+        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
+        print("  [OK] Connected to Alpaca (LIVE mode)")
+    except Exception as e:
+        print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
+        return 1
+
+    # Get existing order details for risk check
+    try:
+        existing_order = broker.get_order_status(order_id)
+        print(f"\nReplacing order: {order_id}")
+        print(
+            f"  Current: {existing_order.symbol} {existing_order.side.value} "
+            f"{existing_order.quantity} @ ${existing_order.price}"
+        )
+        print(f"  New: limit_price=${limit_price}" + (f", quantity={quantity}" if quantity else ""))
+    except Exception as e:
+        print(f"ERROR: Could not fetch existing order: {e}", file=sys.stderr)
+        return 1
+
+    # Risk check: validate new order parameters
+    from src.risk import RiskManager
+
+    risk_manager = RiskManager(config)
+    limit_price_decimal = Decimal(str(limit_price))
+    check_quantity = quantity if quantity is not None else existing_order.quantity
+
+    print("\n  Validating replacement through RiskManager...")
+
+    # Check order notional
+    notional_check = risk_manager.check_order_notional(check_quantity, limit_price_decimal)
+    if not notional_check.passed:
+        print(f"ERROR: Replacement failed risk check: {notional_check.reason}", file=sys.stderr)
+        return 1
+    print("    [OK] Order notional check passed")
+
+    # Check max positions exposure
+    exposure_check = risk_manager.check_positions_exposure(
+        new_order_quantity=check_quantity, new_order_price=limit_price_decimal
+    )
+    if not exposure_check.passed:
+        print(f"ERROR: Replacement failed risk check: {exposure_check.reason}", file=sys.stderr)
+        return 1
+    print("    [OK] Positions exposure check passed")
+
+    # Replace order
+    try:
+        new_order = broker.replace_order(order_id, limit_price_decimal, quantity)
+
+        print("\n" + "=" * 70)
+        print("ORDER REPLACED SUCCESSFULLY")
+        print("=" * 70)
+        print(f"  New Order ID: {new_order.id}")
+        print(f"  Status: {new_order.status.value}")
+        print(f"  Symbol: {new_order.symbol}")
+        print(f"  Side: {new_order.side.value}")
+        print(f"  Quantity: {new_order.quantity}")
+        print(f"  Limit Price: ${new_order.price}")
+        print("=" * 70)
+        print("\nWARNING: This replacement was executed in LIVE mode with real money.")
+        print("Monitor your Alpaca dashboard to track this order.")
+        return 0
+    except Exception as e:
+        print(f"ERROR: Failed to replace order: {e}", file=sys.stderr)
         return 1
 
 
@@ -716,6 +1110,66 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         return run_live_test_order(config, args.i_understand_live_trading)
+
+    # Handle order management commands
+    if (
+        args.list_open_orders
+        or args.cancel_order_id
+        or args.cancel_client_order_id
+        or args.replace_order_id
+    ):
+        # Load config and apply mode overrides (same pattern as test-order)
+        try:
+            config = load_config()
+
+            # Apply mode override from CLI
+            if args.mode == "dry-run":
+                config.dry_run = True
+            elif args.mode == "paper":
+                config.mode = "alpaca"
+                config.alpaca_base_url = "https://paper-api.alpaca.markets"
+                config.dry_run = False
+            elif args.mode == "live":
+                config.mode = "alpaca"
+                config.alpaca_base_url = "https://api.alpaca.markets"
+                config.dry_run = False
+
+            # Apply CLI overrides for risk parameters (needed for replace)
+            if args.max_daily_loss is not None:
+                config.max_daily_loss = Decimal(str(args.max_daily_loss))
+            if args.max_order_notional is not None:
+                config.max_order_notional = Decimal(str(args.max_order_notional))
+            if args.max_positions_notional is not None:
+                config.max_positions_notional = Decimal(str(args.max_positions_notional))
+        except Exception as e:
+            print(f"ERROR: Failed to load config: {e}", file=sys.stderr)
+            return 1
+
+        # Handle list open orders
+        if args.list_open_orders:
+            return run_list_open_orders(config, args.i_understand_live_trading)
+
+        # Handle cancel order
+        if args.cancel_order_id or args.cancel_client_order_id:
+            return run_cancel_order(
+                config,
+                args.i_understand_live_trading,
+                args.cancel_order_id,
+                args.cancel_client_order_id,
+            )
+
+        # Handle replace order
+        if args.replace_order_id:
+            if args.limit_price is None:
+                print("ERROR: --replace-order-id requires --limit-price", file=sys.stderr)
+                return 1
+            return run_replace_order(
+                config,
+                args.i_understand_live_trading,
+                args.replace_order_id,
+                args.limit_price,
+                args.qty,
+            )
 
     # Safety gate: require explicit acknowledgment for live trading
     if args.mode == "live" and not args.i_understand_live_trading:
@@ -1093,14 +1547,15 @@ def run_trading_loop(iterations: int = 5, **kwargs):
 
     # FAIL-FAST SAFETY GATE: Check live trading requirements before ANY operations
     # This prevents any file I/O, logging, or API calls if safety flags are missing
-    if is_live_trading_mode(config):
-        if not config.enable_live_trading or not config.i_understand_live_trading_risk:
-            error_msg = (
-                "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
-                "I_UNDERSTAND_LIVE_TRADING_RISK=true to proceed."
-            )
-            # Raise immediately without setting up logging or state
-            raise ValueError(error_msg)
+    if is_live_trading_mode(config) and (
+        not config.enable_live_trading or not config.i_understand_live_trading_risk
+    ):
+        error_msg = (
+            "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
+            "I_UNDERSTAND_LIVE_TRADING_RISK=true to proceed."
+        )
+        # Raise immediately without setting up logging or state
+        raise ValueError(error_msg)
 
     logger = setup_logging(config.log_level, run_id)
 
@@ -1397,7 +1852,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                             trades_executed += 1
 
                             # Update last processed timestamp
-                            state.last_processed_timestamp[symbol] = current_time.isoformat()
+                            state.last_processed_timestamp[symbol] = exchange_time.isoformat()
 
                             # Save state after each order
                             save_state(state)
