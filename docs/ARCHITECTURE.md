@@ -52,6 +52,30 @@ established behavior.
 
 ---
 
+## Decision Logging
+
+The trading loop logs comprehensive per-symbol decision information:
+
+### Decision Summary Format
+Each symbol processed includes a "Decision Summary" with:
+- **Decision**: BUY / SELL / HOLD
+- **SMA Signal**: Reason or status (crossover detected, no crossover, insufficient data)
+- **SMA Crossover**: Fast SMA vs Slow SMA comparison (e.g., "Fast ($183.50) > Slow ($180.20)")
+- **Position Status**: Long or Flat
+- **Final Action**: Actual outcome (order submitted, dry-run, or HOLD with reason)
+
+### Gate Blocking Logs
+When a signal is generated but blocked by a gate:
+- **Gate BLOCKED**: Logs the specific gate (market hours, risk check, idempotency, quantity)
+- **Final Action**: HOLD (blocked by gate)
+
+### Examples
+- `Decision: BUY` → `Gate BLOCKED: Market closed` → `Final Action: HOLD (market hours gate)`
+- `Decision: HOLD` → `SMA Signal: No crossover detected` → `Final Action: HOLD (no signal)`
+- `Decision: BUY` → `Final Action: BUY (order submitted)` or `BUY (dry-run)`
+
+---
+
 ## Safety Gates
 - Live trading requires explicit acknowledgment flag
 - After-hours order submission blocked by default
