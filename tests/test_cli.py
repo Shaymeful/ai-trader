@@ -900,6 +900,9 @@ def test_list_open_orders_requires_live_mode(monkeypatch, capsys):
     """Test that --list-open-orders works in paper mode without safety gates."""
     from src.app.config import Config
 
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
 
@@ -1060,6 +1063,9 @@ def test_list_open_orders_success(monkeypatch, capsys):
 def test_cancel_order_requires_live_mode(monkeypatch, capsys):
     """Test that --cancel-order-id works in paper mode without safety gates."""
     from src.app.config import Config
+
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
 
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
@@ -1274,6 +1280,9 @@ def test_cancel_order_by_client_id_success(monkeypatch, capsys):
 def test_replace_order_requires_live_mode(monkeypatch, capsys):
     """Test that --replace-order-id works in paper mode without safety gates."""
     from src.app.config import Config
+
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
 
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
