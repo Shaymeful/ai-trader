@@ -47,6 +47,20 @@ class Config(BaseModel):
     )
     cost_diagnostics: bool = Field(default=True, description="Enable cost diagnostics reporting")
 
+    # Symbol eligibility and liquidity guardrails
+    min_avg_volume: int = Field(
+        default=1_000_000, description="Minimum average daily volume threshold"
+    )
+    min_price: Decimal = Field(
+        default=Decimal("2.00"), description="Minimum price to prevent penny stocks"
+    )
+    max_price: Decimal = Field(default=Decimal("1000.00"), description="Maximum price sanity cap")
+    require_quote: bool = Field(default=True, description="Require valid bid/ask quote to trade")
+    symbol_whitelist: list[str] = Field(
+        default=[], description="Symbol whitelist (empty = allow all)"
+    )
+    symbol_blacklist: list[str] = Field(default=[], description="Symbol blacklist (always blocks)")
+
     # Strategy parameters
     sma_fast_period: int = Field(default=10, description="Fast SMA period")
     sma_slow_period: int = Field(default=30, description="Slow SMA period")
@@ -97,6 +111,10 @@ def load_config() -> Config:
         "max_spread_bps": Decimal(os.getenv("MAX_SPREAD_BPS", "20")),
         "min_edge_bps": Decimal(os.getenv("MIN_EDGE_BPS", "0")),
         "cost_diagnostics": os.getenv("COST_DIAGNOSTICS", "true").lower() == "true",
+        "min_avg_volume": int(os.getenv("MIN_AVG_VOLUME", "1000000")),
+        "min_price": Decimal(os.getenv("MIN_PRICE", "2.00")),
+        "max_price": Decimal(os.getenv("MAX_PRICE", "1000.00")),
+        "require_quote": os.getenv("REQUIRE_QUOTE", "true").lower() == "true",
         "sma_fast_period": int(os.getenv("SMA_FAST_PERIOD", "10")),
         "sma_slow_period": int(os.getenv("SMA_SLOW_PERIOD", "30")),
         "log_level": os.getenv("LOG_LEVEL", "INFO"),
@@ -114,6 +132,18 @@ def load_config() -> Config:
         "ALLOWED_SYMBOLS", "AAPL,MSFT,GOOGL,AMZN,TSLA"
     )
     config_dict["allowed_symbols"] = [s.strip() for s in symbols_str.split(",")]
+
+    # Parse symbol whitelist
+    whitelist_str = os.getenv("SYMBOL_WHITELIST", "")
+    config_dict["symbol_whitelist"] = (
+        [s.strip() for s in whitelist_str.split(",") if s.strip()] if whitelist_str else []
+    )
+
+    # Parse symbol blacklist
+    blacklist_str = os.getenv("SYMBOL_BLACKLIST", "")
+    config_dict["symbol_blacklist"] = (
+        [s.strip() for s in blacklist_str.split(",") if s.strip()] if blacklist_str else []
+    )
 
     return Config(**config_dict)
 

@@ -120,6 +120,156 @@ When a signal is generated but blocked by a gate:
 
 ---
 
+## Cost-Aware Trading & Execution Controls
+
+The system includes explicit mechanisms to model, limit, and diagnose trading costs that arise from spreads and execution quality.
+
+### Quote Model
+A `Quote` abstraction is used during order evaluation and submission:
+- **bid**: best bid price
+- **ask**: best ask price
+- **last**: last traded price
+- **mid**: midpoint of bid/ask
+- **spread**: ask − bid
+- **spread_bps**: spread expressed in basis points
+
+Quotes are obtained from the active broker via `Broker.get_quote(symbol)`.
+
+### Spread-Aware Order Logic
+Before any order is placed:
+- The current spread is evaluated
+- Orders are **blocked** if `spread_bps > max_spread_bps`
+- When enabled, orders are placed as **LIMIT orders** using spread-aware pricing:
+  - BUY: `min(ask, mid + spread × 0.25)`
+  - SELL: `max(bid, mid − spread × 0.25)`
+
+This logic is enforced centrally in the order pipeline and applies to all trading modes.
+
+### Minimum Edge Threshold
+The system supports an optional minimum edge requirement:
+- Configured via `min_edge_bps`
+- For BUY orders, required price improvement must be negative and exceed the threshold
+- For SELL orders, required price improvement must be positive and exceed the threshold
+- This prevents trades where estimated execution costs outweigh expected benefit
+
+### Slippage Tracking
+Each order records:
+- Expected price at submission
+- Actual fill price
+- Absolute slippage
+- Slippage in basis points
+- Spread at time of submission
+
+These fields are persisted in trade records and used during reconciliation and reporting.
+
+### Cost Diagnostics
+When enabled, the system automatically generates a per-run cost report summarizing:
+- Total trades
+- Aggregate spread cost
+- Aggregate slippage (absolute and signed)
+- Average spread at submission
+- Worst observed slippage
+
+This report is written to disk alongside other run outputs for post-run analysis.
+
+### CLI Flags
+Relevant flags include:
+- `--use-limit-orders / --no-limit-orders`
+- `--max-spread-bps`
+- `--min-edge-bps`
+- `--cost-diagnostics / --no-cost-diagnostics`
+
+---
+
+## Symbol Eligibility & Liquidity Guardrails
+
+The system implements comprehensive symbol eligibility checks to prevent trading of illiquid, penny-stock, or otherwise unsuitable symbols.
+
+### Purpose
+Block orders for symbols that fail safety or quality criteria:
+- Prevent trading penny stocks (low price)
+- Avoid illiquid symbols (low volume)
+- Enforce whitelist/blacklist controls
+- Require valid market quotes
+
+### Enforcement Location
+All eligibility checks are enforced **centrally in the order pipeline** (`src/app/order_pipeline.py`) during `submit_signal_order()`, immediately after risk checks and before spread/cost checks.
+
+This ensures **every order attempt** passes eligibility requirements before broker submission.
+
+### Eligibility Checks (in order)
+
+1. **Whitelist Check** (if configured)
+   - If `symbol_whitelist` is non-empty, only listed symbols are allowed
+   - Empty whitelist = allow all (no restriction)
+   - **Reason format**: `"Blocked: symbol {SYMBOL} not in whitelist"`
+
+2. **Blacklist Check** (always enforced if configured)
+   - Symbols in `symbol_blacklist` are always blocked
+   - **Blacklist wins over whitelist** (precedence rule)
+   - **Reason format**: `"Blocked: symbol {SYMBOL} in blacklist"`
+
+3. **Quote Requirement Check**
+   - If `require_quote=true`, order requires valid bid/ask quote
+   - Blocks if `bid <= 0` or `ask <= 0`
+   - **Reason format**: `"Blocked: quote missing (require_quote=true)"`
+
+4. **Price Range Check**
+   - Uses quote mid price (or signal price as fallback)
+   - Blocks if `price < min_price`
+   - Blocks if `price > max_price`
+   - **Reason format**: `"Blocked: price={PRICE} < min_price={MIN}"` or `"Blocked: price={PRICE} > max_price={MAX}"`
+
+5. **Volume Check**
+   - Fetches average daily volume via `DataProvider.get_avg_volume(symbol)`
+   - Blocks if `avg_volume < min_avg_volume`
+   - **Reason format**: `"Blocked: avg_volume={VOL} < min_avg_volume={MIN}"`
+
+All checks log detailed warnings including measured values and configured limits.
+
+### Data Sources
+
+**Price**: Prefers quote mid price if available; falls back to signal price
+
+**Volume**: Uses `DataProvider.get_avg_volume(symbol, lookback_days=20)`
+- **MockDataProvider**: Returns deterministic volumes for known symbols (e.g., AAPL=50M, MSFT=30M), or 5M for unknown
+- **AlpacaDataProvider**: Computes average from recent bars via base implementation
+
+### Configuration
+
+All parameters have conservative defaults to prevent accidental trading of unsuitable symbols:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `min_avg_volume` | 1,000,000 | Minimum average daily volume |
+| `min_price` | $2.00 | Minimum price (penny stock threshold) |
+| `max_price` | $1000.00 | Maximum price (sanity cap) |
+| `require_quote` | true | Require valid bid/ask quote |
+| `symbol_whitelist` | [] (empty) | Allowed symbols (empty = allow all) |
+| `symbol_blacklist` | [] (empty) | Blocked symbols |
+
+### CLI Flags
+- `--min-avg-volume <int>` - Set minimum volume threshold
+- `--min-price <float>` - Set minimum price
+- `--max-price <float>` - Set maximum price
+- `--require-quote / --no-require-quote` - Toggle quote requirement
+- `--symbol-whitelist <comma-separated>` - Set whitelist (e.g., "AAPL,MSFT,GOOGL")
+- `--symbol-blacklist <comma-separated>` - Set blacklist (e.g., "TSLA,GME")
+
+### Precedence Rules
+1. Blacklist always wins (blocks even if whitelisted)
+2. If whitelist is non-empty, only whitelisted symbols pass
+3. All other checks (quote, price, volume) apply to any symbol that passes lists
+4. Eligibility runs **before** spread/edge checks to fail fast on ineligible symbols
+
+### Testing
+- Tests use deterministic mock data for reproducibility
+- `tests/test_symbol_eligibility.py` covers all checks and precedence rules
+- MockDataProvider returns fixed volumes for test symbols
+- Tests use custom broker/provider classes to control quote and volume data
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing

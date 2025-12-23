@@ -237,6 +237,55 @@ Examples:
         help="Disable cost diagnostics reporting",
     )
 
+    parser.add_argument(
+        "--min-avg-volume",
+        type=int,
+        default=1_000_000,
+        help="Minimum average daily volume threshold (default: 1000000)",
+    )
+
+    parser.add_argument(
+        "--min-price",
+        type=float,
+        default=2.00,
+        help="Minimum price to prevent penny stocks (default: 2.00)",
+    )
+
+    parser.add_argument(
+        "--max-price",
+        type=float,
+        default=1000.00,
+        help="Maximum price sanity cap (default: 1000.00)",
+    )
+
+    parser.add_argument(
+        "--require-quote",
+        action="store_true",
+        default=True,
+        help="Require valid bid/ask quote to trade (default: true)",
+    )
+
+    parser.add_argument(
+        "--no-require-quote",
+        action="store_false",
+        dest="require_quote",
+        help="Disable quote requirement",
+    )
+
+    parser.add_argument(
+        "--symbol-whitelist",
+        type=str,
+        default="",
+        help="Comma-separated symbol whitelist (default: empty = allow all)",
+    )
+
+    parser.add_argument(
+        "--symbol-blacklist",
+        type=str,
+        default="",
+        help="Comma-separated symbol blacklist (default: empty)",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -499,6 +548,12 @@ def main(argv: list[str] | None = None) -> int:
             max_spread_bps=args.max_spread_bps,
             min_edge_bps=args.min_edge_bps,
             cost_diagnostics=args.cost_diagnostics,
+            min_avg_volume=args.min_avg_volume,
+            min_price=args.min_price,
+            max_price=args.max_price,
+            require_quote=args.require_quote,
+            symbol_whitelist=args.symbol_whitelist,
+            symbol_blacklist=args.symbol_blacklist,
         )
         return 0
     except Exception as e:
@@ -699,6 +754,12 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     max_spread_bps_override = kwargs.get("max_spread_bps")
     min_edge_bps_override = kwargs.get("min_edge_bps")
     cost_diagnostics_override = kwargs.get("cost_diagnostics")
+    min_avg_volume_override = kwargs.get("min_avg_volume")
+    min_price_override = kwargs.get("min_price")
+    max_price_override = kwargs.get("max_price")
+    require_quote_override = kwargs.get("require_quote")
+    symbol_whitelist_override = kwargs.get("symbol_whitelist")
+    symbol_blacklist_override = kwargs.get("symbol_blacklist")
 
     # Use max_iterations if provided
     if max_iterations is not None:
@@ -756,6 +817,34 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     if cost_diagnostics_override is not None:
         config.cost_diagnostics = cost_diagnostics_override
 
+    # Apply symbol eligibility overrides from CLI
+    if min_avg_volume_override is not None:
+        config.min_avg_volume = min_avg_volume_override
+    if min_price_override is not None:
+        from decimal import Decimal
+
+        config.min_price = Decimal(str(min_price_override))
+    if max_price_override is not None:
+        from decimal import Decimal
+
+        config.max_price = Decimal(str(max_price_override))
+    if require_quote_override is not None:
+        config.require_quote = require_quote_override
+    if symbol_whitelist_override is not None:
+        # Parse comma-separated string to list
+        config.symbol_whitelist = (
+            [s.strip() for s in symbol_whitelist_override.split(",") if s.strip()]
+            if symbol_whitelist_override
+            else []
+        )
+    if symbol_blacklist_override is not None:
+        # Parse comma-separated string to list
+        config.symbol_blacklist = (
+            [s.strip() for s in symbol_blacklist_override.split(",") if s.strip()]
+            if symbol_blacklist_override
+            else []
+        )
+
     logger = setup_logging(config.log_level, run_id)
 
     try:
@@ -778,6 +867,14 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         logger.info(f"Max spread (bps): {config.max_spread_bps}")
         logger.info(f"Min edge (bps): {config.min_edge_bps}")
         logger.info(f"Cost diagnostics: {config.cost_diagnostics}")
+        logger.info(f"Min avg volume: {config.min_avg_volume:,}")
+        logger.info(f"Min price: ${config.min_price}")
+        logger.info(f"Max price: ${config.max_price}")
+        logger.info(f"Require quote: {config.require_quote}")
+        if config.symbol_whitelist:
+            logger.info(f"Symbol whitelist: {','.join(config.symbol_whitelist)}")
+        if config.symbol_blacklist:
+            logger.info(f"Symbol blacklist: {','.join(config.symbol_blacklist)}")
 
         # Ensure output directories exist
         setup_outputs(run_id)
@@ -1022,6 +1119,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                             write_order_to_csv_fn=write_order_to_csv,
                             write_fill_to_csv_fn=write_fill_to_csv,
                             write_trade_to_csv_fn=write_trade_to_csv,
+                            data_provider=data_provider,
                             strategy_name="SMA",
                         )
 

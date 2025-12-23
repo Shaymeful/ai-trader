@@ -33,6 +33,7 @@ def submit_signal_order(
     write_order_to_csv_fn,
     write_fill_to_csv_fn,
     write_trade_to_csv_fn,
+    data_provider,
     strategy_name: str = "SMA",
 ) -> OrderSubmissionResult:
     """
@@ -162,8 +163,78 @@ def submit_signal_order(
 
     logger.info("    Exposure check: PASSED")
 
-    # Step 5c: Get quote and check spread (cost controls)
+    # Step 5c: Symbol eligibility checks
+    # Whitelist check (if configured)
+    if config.symbol_whitelist and signal.symbol not in config.symbol_whitelist:
+        logger.warning(f"    Eligibility FAILED: symbol {signal.symbol} not in whitelist")
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Blocked: symbol {signal.symbol} not in whitelist",
+            client_order_id=client_order_id,
+        )
+
+    # Blacklist check (always enforced if configured)
+    if config.symbol_blacklist and signal.symbol in config.symbol_blacklist:
+        logger.warning(f"    Eligibility FAILED: symbol {signal.symbol} in blacklist")
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Blocked: symbol {signal.symbol} in blacklist",
+            client_order_id=client_order_id,
+        )
+
+    # Get quote for price and eligibility checks
     quote = broker.get_quote(signal.symbol)
+
+    # Quote requirement check
+    if config.require_quote and (quote.bid <= 0 or quote.ask <= 0):
+        logger.warning(f"    Eligibility FAILED: invalid quote (bid={quote.bid}, ask={quote.ask})")
+        return OrderSubmissionResult(
+            success=False,
+            reason="Blocked: quote missing (require_quote=true)",
+            client_order_id=client_order_id,
+        )
+
+    # Price range check
+    price = quote.mid if quote.mid > 0 else signal.price
+    if price is None or price <= 0:
+        logger.warning("    Eligibility FAILED: no valid price available")
+        return OrderSubmissionResult(
+            success=False,
+            reason="Blocked: no valid price available",
+            client_order_id=client_order_id,
+        )
+
+    if price < config.min_price:
+        logger.warning(f"    Eligibility FAILED: price={price:.2f} < min_price={config.min_price}")
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Blocked: price={price:.2f} < min_price={config.min_price}",
+            client_order_id=client_order_id,
+        )
+
+    if price > config.max_price:
+        logger.warning(f"    Eligibility FAILED: price={price:.2f} > max_price={config.max_price}")
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Blocked: price={price:.2f} > max_price={config.max_price}",
+            client_order_id=client_order_id,
+        )
+
+    # Volume check
+    avg_volume = data_provider.get_avg_volume(signal.symbol)
+    if avg_volume < config.min_avg_volume:
+        logger.warning(
+            f"    Eligibility FAILED: avg_volume={avg_volume:,} < min_avg_volume={config.min_avg_volume:,}"
+        )
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Blocked: avg_volume={avg_volume:,} < min_avg_volume={config.min_avg_volume:,}",
+            client_order_id=client_order_id,
+        )
+
+    logger.info("    Symbol eligibility: PASSED")
+
+    # Step 5d: Check spread (cost controls)
     logger.info(
         f"    Quote: bid=${quote.bid}, ask=${quote.ask}, mid=${quote.mid}, "
         f"spread={quote.spread_bps:.2f} bps"
