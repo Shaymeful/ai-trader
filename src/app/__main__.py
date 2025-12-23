@@ -124,6 +124,7 @@ Examples:
 
     parser.add_argument(
         "--max-iterations",
+        "--iterations",
         type=int,
         default=None,
         help="Maximum number of trading loop iterations (default: 5)",
@@ -719,7 +720,13 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                         logger.info(
                             f"    SMA Slow ({config.sma_slow_period}): insufficient data (need {config.sma_slow_period} bars)"
                         )
-                        logger.info("    Signal: HOLD (insufficient data)")
+                        has_position = symbol in risk_manager.positions
+                        logger.info(f"    Current position: {'YES' if has_position else 'NO'}")
+                        logger.info("    --- Decision Summary ---")
+                        logger.info("    Decision: HOLD")
+                        logger.info("    SMA Signal: Insufficient data for indicator calculation")
+                        logger.info(f"    Position Status: {'Long' if has_position else 'Flat'}")
+                        logger.info("    Final Action: HOLD (insufficient data)")
                         continue
                     else:
                         logger.info(f"    SMA Fast ({config.sma_fast_period}): ${fast_sma:.2f}")
@@ -732,23 +739,30 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                     # Generate signal
                     signal = strategy.generate_signals(symbol, bars, has_position)
 
+                    # Log detailed decision summary
+                    logger.info("    --- Decision Summary ---")
                     if signal:
-                        logger.info(f"    Signal: {signal.side.value.upper()}")
-                        logger.info(f"    Reason: {signal.reason}")
+                        logger.info(f"    Decision: {signal.side.value.upper()}")
+                        logger.info(f"    SMA Signal: {signal.reason}")
+                        logger.info(
+                            f"    SMA Crossover: Fast (${fast_sma:.2f}) {'>' if fast_sma > slow_sma else '<'} Slow (${slow_sma:.2f})"
+                        )
+                        logger.info(f"    Position Status: {'Long' if has_position else 'Flat'}")
 
                         # Check if we should block after-hours order submission
                         if not in_market_hours and not allow_after_hours_orders:
                             logger.warning(
-                                "    Order submission BLOCKED: Market closed and --allow-after-hours-orders not set"
+                                "    Gate BLOCKED: Market closed (after-hours orders disabled)"
                             )
                             logger.info(
                                 "    Use --compute-after-hours --allow-after-hours-orders to submit orders after hours"
                             )
+                            logger.info("    Final Action: HOLD (market hours gate)")
                             continue
 
                         if not in_market_hours and allow_after_hours_orders:
                             logger.warning(
-                                "    Submitting order AFTER HOURS (--allow-after-hours-orders enabled)"
+                                "    Gate WARNING: Submitting AFTER HOURS (--allow-after-hours-orders enabled)"
                             )
 
                         # Determine quantity (simple fixed quantity for MVP)
@@ -770,6 +784,20 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                             strategy_name="SMA",
                         )
 
+                        # Log final outcome
+                        if result.success:
+                            if config.dry_run:
+                                logger.info(
+                                    f"    Final Action: {signal.side.value.upper()} (dry-run)"
+                                )
+                            else:
+                                logger.info(
+                                    f"    Final Action: {signal.side.value.upper()} (order submitted)"
+                                )
+                        else:
+                            logger.warning(f"    Gate BLOCKED: {result.reason}")
+                            logger.info("    Final Action: HOLD (blocked by gate)")
+
                         if result.success and result.order is not None and not config.dry_run:
                             trades_executed += 1
 
@@ -779,7 +807,13 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                             # Save state after each order
                             save_state(state)
                     else:
-                        logger.info("    Signal: HOLD (no crossover detected)")
+                        logger.info("    Decision: HOLD")
+                        logger.info("    SMA Signal: No crossover detected")
+                        logger.info(
+                            f"    SMA Crossover: Fast (${fast_sma:.2f}) {'>' if fast_sma > slow_sma else '<'} Slow (${slow_sma:.2f})"
+                        )
+                        logger.info(f"    Position Status: {'Long' if has_position else 'Flat'}")
+                        logger.info("    Final Action: HOLD (no signal)")
 
             except Exception as e:
                 logger.error(f"Error in trading loop iteration: {e}", exc_info=True)
