@@ -20,6 +20,7 @@ from src.app.models import OrderSide, Signal
 from src.app.order_pipeline import submit_signal_order
 from src.app.state import BotState, load_state, save_state
 from src.broker import MockBroker
+from src.data.provider import MockDataProvider
 from src.risk import RiskManager
 
 
@@ -77,6 +78,12 @@ def broker():
 
 
 @pytest.fixture
+def data_provider():
+    """Create mock data provider."""
+    return MockDataProvider()
+
+
+@pytest.fixture
 def risk_manager(config_normal):
     """Create risk manager."""
     return RiskManager(config_normal)
@@ -120,7 +127,9 @@ def test_dry_run_flag_case_insensitive(monkeypatch):
     assert config.dry_run is True
 
 
-def test_dry_run_broker_not_called(temp_dir, config_dry_run, broker, risk_manager, state, signal):
+def test_dry_run_broker_not_called(
+    temp_dir, config_dry_run, broker, data_provider, risk_manager, state, signal
+):
     """Test that broker is NOT called in dry-run mode."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -136,6 +145,7 @@ def test_dry_run_broker_not_called(temp_dir, config_dry_run, broker, risk_manage
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -147,7 +157,9 @@ def test_dry_run_broker_not_called(temp_dir, config_dry_run, broker, risk_manage
     assert len(broker.orders) == 0
 
 
-def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_manager, state, signal):
+def test_dry_run_csv_files_unchanged(
+    temp_dir, config_dry_run, broker, data_provider, risk_manager, state, signal
+):
     """Test that CSV files are NOT modified in dry-run mode."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -169,6 +181,7 @@ def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_mana
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -184,7 +197,9 @@ def test_dry_run_csv_files_unchanged(temp_dir, config_dry_run, broker, risk_mana
     assert trades_after == trades_before
 
 
-def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manager, signal):
+def test_dry_run_state_not_modified(
+    temp_dir, config_dry_run, broker, data_provider, risk_manager, signal
+):
     """Test that state is NOT modified in dry-run mode."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -210,6 +225,7 @@ def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manag
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -221,7 +237,9 @@ def test_dry_run_state_not_modified(temp_dir, config_dry_run, broker, risk_manag
     assert result.client_order_id not in loaded_state.submitted_client_order_ids
 
 
-def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, risk_manager, state):
+def test_dry_run_risk_checks_still_enforced(
+    temp_dir, config_dry_run, broker, data_provider, risk_manager, state
+):
     """Test that risk checks are still enforced in dry-run mode."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -245,6 +263,7 @@ def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, ri
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -258,7 +277,7 @@ def test_dry_run_risk_checks_still_enforced(temp_dir, config_dry_run, broker, ri
 
 
 def test_dry_run_quantity_checks_still_enforced(
-    temp_dir, config_dry_run, broker, risk_manager, state, signal
+    temp_dir, config_dry_run, broker, data_provider, risk_manager, state, signal
 ):
     """Test that quantity checks are still enforced in dry-run mode."""
     test_run_id = "test-run-id"
@@ -275,6 +294,7 @@ def test_dry_run_quantity_checks_still_enforced(
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -288,7 +308,7 @@ def test_dry_run_quantity_checks_still_enforced(
 
 
 def test_dry_run_idempotency_checks_still_enforced(
-    temp_dir, config_dry_run, broker, risk_manager, signal
+    temp_dir, config_dry_run, broker, data_provider, risk_manager, signal
 ):
     """Test that idempotency checks are still enforced in dry-run mode."""
     test_run_id = "test-run-id"
@@ -310,6 +330,7 @@ def test_dry_run_idempotency_checks_still_enforced(
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -321,7 +342,9 @@ def test_dry_run_idempotency_checks_still_enforced(
     assert len(broker.orders) == 0
 
 
-def test_normal_mode_still_works(temp_dir, config_normal, broker, risk_manager, state, signal):
+def test_normal_mode_still_works(
+    temp_dir, config_normal, broker, data_provider, risk_manager, state, signal
+):
     """Test that normal mode (dry_run=False) still works correctly."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -337,6 +360,7 @@ def test_normal_mode_still_works(temp_dir, config_normal, broker, risk_manager, 
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -447,7 +471,9 @@ def test_normal_mode_trades_executed_is_nonzero(temp_dir, monkeypatch):
     assert summary["session_trades_executed"] >= 0  # Just verify it exists
 
 
-def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, broker, signal):
+def test_dry_run_vs_normal_comparison(
+    temp_dir, config_dry_run, config_normal, broker, data_provider, signal
+):
     """Test that dry-run and normal mode behave identically up to broker call."""
     test_run_id = "test-run-id"
     setup_outputs(test_run_id)
@@ -467,6 +493,7 @@ def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, b
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 
@@ -486,6 +513,7 @@ def test_dry_run_vs_normal_comparison(temp_dir, config_dry_run, config_normal, b
         write_order_to_csv_fn=write_order_to_csv,
         write_fill_to_csv_fn=write_fill_to_csv,
         write_trade_to_csv_fn=write_trade_to_csv,
+        data_provider=data_provider,
         strategy_name="TEST",
     )
 

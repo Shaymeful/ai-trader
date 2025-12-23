@@ -12,6 +12,7 @@ from src.app.models import OrderSide, OrderType, Quote, Signal
 from src.app.order_pipeline import submit_signal_order
 from src.app.state import BotState
 from src.broker.base import MockBroker
+from src.data.provider import MockDataProvider
 from src.risk import RiskManager
 
 
@@ -53,6 +54,12 @@ def broker():
 
 
 @pytest.fixture
+def data_provider():
+    """Mock data provider instance."""
+    return MockDataProvider()
+
+
+@pytest.fixture
 def risk_manager(base_config):
     """Risk manager instance."""
     return RiskManager(config=base_config, daily_realized_pnl=Decimal("0"))
@@ -84,7 +91,9 @@ def test_quote_model_properties():
     assert quote.expected_entry_price(OrderSide.SELL) == Decimal("100.00")  # bid
 
 
-def test_spread_blocking_when_too_wide(temp_dir, base_config, broker, risk_manager, state):
+def test_spread_blocking_when_too_wide(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test that orders are blocked when spread exceeds max_spread_bps."""
     # Configure max_spread_bps = 20
     base_config.max_spread_bps = Decimal("20")
@@ -129,6 +138,7 @@ def test_spread_blocking_when_too_wide(temp_dir, base_config, broker, risk_manag
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert not result.success
@@ -137,7 +147,9 @@ def test_spread_blocking_when_too_wide(temp_dir, base_config, broker, risk_manag
     assert "29" in result.reason or "30" in result.reason
 
 
-def test_spread_allowing_when_within_limit(temp_dir, base_config, broker, risk_manager, state):
+def test_spread_allowing_when_within_limit(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test that orders are allowed when spread is within max_spread_bps."""
     # Configure max_spread_bps = 20
     base_config.max_spread_bps = Decimal("20")
@@ -169,13 +181,16 @@ def test_spread_allowing_when_within_limit(temp_dir, base_config, broker, risk_m
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert result.success
     assert result.order is not None
 
 
-def test_limit_order_type_when_enabled(temp_dir, base_config, broker, risk_manager, state):
+def test_limit_order_type_when_enabled(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test that LIMIT orders are used when use_limit_orders=True."""
     base_config.use_limit_orders = True
 
@@ -201,6 +216,7 @@ def test_limit_order_type_when_enabled(temp_dir, base_config, broker, risk_manag
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert result.success
@@ -208,7 +224,9 @@ def test_limit_order_type_when_enabled(temp_dir, base_config, broker, risk_manag
     assert result.order.price is not None
 
 
-def test_market_order_type_when_disabled(temp_dir, base_config, broker, risk_manager, state):
+def test_market_order_type_when_disabled(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test that MARKET orders are used when use_limit_orders=False."""
     base_config.use_limit_orders = False
 
@@ -234,13 +252,16 @@ def test_market_order_type_when_disabled(temp_dir, base_config, broker, risk_man
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert result.success
     assert result.order.type == OrderType.MARKET
 
 
-def test_limit_price_calculation_buy(temp_dir, base_config, broker, risk_manager, state):
+def test_limit_price_calculation_buy(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test limit price calculation for BUY orders."""
     base_config.use_limit_orders = True
 
@@ -279,6 +300,7 @@ def test_limit_price_calculation_buy(temp_dir, base_config, broker, risk_manager
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert result.success
@@ -288,7 +310,9 @@ def test_limit_price_calculation_buy(temp_dir, base_config, broker, risk_manager
     assert result.order.price == Decimal("100.15")
 
 
-def test_limit_price_calculation_sell(temp_dir, base_config, broker, risk_manager, state):
+def test_limit_price_calculation_sell(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test limit price calculation for SELL orders."""
     base_config.use_limit_orders = True
 
@@ -327,6 +351,7 @@ def test_limit_price_calculation_sell(temp_dir, base_config, broker, risk_manage
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert result.success
@@ -336,7 +361,9 @@ def test_limit_price_calculation_sell(temp_dir, base_config, broker, risk_manage
     assert result.order.price == Decimal("100.05")
 
 
-def test_edge_threshold_blocking_buy(temp_dir, base_config, broker, risk_manager, state):
+def test_edge_threshold_blocking_buy(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test that BUY orders are blocked when edge is insufficient."""
     base_config.use_limit_orders = True
     base_config.min_edge_bps = Decimal("10")  # Require 10 bps edge
@@ -381,13 +408,16 @@ def test_edge_threshold_blocking_buy(temp_dir, base_config, broker, risk_manager
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert not result.success
     assert "Insufficient edge" in result.reason
 
 
-def test_edge_threshold_passing_buy(temp_dir, base_config, broker, risk_manager, state):
+def test_edge_threshold_passing_buy(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test that BUY orders pass when edge is sufficient."""
     base_config.use_limit_orders = True
     base_config.min_edge_bps = Decimal("5")  # Require 5 bps edge
@@ -433,12 +463,15 @@ def test_edge_threshold_passing_buy(temp_dir, base_config, broker, risk_manager,
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=mock_write,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert result.success
 
 
-def test_slippage_computation_in_fills(temp_dir, base_config, broker, risk_manager, state):
+def test_slippage_computation_in_fills(
+    temp_dir, base_config, broker, data_provider, risk_manager, state
+):
     """Test that slippage is correctly computed and recorded in fills."""
     base_config.use_limit_orders = True
 
@@ -470,6 +503,7 @@ def test_slippage_computation_in_fills(temp_dir, base_config, broker, risk_manag
         write_order_to_csv_fn=mock_write,
         write_fill_to_csv_fn=capture_fill,
         write_trade_to_csv_fn=mock_write,
+        data_provider=data_provider,
     )
 
     assert result.success

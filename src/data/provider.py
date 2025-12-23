@@ -25,12 +25,43 @@ class DataProvider(ABC):
         """
         pass
 
+    def get_avg_volume(self, symbol: str, lookback_days: int = 20) -> int:
+        """
+        Get average daily volume for a symbol.
+
+        Uses recent bars to compute average volume. Implementations can override
+        for more efficient lookups.
+
+        Args:
+            symbol: Symbol to get volume for
+            lookback_days: Number of days to average over
+
+        Returns:
+            Average daily volume (integer)
+        """
+        try:
+            bars = self.get_latest_bars([symbol], limit=lookback_days).get(symbol, [])
+            if not bars:
+                return 0
+            volumes = [bar.volume for bar in bars]
+            return int(sum(volumes) / len(volumes)) if volumes else 0
+        except Exception:
+            return 0
+
 
 class MockDataProvider(DataProvider):
     """Mock data provider for offline testing."""
 
     def __init__(self):
         self.call_count = 0
+        # Deterministic volume data for testing
+        self.mock_avg_volumes = {
+            "AAPL": 50_000_000,
+            "MSFT": 30_000_000,
+            "GOOGL": 25_000_000,
+            "AMZN": 45_000_000,
+            "TSLA": 100_000_000,
+        }
 
     def get_latest_bars(self, symbols: list[str], limit: int = 1) -> dict[str, list[Bar]]:
         """
@@ -86,6 +117,15 @@ class MockDataProvider(DataProvider):
             result[symbol] = bars
 
         return result
+
+    def get_avg_volume(self, symbol: str, lookback_days: int = 20) -> int:
+        """
+        Get deterministic average volume for testing.
+
+        Returns:
+            Predefined average volume for known symbols, or 5M for unknown symbols
+        """
+        return self.mock_avg_volumes.get(symbol, 5_000_000)
 
 
 class AlpacaDataProvider(DataProvider):
