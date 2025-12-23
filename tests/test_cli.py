@@ -1,5 +1,6 @@
 """Tests for CLI interface."""
 
+from decimal import Decimal
 from unittest.mock import MagicMock, Mock, patch
 
 from src.app.__main__ import main, parse_args
@@ -896,7 +897,7 @@ def test_parse_args_qty():
 
 
 def test_list_open_orders_requires_live_mode(monkeypatch, capsys):
-    """Test that --list-open-orders requires --mode live."""
+    """Test that --list-open-orders works in paper mode without safety gates."""
     from src.app.config import Config
 
     mock_loop = MagicMock()
@@ -904,22 +905,28 @@ def test_list_open_orders_requires_live_mode(monkeypatch, capsys):
 
     # Mock load_config
     mock_config = Config(
-        mode="mock",
+        mode="paper",
         allowed_symbols=["AAPL"],
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=1000,
+        alpaca_base_url="https://paper-api.alpaca.markets",
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
-    result = main(["--mode", "paper", "--list-open-orders"])
+    # Mock AlpacaBroker to avoid needing real credentials
+    with patch("src.app.__main__.AlpacaBroker") as mock_broker_cls:
+        mock_broker = MagicMock()
+        mock_broker.list_open_orders_detailed.return_value = []
+        mock_broker_cls.return_value = mock_broker
 
-    assert result == 1
-    mock_loop.assert_not_called()
+        result = main(["--mode", "paper", "--list-open-orders"])
 
-    captured = capsys.readouterr()
-    assert "ERROR" in captured.err
-    assert "requires --mode live" in captured.err
+        assert result == 0  # Should succeed in paper mode
+        mock_loop.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert "PAPER MODE" in captured.out
 
 
 def test_list_open_orders_requires_i_understand_live_trading(monkeypatch, capsys):
@@ -1051,7 +1058,7 @@ def test_list_open_orders_success(monkeypatch, capsys):
 
 
 def test_cancel_order_requires_live_mode(monkeypatch, capsys):
-    """Test that --cancel-order-id requires --mode live."""
+    """Test that --cancel-order-id works in paper mode without safety gates."""
     from src.app.config import Config
 
     mock_loop = MagicMock()
@@ -1059,22 +1066,28 @@ def test_cancel_order_requires_live_mode(monkeypatch, capsys):
 
     # Mock load_config
     mock_config = Config(
-        mode="mock",
+        mode="paper",
         allowed_symbols=["AAPL"],
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=1000,
+        alpaca_base_url="https://paper-api.alpaca.markets",
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
-    result = main(["--mode", "paper", "--cancel-order-id", "abc-123"])
+    # Mock AlpacaBroker to avoid needing real credentials
+    with patch("src.app.__main__.AlpacaBroker") as mock_broker_cls:
+        mock_broker = MagicMock()
+        mock_broker.cancel_order.return_value = True
+        mock_broker_cls.return_value = mock_broker
 
-    assert result == 1
-    mock_loop.assert_not_called()
+        result = main(["--mode", "paper", "--cancel-order-id", "abc-123"])
 
-    captured = capsys.readouterr()
-    assert "ERROR" in captured.err
-    assert "requires --mode live" in captured.err
+        assert result == 0  # Should succeed in paper mode
+        mock_loop.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert "PAPER MODE" in captured.out
 
 
 def test_cancel_order_requires_i_understand_live_trading(monkeypatch, capsys):
@@ -1259,30 +1272,57 @@ def test_cancel_order_by_client_id_success(monkeypatch, capsys):
 
 
 def test_replace_order_requires_live_mode(monkeypatch, capsys):
-    """Test that --replace-order-id requires --mode live."""
+    """Test that --replace-order-id works in paper mode without safety gates."""
     from src.app.config import Config
 
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
 
-    # Mock load_config
+    # Mock load_config - use smaller values to pass risk checks
     mock_config = Config(
-        mode="mock",
+        mode="paper",
         allowed_symbols=["AAPL"],
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=1000,
+        alpaca_base_url="https://paper-api.alpaca.markets",
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
-    result = main(["--mode", "paper", "--replace-order-id", "order-123", "--limit-price", "150.50"])
+    # Mock AlpacaBroker to avoid needing real credentials
+    with patch("src.app.__main__.AlpacaBroker") as mock_broker_cls:
+        mock_broker = MagicMock()
 
-    assert result == 1
-    mock_loop.assert_not_called()
+        # Mock existing order - use small values that pass default risk limits
+        existing_order = MagicMock()
+        existing_order.symbol = "AAPL"
+        existing_order.side = MagicMock()
+        existing_order.side.value = "buy"
+        existing_order.quantity = 1
+        existing_order.price = Decimal("100.00")
+        mock_broker.get_order_status.return_value = existing_order
 
-    captured = capsys.readouterr()
-    assert "ERROR" in captured.err
-    assert "requires --mode live" in captured.err
+        # Mock new order
+        new_order = MagicMock()
+        new_order.id = "new-order-id"
+        new_order.status = MagicMock()
+        new_order.status.value = "new"
+        new_order.symbol = "AAPL"
+        new_order.side = MagicMock()
+        new_order.side.value = "buy"
+        new_order.quantity = 1
+        new_order.price = Decimal("100.50")
+        mock_broker.replace_order.return_value = new_order
+
+        mock_broker_cls.return_value = mock_broker
+
+        result = main(["--mode", "paper", "--replace-order-id", "order-123", "--limit-price", "100.50"])
+
+        assert result == 0  # Should succeed in paper mode
+        mock_loop.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert "PAPER MODE" in captured.out
 
 
 def test_replace_order_requires_i_understand_live_trading(monkeypatch, capsys):
