@@ -96,6 +96,59 @@ class Broker(ABC):
         """
         pass
 
+    @abstractmethod
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        Cancel an order by broker order ID.
+
+        Args:
+            order_id: Broker order ID to cancel
+
+        Returns:
+            True if cancellation succeeded
+        """
+        pass
+
+    @abstractmethod
+    def cancel_order_by_client_id(self, client_order_id: str) -> bool:
+        """
+        Cancel an order by client order ID.
+
+        Args:
+            client_order_id: Client order ID to cancel
+
+        Returns:
+            True if cancellation succeeded
+        """
+        pass
+
+    @abstractmethod
+    def replace_order(
+        self, order_id: str, limit_price: Decimal, quantity: int | None = None
+    ) -> Order:
+        """
+        Replace/modify an existing order.
+
+        Args:
+            order_id: Broker order ID to replace
+            limit_price: New limit price
+            quantity: New quantity (optional, keeps existing if None)
+
+        Returns:
+            New or modified Order object
+        """
+        pass
+
+    @abstractmethod
+    def list_open_orders_detailed(self) -> list[Order]:
+        """
+        Get detailed list of all open orders.
+
+        Returns:
+            List of Order objects for all open orders
+        """
+        pass
+
 
 class MockBroker(Broker):
     """Mock broker for paper trading simulation."""
@@ -256,6 +309,95 @@ class MockBroker(Broker):
             last=last_price,
             timestamp=datetime.now(),
         )
+
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        Cancel an order by broker order ID.
+
+        Args:
+            order_id: Broker order ID to cancel
+
+        Returns:
+            True if cancellation succeeded
+        """
+        if order_id not in self.orders:
+            return False
+
+        order = self.orders[order_id]
+        if order.status == OrderStatus.FILLED:
+            return False  # Cannot cancel filled order
+
+        # Mark as canceled
+        order.status = OrderStatus.CANCELED
+        return True
+
+    def cancel_order_by_client_id(self, client_order_id: str) -> bool:
+        """
+        Cancel an order by client order ID.
+
+        Args:
+            client_order_id: Client order ID to cancel
+
+        Returns:
+            True if cancellation succeeded
+        """
+        if client_order_id not in self.client_order_map:
+            return False
+
+        order_id = self.client_order_map[client_order_id]
+        return self.cancel_order(order_id)
+
+    def replace_order(
+        self, order_id: str, limit_price: Decimal, quantity: int | None = None
+    ) -> Order:
+        """
+        Replace/modify an existing order (mock implementation: cancel + new).
+
+        Args:
+            order_id: Broker order ID to replace
+            limit_price: New limit price
+            quantity: New quantity (optional, keeps existing if None)
+
+        Returns:
+            New Order object
+        """
+        if order_id not in self.orders:
+            raise ValueError(f"Order {order_id} not found")
+
+        old_order = self.orders[order_id]
+        if old_order.status == OrderStatus.FILLED:
+            raise ValueError("Cannot replace filled order")
+
+        # Cancel old order
+        old_order.status = OrderStatus.CANCELED
+
+        # Create new order with same client_order_id pattern
+        new_client_order_id = f"{old_order.symbol}-replace-{uuid.uuid4()}"
+        new_quantity = quantity if quantity is not None else old_order.quantity
+
+        return self.submit_order(
+            symbol=old_order.symbol,
+            side=old_order.side,
+            quantity=new_quantity,
+            client_order_id=new_client_order_id,
+            order_type=OrderType.LIMIT,
+            limit_price=limit_price,
+        )
+
+    def list_open_orders_detailed(self) -> list[Order]:
+        """
+        Get detailed list of all open orders.
+
+        Returns:
+            List of Order objects for all open orders
+        """
+        # Mock broker fills immediately, so return empty list
+        # In real scenarios, would filter by pending status
+        open_orders = []
+        for order in self.orders.values():
+            if order.status == OrderStatus.PENDING:
+                open_orders.append(order)
+        return open_orders
 
 
 class AlpacaBroker(Broker):
@@ -436,6 +578,120 @@ class AlpacaBroker(Broker):
                 last=Decimal("100.05"),
                 timestamp=datetime.now(),
             )
+
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        Cancel an order by broker order ID.
+
+        Args:
+            order_id: Broker order ID to cancel
+
+        Returns:
+            True if cancellation succeeded
+        """
+        try:
+            from alpaca.trading.requests import CancelOrderResponse
+
+            self.client.cancel_order_by_id(order_id)
+            return True
+        except Exception:
+            return False
+
+    def cancel_order_by_client_id(self, client_order_id: str) -> bool:
+        """
+        Cancel an order by client order ID.
+
+        Args:
+            client_order_id: Client order ID to cancel
+
+        Returns:
+            True if cancellation succeeded
+        """
+        try:
+            # Alpaca supports canceling by client order ID
+            # We need to get the order first, then cancel by ID
+            from alpaca.trading.requests import GetOrdersRequest
+            from alpaca.trading.enums import QueryOrderStatus
+
+            # Get all orders to find the one with matching client_order_id
+            request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            orders = self.client.get_orders(filter=request)
+
+            for order in orders:
+                if order.client_order_id == client_order_id:
+                    return self.cancel_order(str(order.id))
+
+            return False
+        except Exception:
+            return False
+
+    def replace_order(
+        self, order_id: str, limit_price: Decimal, quantity: int | None = None
+    ) -> Order:
+        """
+        Replace/modify an existing order using Alpaca's replace endpoint.
+
+        Args:
+            order_id: Broker order ID to replace
+            limit_price: New limit price
+            quantity: New quantity (optional, keeps existing if None)
+
+        Returns:
+            New Order object
+        """
+        try:
+            from alpaca.trading.requests import ReplaceOrderRequest
+
+            # Build replace request
+            replace_params = {"limit_price": float(limit_price)}
+            if quantity is not None:
+                replace_params["qty"] = quantity
+
+            request = ReplaceOrderRequest(**replace_params)
+            new_order = self.client.replace_order_by_id(order_id, request)
+            return self._convert_alpaca_order(new_order)
+        except Exception as e:
+            # If replace fails, fall back to cancel + new
+            # Get the old order details first
+            try:
+                old_order_obj = self.client.get_order_by_id(order_id)
+                old_order = self._convert_alpaca_order(old_order_obj)
+
+                # Cancel old order
+                self.cancel_order(order_id)
+
+                # Create new order
+                new_client_order_id = f"{old_order.symbol}-replace-{uuid.uuid4()}"
+                new_quantity = quantity if quantity is not None else old_order.quantity
+
+                return self.submit_order(
+                    symbol=old_order.symbol,
+                    side=old_order.side,
+                    quantity=new_quantity,
+                    client_order_id=new_client_order_id,
+                    order_type=OrderType.LIMIT,
+                    limit_price=limit_price,
+                )
+            except Exception as inner_e:
+                raise ValueError(f"Failed to replace order: {inner_e}") from inner_e
+
+    def list_open_orders_detailed(self) -> list[Order]:
+        """
+        Get detailed list of all open orders.
+
+        Returns:
+            List of Order objects for all open orders
+        """
+        try:
+            from alpaca.trading.requests import GetOrdersRequest
+            from alpaca.trading.enums import QueryOrderStatus
+
+            request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            alpaca_orders = self.client.get_orders(filter=request)
+
+            return [self._convert_alpaca_order(order) for order in alpaca_orders]
+        except Exception:
+            return []
 
     def _convert_alpaca_order(self, alpaca_order) -> Order:
         """

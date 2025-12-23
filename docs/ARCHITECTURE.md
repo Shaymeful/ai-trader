@@ -95,14 +95,49 @@ On startup, the bot reconciles its local state with the broker's actual state to
 ---
 
 ## CLI Flags
-- `--mode {dry-run,paper,live}`
-- `--preflight`
-- `--once`
-- `--max-iterations` (alias: `--iterations`) - Controls trading loop iterations
-- `--compute-after-hours`
-- `--allow-after-hours-orders`
-- `--paper-test-order SYMBOL QTY`
+
+### Core Flags
+- `--mode {dry-run,paper,live}` - Trading mode
+- `--preflight` - Validate configuration and connectivity
+- `--once` - Run exactly 1 trading loop iteration
+- `--max-iterations N` (alias: `--iterations`) - Controls trading loop iterations (default: 5)
+- `--compute-after-hours` - Fetch bars and compute indicators when market closed
+- `--allow-after-hours-orders` - Allow order submission when market closed (paper/dry-run only)
+- `--paper-test-order SYMBOL QTY` - Submit single test MARKET order in paper mode and exit
+- `--test-order` - Submit test LIMIT buy (1 share) for first symbol in LIVE mode and exit
 - `--reconcile-only` - Reconcile state with broker and exit (no trading loop)
+
+### Order Management Flags (Live Mode Only)
+All order management commands require:
+- `--mode live`
+- `--i-understand-live-trading`
+- `ENABLE_LIVE_TRADING=true` environment variable
+
+**Commands:**
+- `--list-open-orders` - List all open orders and exit
+- `--cancel-order-id ORDER_ID` - Cancel order by broker order ID and exit
+- `--cancel-client-order-id CLIENT_ORDER_ID` - Cancel order by client order ID and exit
+- `--replace-order-id ORDER_ID --limit-price PRICE [--qty QUANTITY]` - Replace/modify order and exit
+
+**Examples:**
+```bash
+# List open orders
+python -m src.app --mode live --i-understand-live-trading --list-open-orders
+
+# Cancel order by ID
+python -m src.app --mode live --i-understand-live-trading --cancel-order-id abc-123
+
+# Cancel order by client ID
+python -m src.app --mode live --i-understand-live-trading --cancel-client-order-id test-xyz
+
+# Replace order with new limit price
+python -m src.app --mode live --i-understand-live-trading \
+  --replace-order-id abc-123 --limit-price 150.50
+
+# Replace order with new limit price and quantity
+python -m src.app --mode live --i-understand-live-trading \
+  --replace-order-id abc-123 --limit-price 150.50 --qty 10
+```
 
 ### Flag Aliases
 - `--iterations` works identically to `--max-iterations`
@@ -136,9 +171,43 @@ When a signal is generated but blocked by a gate:
 ---
 
 ## Safety Gates
-- Live trading requires explicit acknowledgment flag
-- After-hours order submission blocked by default
+
+### Live Trading Mode Gates
+All operations involving the live Alpaca API require **triple authentication**:
+1. `--mode live` CLI flag
+2. `--i-understand-live-trading` CLI flag
+3. `ENABLE_LIVE_TRADING=true` environment variable
+
+These gates apply to:
+- Normal trading loop (`run_trading_loop`)
+- Test order submission (`--test-order`)
+- Order management commands (`--list-open-orders`, `--cancel-order-id`, `--cancel-client-order-id`, `--replace-order-id`)
+
+**Fail-Fast Behavior:**
+- Gates are checked **before any file I/O, logging, or API calls**
+- Missing safety flags cause immediate `ValueError` with clear error message
+- No partial operations - either all gates pass or operation aborts immediately
+
+### Order Management Safety Gates
+Order management commands enforce the same triple authentication as live trading.
+
+**Additional Requirements:**
+- `--replace-order-id`: Requires `--limit-price` parameter
+- `--replace-order-id`: Validates replacement through RiskManager (notional/exposure checks)
+- Cancel operations: Verify order status after cancellation attempt
+- Replace operations: Use Alpaca replace endpoint if available, fallback to cancel+new
+
+**Validation Order:**
+1. Check `--mode live` (must be live Alpaca API endpoint)
+2. Check `--i-understand-live-trading` flag
+3. Check `ENABLE_LIVE_TRADING=true` env var
+4. Check API credentials (ALPACA_API_KEY, ALPACA_SECRET_KEY)
+5. For replace: Validate through RiskManager before submitting
+
+### Other Safety Gates
+- After-hours order submission blocked by default (use `--allow-after-hours-orders` in paper/dry-run only)
 - Paper test order cannot run in live mode
+- Live mode cannot use `--allow-after-hours-orders`
 
 ---
 
