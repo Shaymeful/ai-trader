@@ -36,6 +36,42 @@ established behavior.
 
 ---
 
+## Startup Reconciliation
+
+### Purpose
+On startup, the bot reconciles its local state with the broker's actual state to ensure consistency after crashes, restarts, or manual interventions.
+
+### Reconciliation Process
+1. **Open Orders Sync**: Queries broker for open orders and updates `state.json` to match
+   - Adds any broker orders not in local state
+   - Removes any local orders no longer open at broker
+   - Logs all additions and removals
+
+2. **Position Sync**: Queries broker for current positions and updates risk manager
+   - Syncs quantities and average prices for matching positions
+   - Adds new positions found at broker
+   - Removes local positions not at broker
+   - Logs all changes
+
+### CLI Support
+- Runs automatically before every trading loop
+- `--reconcile-only` flag: Perform reconciliation and exit (no trading loop)
+  - Prints summary to stdout
+  - Useful for diagnostics and state verification
+
+### Safety
+- No orders are canceled or modified during reconciliation
+- Only reads broker state and updates local tracking
+- Handles broker API errors gracefully (logs warnings, continues)
+
+### Implementation
+- `src/app/reconciliation.py`: Core reconciliation logic
+- `Broker.get_open_orders()`: Returns set of client_order_ids
+- `Broker.get_positions()`: Returns dict of symbol -> (quantity, avg_price)
+- Integrated into `run_trading_loop()` after broker/risk manager initialization
+
+---
+
 ## CLI Flags
 - `--mode {dry-run,paper,live}`
 - `--preflight`
@@ -44,6 +80,7 @@ established behavior.
 - `--compute-after-hours`
 - `--allow-after-hours-orders`
 - `--paper-test-order SYMBOL QTY`
+- `--reconcile-only` - Reconcile state with broker and exit (no trading loop)
 
 ### Flag Aliases
 - `--iterations` works identically to `--max-iterations`

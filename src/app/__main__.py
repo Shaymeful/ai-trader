@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from src.app.config import is_live_trading_mode, load_config
 from src.app.models import FillRecord, OrderRecord, TradeRecord
 from src.app.order_pipeline import submit_signal_order
+from src.app.reconciliation import reconcile_with_broker
 from src.app.state import load_state, save_state
 from src.broker import AlpacaBroker, MockBroker
 from src.data import AlpacaDataProvider, MockDataProvider
@@ -165,6 +166,12 @@ Examples:
         "--allow-after-hours-orders",
         action="store_true",
         help="Allow order submission when market is closed (requires --compute-after-hours, refused in live mode)",
+    )
+
+    parser.add_argument(
+        "--reconcile-only",
+        action="store_true",
+        help="Reconcile state with broker (sync orders/positions) and exit without running trading loop",
     )
 
     return parser.parse_args(argv)
@@ -421,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
             max_iterations=args.max_iterations or iterations,
             compute_after_hours=args.compute_after_hours,
             allow_after_hours_orders=args.allow_after_hours_orders,
+            reconcile_only=args.reconcile_only,
         )
         return 0
     except Exception as e:
@@ -514,6 +522,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             - max_iterations: Maximum iterations (overrides iterations param)
             - compute_after_hours: Fetch bars and compute signals even when market closed
             - allow_after_hours_orders: Allow order submission when market closed (requires compute_after_hours)
+            - reconcile_only: Reconcile state with broker and exit without running trading loop
     """
     # Extract CLI overrides
     mode_override = kwargs.get("mode")
@@ -522,6 +531,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     max_iterations = kwargs.get("max_iterations")
     compute_after_hours = kwargs.get("compute_after_hours", False)
     allow_after_hours_orders = kwargs.get("allow_after_hours_orders", False)
+    reconcile_only = kwargs.get("reconcile_only", False)
 
     # Use max_iterations if provided
     if max_iterations is not None:
@@ -640,6 +650,32 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         # Initialize risk manager and strategy
         risk_manager = RiskManager(config)
         strategy = SMAStrategy(config)
+
+        # Reconcile state with broker before starting trading loop
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("RECONCILIATION")
+        logger.info("=" * 60)
+        reconciliation_result = reconcile_with_broker(config, broker, state, risk_manager)
+        logger.info("=" * 60)
+        logger.info("")
+
+        # If reconcile-only mode, print summary and exit
+        if reconcile_only:
+            logger.info("Reconcile-only mode: Exiting without running trading loop")
+            # Save state after reconciliation when in reconcile-only mode
+            save_state(state)
+            print("\n" + "=" * 60)
+            print("RECONCILIATION SUMMARY")
+            print("=" * 60)
+            print(f"Broker open orders: {reconciliation_result.broker_open_orders_count}")
+            print(f"Local orders added: {reconciliation_result.local_orders_added}")
+            print(f"Broker positions: {reconciliation_result.broker_positions_count}")
+            print(f"Positions synced: {reconciliation_result.positions_synced}")
+            print(f"Positions added: {reconciliation_result.positions_added}")
+            print(f"Positions removed: {reconciliation_result.positions_removed}")
+            print("=" * 60)
+            return
 
         # Trading loop
         logger.info("Starting trading loop...")

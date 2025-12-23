@@ -73,6 +73,16 @@ class Broker(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_positions(self) -> dict[str, tuple[int, Decimal]]:
+        """
+        Get current positions from broker.
+
+        Returns:
+            Dictionary mapping symbol to (quantity, avg_price) tuples
+        """
+        pass
+
 
 class MockBroker(Broker):
     """Mock broker for paper trading simulation."""
@@ -81,6 +91,7 @@ class MockBroker(Broker):
         self.orders = {}  # broker_order_id -> Order
         self.client_order_map = {}  # client_order_id -> broker_order_id
         self.fill_delay = 0  # Instant fills for mock
+        self.positions: dict[str, tuple[int, Decimal]] = {}  # symbol -> (qty, avg_price)
 
     def submit_order(
         self,
@@ -133,6 +144,26 @@ class MockBroker(Broker):
 
         self.orders[broker_order_id] = order
         self.client_order_map[client_order_id] = broker_order_id
+
+        # Update positions
+        qty_change = quantity if side == OrderSide.BUY else -quantity
+        if symbol in self.positions:
+            old_qty, old_avg = self.positions[symbol]
+            new_qty = old_qty + qty_change
+            if new_qty == 0:
+                del self.positions[symbol]
+            elif new_qty > 0:
+                if old_qty > 0 and qty_change > 0:
+                    # Adding to position
+                    new_avg = ((old_avg * old_qty) + (fill_price * quantity)) / new_qty
+                    self.positions[symbol] = (new_qty, new_avg)
+                else:
+                    # Reducing position
+                    self.positions[symbol] = (new_qty, old_avg)
+        else:
+            if qty_change > 0:
+                self.positions[symbol] = (qty_change, fill_price)
+
         return order
 
     def get_order_status(self, order_id: str) -> Order:
@@ -172,6 +203,15 @@ class MockBroker(Broker):
             True if order exists
         """
         return client_order_id in self.client_order_map
+
+    def get_positions(self) -> dict[str, tuple[int, Decimal]]:
+        """
+        Get current positions from mock broker.
+
+        Returns:
+            Dictionary mapping symbol to (quantity, avg_price) tuples
+        """
+        return self.positions.copy()
 
 
 class AlpacaBroker(Broker):
@@ -294,6 +334,25 @@ class AlpacaBroker(Broker):
             return True
         except Exception:
             return False
+
+    def get_positions(self) -> dict[str, tuple[int, Decimal]]:
+        """
+        Get current positions from Alpaca.
+
+        Returns:
+            Dictionary mapping symbol to (quantity, avg_price) tuples
+        """
+        positions_dict = {}
+        try:
+            positions = self.client.get_all_positions()
+            for pos in positions:
+                qty = int(pos.qty)
+                avg_price = Decimal(str(pos.avg_entry_price))
+                positions_dict[pos.symbol] = (qty, avg_price)
+        except Exception:
+            # If we can't get positions, return empty dict
+            pass
+        return positions_dict
 
     def _convert_alpaca_order(self, alpaca_order) -> Order:
         """
