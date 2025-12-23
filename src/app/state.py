@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -16,6 +17,10 @@ class BotState(BaseModel):
     )
     submitted_client_order_ids: set[str] = Field(
         default_factory=set, description="Client order IDs submitted across runs"
+    )
+    daily_realized_pnl: dict[str, str] = Field(
+        default_factory=dict,
+        description="Daily realized PnL by date (YYYY-MM-DD -> decimal string)",
     )
 
 
@@ -58,6 +63,43 @@ def save_state(state: BotState, state_file: Path = Path("out/state.json")):
 
     with open(state_file, "w") as f:
         json.dump(state_dict, f, indent=2)
+
+
+def get_daily_realized_pnl(state: BotState, date: datetime | None = None) -> Decimal:
+    """
+    Get realized PnL for a specific date.
+
+    Args:
+        state: Bot state
+        date: Date to query (defaults to today)
+
+    Returns:
+        Realized PnL for the date (Decimal)
+    """
+    if date is None:
+        date = datetime.now()
+
+    date_key = date.strftime("%Y-%m-%d")
+    pnl_str = state.daily_realized_pnl.get(date_key, "0")
+    return Decimal(pnl_str)
+
+
+def update_daily_realized_pnl(state: BotState, pnl_delta: Decimal, date: datetime | None = None):
+    """
+    Update realized PnL for a specific date.
+
+    Args:
+        state: Bot state to update
+        pnl_delta: PnL change to add
+        date: Date to update (defaults to today)
+    """
+    if date is None:
+        date = datetime.now()
+
+    date_key = date.strftime("%Y-%m-%d")
+    current_pnl = get_daily_realized_pnl(state, date)
+    new_pnl = current_pnl + pnl_delta
+    state.daily_realized_pnl[date_key] = str(new_pnl)
 
 
 def build_client_order_id(

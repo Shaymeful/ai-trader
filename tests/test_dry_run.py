@@ -42,6 +42,8 @@ def config_dry_run():
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=Decimal("1000"),
+        max_order_notional=Decimal("10000"),
+        max_positions_notional=Decimal("50000"),
         allowed_symbols=["AAPL", "MSFT"],
         dry_run=True,
     )
@@ -55,6 +57,8 @@ def config_normal():
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=Decimal("1000"),
+        max_order_notional=Decimal("10000"),
+        max_positions_notional=Decimal("50000"),
         allowed_symbols=["AAPL", "MSFT"],
         dry_run=False,
     )
@@ -81,11 +85,14 @@ def risk_manager(config_normal):
 @pytest.fixture
 def signal():
     """Create test signal."""
+    from decimal import Decimal
+
     return Signal(
         symbol="AAPL",
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),
         reason="Test signal",
+        price=Decimal("150.00"),
     )
 
 

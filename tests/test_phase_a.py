@@ -196,6 +196,8 @@ def test_idempotency_prevents_duplicate_orders(temp_dir, monkeypatch):
     from src.data import MockDataProvider
 
     monkeypatch.setenv("MODE", "mock")
+    monkeypatch.setenv("MAX_ORDER_NOTIONAL", "10000")
+    monkeypatch.setenv("MAX_POSITIONS_NOTIONAL", "50000")
 
     # Create fixed bar data that will trigger exactly one BUY signal for AAPL
     # Strategy detects CROSSOVER: previous_fast <= previous_slow AND current_fast > current_slow

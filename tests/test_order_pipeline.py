@@ -36,6 +36,8 @@ def config():
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=Decimal("1000"),
+        max_order_notional=Decimal("10000"),
+        max_positions_notional=Decimal("50000"),
         allowed_symbols=["AAPL", "MSFT"],
     )
 
@@ -61,11 +63,14 @@ def risk_manager(config):
 @pytest.fixture
 def signal():
     """Create test signal."""
+    from decimal import Decimal
+
     return Signal(
         symbol="AAPL",
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),
         reason="Test signal",
+        price=Decimal("150.00"),
     )
 
 
@@ -486,7 +491,11 @@ def test_csv_files_only_written_on_success(temp_dir, config, broker, risk_manage
 def test_deterministic_client_order_id(temp_dir, config, broker, risk_manager, state, write_fns):
     """Test that client_order_id is deterministic based on signal."""
     signal1 = Signal(
-        symbol="AAPL", side=OrderSide.BUY, timestamp=datetime(2024, 1, 15, 10, 30, 0), reason="Test"
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        timestamp=datetime(2024, 1, 15, 10, 30, 0),
+        reason="Test",
+        price=Decimal("150.00"),
     )
 
     signal2 = Signal(
@@ -494,6 +503,7 @@ def test_deterministic_client_order_id(temp_dir, config, broker, risk_manager, s
         side=OrderSide.BUY,
         timestamp=datetime(2024, 1, 15, 10, 30, 0),  # Same timestamp
         reason="Different reason",  # Reason doesn't affect ID
+        price=Decimal("150.00"),
     )
 
     result1 = submit_signal_order(

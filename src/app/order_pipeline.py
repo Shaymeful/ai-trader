@@ -129,6 +129,38 @@ def submit_signal_order(
 
     logger.info("    Quantity check: PASSED")
 
+    # Step 5a: Risk check - order notional
+    if signal.price is None:
+        logger.error("    Signal price is None, cannot check notional")
+        return OrderSubmissionResult(
+            success=False,
+            reason="Signal price is required for notional check",
+            client_order_id=client_order_id,
+        )
+
+    notional_check = risk_manager.check_order_notional(quantity, signal.price)
+    if not notional_check:
+        logger.warning(f"    Notional check FAILED: {notional_check.reason}")
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Notional check failed: {notional_check.reason}",
+            client_order_id=client_order_id,
+        )
+
+    logger.info("    Notional check: PASSED")
+
+    # Step 5b: Risk check - positions exposure
+    exposure_check = risk_manager.check_positions_exposure(quantity, signal.price)
+    if not exposure_check:
+        logger.warning(f"    Exposure check FAILED: {exposure_check.reason}")
+        return OrderSubmissionResult(
+            success=False,
+            reason=f"Exposure check failed: {exposure_check.reason}",
+            client_order_id=client_order_id,
+        )
+
+    logger.info("    Exposure check: PASSED")
+
     # DRY-RUN MODE: Stop before broker call
     if config.dry_run:
         logger.warning(
