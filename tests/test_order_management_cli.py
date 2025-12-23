@@ -460,7 +460,10 @@ class TestExitCodes:
             mock_broker_cls.return_value = mock_broker
 
             exit_code = run_cancel_order(
-                mock_config, i_understand_live_trading=False, order_id="test-id", client_order_id=None
+                mock_config,
+                i_understand_live_trading=False,
+                order_id="test-id",
+                client_order_id=None,
             )
             assert exit_code == 0
 

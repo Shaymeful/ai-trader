@@ -1316,7 +1316,9 @@ def test_replace_order_requires_live_mode(monkeypatch, capsys):
 
         mock_broker_cls.return_value = mock_broker
 
-        result = main(["--mode", "paper", "--replace-order-id", "order-123", "--limit-price", "100.50"])
+        result = main(
+            ["--mode", "paper", "--replace-order-id", "order-123", "--limit-price", "100.50"]
+        )
 
         assert result == 0  # Should succeed in paper mode
         mock_loop.assert_not_called()

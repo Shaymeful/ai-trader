@@ -578,7 +578,9 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
         return 1
 
 
-def _check_live_trading_safety_gates(config: Config, i_understand_live_trading: bool, command: str) -> tuple[bool, str | None]:
+def _check_live_trading_safety_gates(
+    config: Config, i_understand_live_trading: bool, command: str
+) -> tuple[bool, str | None]:
     """
     Check if live trading safety gates are satisfied.
 
@@ -643,7 +645,9 @@ def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int
 
     # Safety gate checks for live mode only
     if is_live:
-        passes, error_msg = _check_live_trading_safety_gates(config, i_understand_live_trading, "--list-open-orders")
+        passes, error_msg = _check_live_trading_safety_gates(
+            config, i_understand_live_trading, "--list-open-orders"
+        )
         if not passes:
             print(error_msg, file=sys.stderr)
             return 1
@@ -754,7 +758,9 @@ def run_cancel_order(
 
     # Safety gate checks for live mode only
     if is_live:
-        passes, error_msg = _check_live_trading_safety_gates(config, i_understand_live_trading, "--cancel-order")
+        passes, error_msg = _check_live_trading_safety_gates(
+            config, i_understand_live_trading, "--cancel-order"
+        )
         if not passes:
             print(error_msg, file=sys.stderr)
             return 1
@@ -863,7 +869,9 @@ def run_replace_order(
 
     # Safety gate checks for live mode only
     if is_live:
-        passes, error_msg = _check_live_trading_safety_gates(config, i_understand_live_trading, "--replace-order")
+        passes, error_msg = _check_live_trading_safety_gates(
+            config, i_understand_live_trading, "--replace-order"
+        )
         if not passes:
             print(error_msg, file=sys.stderr)
             return 1
