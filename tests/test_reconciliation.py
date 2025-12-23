@@ -1,6 +1,7 @@
 """Tests for reconciliation module."""
 
 from decimal import Decimal
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -9,6 +10,7 @@ from src.app.models import Position
 from src.app.reconciliation import reconcile_with_broker
 from src.app.state import BotState
 from src.broker import MockBroker
+from src.broker.base import AlpacaBroker
 from src.risk import RiskManager
 
 
@@ -268,3 +270,45 @@ def test_reconcile_handles_broker_errors(config, broker, state, risk_manager):
     # Should have attempted but gotten 0 results due to errors
     assert result.broker_open_orders_count == 0
     assert result.broker_positions_count == 0
+
+
+def test_alpaca_broker_get_open_orders_uses_correct_request():
+    """Test that AlpacaBroker.get_open_orders uses GetOrdersRequest correctly."""
+    # Create AlpacaBroker with dummy credentials
+    with patch("alpaca.trading.TradingClient") as mock_trading_client_class:
+        mock_client = Mock()
+        mock_trading_client_class.return_value = mock_client
+
+        broker = AlpacaBroker(
+            api_key="test_key", secret_key="test_secret", base_url="https://paper-api.alpaca.markets"
+        )
+
+        # Mock the orders response
+        mock_order1 = Mock()
+        mock_order1.client_order_id = "order-1"
+        mock_order2 = Mock()
+        mock_order2.client_order_id = "order-2"
+        mock_order3 = Mock()
+        mock_order3.client_order_id = None  # Some orders might not have client_order_id
+
+        mock_client.get_orders.return_value = [mock_order1, mock_order2, mock_order3]
+
+        # Call get_open_orders
+        result = broker.get_open_orders()
+
+        # Verify it called get_orders with a GetOrdersRequest
+        assert mock_client.get_orders.called
+        call_args = mock_client.get_orders.call_args
+
+        # Check that filter parameter was passed
+        assert "filter" in call_args.kwargs
+
+        # The filter should be a GetOrdersRequest with status=QueryOrderStatus.OPEN
+        from alpaca.trading.requests import GetOrdersRequest
+
+        request = call_args.kwargs["filter"]
+        assert isinstance(request, GetOrdersRequest)
+
+        # Verify the result contains only orders with client_order_ids
+        assert result == {"order-1", "order-2"}
+        assert "order-3" not in result  # Should be filtered out

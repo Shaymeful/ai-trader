@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -67,26 +68,30 @@ def test_calculate_sma_insufficient_data():
 
 def test_is_market_hours_during_hours(config):
     """Test market hours check during trading hours."""
-    dt = datetime(2024, 1, 15, 10, 0)  # Monday 10 AM
-    assert is_market_hours(dt, config) is True
+    eastern = ZoneInfo("America/New_York")
+    dt = datetime(2024, 1, 15, 10, 0, tzinfo=eastern)  # Monday 10 AM EST
+    assert is_market_hours(config, dt) is True
 
 
 def test_is_market_hours_before_open(config):
     """Test market hours check before market open."""
-    dt = datetime(2024, 1, 15, 9, 0)  # Monday 9 AM (before 9:30)
-    assert is_market_hours(dt, config) is False
+    eastern = ZoneInfo("America/New_York")
+    dt = datetime(2024, 1, 15, 9, 0, tzinfo=eastern)  # Monday 9 AM EST (before 9:30)
+    assert is_market_hours(config, dt) is False
 
 
 def test_is_market_hours_after_close(config):
     """Test market hours check after market close."""
-    dt = datetime(2024, 1, 15, 17, 0)  # Monday 5 PM
-    assert is_market_hours(dt, config) is False
+    eastern = ZoneInfo("America/New_York")
+    dt = datetime(2024, 1, 15, 17, 0, tzinfo=eastern)  # Monday 5 PM EST
+    assert is_market_hours(config, dt) is False
 
 
 def test_is_market_hours_weekend(config):
     """Test market hours check on weekend."""
-    dt = datetime(2024, 1, 13, 10, 0)  # Saturday 10 AM
-    assert is_market_hours(dt, config) is False
+    eastern = ZoneInfo("America/New_York")
+    dt = datetime(2024, 1, 13, 10, 0, tzinfo=eastern)  # Saturday 10 AM EST
+    assert is_market_hours(config, dt) is False
 
 
 def test_golden_cross_generates_buy_signal(strategy):

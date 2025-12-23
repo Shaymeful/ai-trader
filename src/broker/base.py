@@ -359,8 +359,10 @@ class AlpacaBroker(Broker):
             Set of client order IDs
         """
         from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
 
-        open_orders = self.client.get_orders(filter=QueryOrderStatus.OPEN)
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        open_orders = self.client.get_orders(filter=request)
         return {order.client_order_id for order in open_orders if order.client_order_id}
 
     def order_exists(self, client_order_id: str) -> bool:

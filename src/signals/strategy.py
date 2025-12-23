@@ -2,32 +2,59 @@
 
 from datetime import datetime, time
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from src.app.config import Config
 from src.app.models import Bar, OrderSide, Signal
 
 
-def is_market_hours(dt: datetime, config: Config) -> bool:
+def get_exchange_time() -> datetime:
     """
-    Check if given datetime is within market hours.
-
-    Args:
-        dt: Datetime to check
-        config: Configuration with market hours
+    Get current time in US Eastern timezone (America/New_York).
 
     Returns:
-        True if within market hours
+        Current datetime in US Eastern timezone
     """
+    eastern = ZoneInfo("America/New_York")
+    return datetime.now(eastern)
+
+
+def is_market_hours(config: Config, current_time: datetime | None = None) -> bool:
+    """
+    Check if current time is within market hours.
+
+    Uses actual current time in US Eastern timezone, not bar timestamps.
+    Respects weekends (no trading on Saturday/Sunday).
+
+    Args:
+        config: Configuration with market hours
+        current_time: Optional datetime to check (defaults to current exchange time)
+
+    Returns:
+        True if within market hours on a weekday
+    """
+    if current_time is None:
+        current_time = get_exchange_time()
+
+    # Ensure we're working with timezone-aware datetime in Eastern time
+    eastern = ZoneInfo("America/New_York")
+    if current_time.tzinfo is None:
+        # If naive, assume it's already Eastern time
+        current_time = current_time.replace(tzinfo=eastern)
+    else:
+        # Convert to Eastern time if it's in a different timezone
+        current_time = current_time.astimezone(eastern)
+
+    # Check if weekday (0=Monday, 4=Friday, 5=Saturday, 6=Sunday)
+    if current_time.weekday() >= 5:
+        return False
+
+    # Check time bounds
     market_open = time(hour=config.market_open_hour, minute=config.market_open_minute)
     market_close = time(hour=config.market_close_hour, minute=config.market_close_minute)
 
-    current_time = dt.time()
-
-    # Check if weekday (0=Monday, 6=Sunday)
-    if dt.weekday() >= 5:  # Saturday or Sunday
-        return False
-
-    return market_open <= current_time <= market_close
+    current_time_only = current_time.time()
+    return market_open <= current_time_only <= market_close
 
 
 def calculate_sma(bars: list[Bar], period: int) -> Decimal | None:
@@ -85,9 +112,8 @@ class SMAStrategy:
         if len(bars) < self.slow_period + 1:
             return None
 
-        # Check market hours
-        latest_bar = bars[-1]
-        if not is_market_hours(latest_bar.timestamp, self.config):
+        # Check market hours using actual current time (not bar timestamp)
+        if not is_market_hours(self.config):
             return None
 
         # Calculate SMAs for current and previous bar
@@ -101,6 +127,9 @@ class SMAStrategy:
 
         if None in (current_fast, current_slow, previous_fast, previous_slow):
             return None
+
+        # Get latest bar for signal timestamp and price
+        latest_bar = bars[-1]
 
         # Check for crossover
         # BUY signal: fast was below slow, now above (golden cross)

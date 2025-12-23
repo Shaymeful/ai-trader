@@ -584,3 +584,263 @@ def test_compute_after_hours_passed_to_loop(monkeypatch):
     call_kwargs = mock_loop.call_args.kwargs
     assert call_kwargs["compute_after_hours"] is True
     assert call_kwargs["allow_after_hours_orders"] is False
+
+
+def test_parse_args_test_order_flag():
+    """Test parsing --test-order flag."""
+    args = parse_args(["--test-order"])
+    assert args.test_order is True
+
+
+def test_parse_args_test_order_flag_default_false():
+    """Test that --test-order defaults to False."""
+    args = parse_args([])
+    assert args.test_order is False
+
+
+def test_test_order_requires_live_mode(monkeypatch, capsys):
+    """Test that --test-order requires --mode live."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config to return a config (mode override will be applied by main)
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "paper", "--test-order"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --mode live" in captured.err
+
+
+def test_test_order_requires_i_understand_live_trading(monkeypatch, capsys):
+    """Test that --test-order requires --i-understand-live-trading flag."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Mock load_config to return a config (mode override will be applied by main)
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Don't set --i-understand-live-trading
+    result = main(["--mode", "live", "--test-order"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires --i-understand-live-trading" in captured.err
+
+
+def test_test_order_requires_enable_live_trading_env(monkeypatch, capsys):
+    """Test that --test-order requires ENABLE_LIVE_TRADING=true env var."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set API keys
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+
+    # Don't set ENABLE_LIVE_TRADING or set it to false
+    monkeypatch.delenv("ENABLE_LIVE_TRADING", raising=False)
+
+    # Mock load_config to return a config (mode override will be applied by main)
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "live", "--i-understand-live-trading", "--test-order"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires ENABLE_LIVE_TRADING=true" in captured.err
+
+
+def test_test_order_requires_api_keys(monkeypatch, capsys):
+    """Test that --test-order requires Alpaca API credentials."""
+    from src.app.config import Config
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Clear API keys
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+    # Set ENABLE_LIVE_TRADING
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config to return a config (mode override will be applied by main)
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    result = main(["--mode", "live", "--i-understand-live-trading", "--test-order"])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "requires Alpaca API credentials" in captured.err
+
+
+def test_test_order_success(monkeypatch, capsys):
+    """Test that --test-order works correctly with all safety gates passed."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Order, OrderSide, OrderStatus, OrderType, Quote
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config to return a config (mode override will be applied by main)
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=1000,
+        max_order_notional=10000,
+        max_positions_notional=50000,
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock the broker and quote
+    mock_quote = Quote(
+        symbol="AAPL",
+        bid=Decimal("150.00"),
+        ask=Decimal("150.10"),
+        last=Decimal("150.05"),
+        timestamp=datetime.now(),
+    )
+
+    mock_order = Order(
+        id="test-order-123",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT,
+        quantity=1,
+        price=Decimal("149.99"),
+        status=OrderStatus.PENDING,
+        submitted_at=datetime.now(),
+    )
+
+    mock_broker = MagicMock()
+    mock_broker.get_quote.return_value = mock_quote
+    mock_broker.submit_order.return_value = mock_order
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        result = main(["--mode", "live", "--i-understand-live-trading", "--test-order"])
+
+    assert result == 0
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "TEST ORDER MODE" in captured.out
+    assert "LIVE TRADING" in captured.out
+    assert "All safety gates passed" in captured.out
+    assert "AAPL" in captured.out
+    assert "1 share" in captured.out
+    assert "TEST ORDER SUBMITTED SUCCESSFULLY" in captured.out
+    assert "test-order-123" in captured.out
+
+
+def test_test_order_fails_risk_check(monkeypatch, capsys):
+    """Test that --test-order respects RiskManager checks."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from src.app.config import Config
+    from src.app.models import Quote
+
+    mock_loop = MagicMock()
+    monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
+
+    # Set all required environment variables
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
+
+    # Mock load_config  (CLI will override max_order_notional to very low value)
+    mock_config = Config(
+        mode="mock",
+        allowed_symbols=["AAPL"],
+        max_positions=5,
+        max_order_quantity=100,
+        max_daily_loss=Decimal("1000"),
+        max_order_notional=Decimal("10000"),
+        max_positions_notional=Decimal("50000"),
+    )
+    monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
+
+    # Mock the broker and quote
+    mock_quote = Quote(
+        symbol="AAPL",
+        bid=Decimal("150.00"),
+        ask=Decimal("150.10"),
+        last=Decimal("150.05"),
+        timestamp=datetime.now(),
+    )
+
+    mock_broker = MagicMock()
+    mock_broker.get_quote.return_value = mock_quote
+
+    with patch("src.app.__main__.AlpacaBroker", return_value=mock_broker):
+        # Use CLI override to set very low limit that will fail the check
+        result = main([
+            "--mode", "live",
+            "--i-understand-live-trading",
+            "--test-order",
+            "--max-order-notional", "1"
+        ])
+
+    assert result == 1
+    mock_loop.assert_not_called()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "failed risk check" in captured.err

@@ -6,6 +6,7 @@ import logging
 import sys
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,7 +19,7 @@ from src.app.state import load_state, save_state
 from src.broker import AlpacaBroker, MockBroker
 from src.data import AlpacaDataProvider, MockDataProvider
 from src.risk import RiskManager
-from src.signals import SMAStrategy, is_market_hours
+from src.signals import SMAStrategy, get_exchange_time, is_market_hours
 from src.signals.strategy import calculate_sma
 
 # Load .env file from repo root BEFORE any config/env checks
@@ -148,6 +149,14 @@ Examples:
         nargs=2,
         metavar=("SYMBOL", "QTY"),
         help="Submit a single test MARKET order in paper mode and exit (e.g., --paper-test-order AAPL 1)",
+    )
+
+    parser.add_argument(
+        "--test-order",
+        action="store_true",
+        help="Submit a single test LIMIT buy (1 share) for first symbol in LIVE mode and exit. "
+        "Requires: --mode live, --i-understand-live-trading, and ENABLE_LIVE_TRADING=true env var. "
+        "Order must pass RiskManager checks.",
     )
 
     parser.add_argument(
@@ -355,6 +364,175 @@ def run_paper_test_order(symbol: str, quantity: int) -> int:
         return 1
 
 
+def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
+    """
+    Submit a single test LIMIT buy order (1 share) for first symbol in LIVE mode.
+
+    Safety gates:
+    - Requires mode=live
+    - Requires --i-understand-live-trading flag
+    - Requires ENABLE_LIVE_TRADING=true environment variable
+    - Must pass RiskManager checks
+
+    Args:
+        config: Configuration with symbols and risk parameters
+        i_understand_live_trading: Whether user acknowledged live trading risks
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    import os
+
+    print("=" * 70)
+    print("TEST ORDER MODE - LIVE TRADING")
+    print("=" * 70)
+
+    # Safety gate 1: Check we're using live Alpaca API (not paper or dry-run)
+    # After mode override, --mode live sets alpaca_base_url to live API
+    if config.alpaca_base_url != "https://api.alpaca.markets":
+        print(
+            f"ERROR: --test-order requires --mode live (current base URL: {config.alpaca_base_url})",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Safety gate 2: Check --i-understand-live-trading flag
+    if not i_understand_live_trading:
+        print(
+            "ERROR: --test-order requires --i-understand-live-trading flag.\n"
+            "Live trading involves real money and real risk.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Safety gate 3: Check ENABLE_LIVE_TRADING environment variable
+    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
+    if enable_live_trading != "true":
+        print(
+            "ERROR: --test-order requires ENABLE_LIVE_TRADING=true environment variable.\n"
+            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("  [OK] All safety gates passed")
+    print("  [OK] Mode: live")
+    print("  [OK] User acknowledged live trading risks")
+    print("  [OK] ENABLE_LIVE_TRADING=true")
+
+    # Get first symbol
+    if not config.allowed_symbols:
+        print("ERROR: No symbols configured", file=sys.stderr)
+        return 1
+
+    symbol = config.allowed_symbols[0]
+    print(f"\n  Symbol: {symbol}")
+    print(f"  Quantity: 1 share")
+
+    # Check for API credentials
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        print(
+            "ERROR: Live test order requires Alpaca API credentials.\n"
+            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("  [OK] API credentials found")
+
+    # Initialize Alpaca broker for LIVE trading
+    try:
+        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
+        print("  [OK] Alpaca broker initialized (LIVE mode)")
+    except Exception as e:
+        print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
+        return 1
+
+    # Get current quote to determine limit price
+    try:
+        quote = broker.get_quote(symbol)
+        print(f"\n  Current quote:")
+        print(f"    Bid: ${quote.bid}")
+        print(f"    Ask: ${quote.ask}")
+        print(f"    Last: ${quote.last}")
+    except Exception as e:
+        print(f"ERROR: Failed to get quote for {symbol}: {e}", file=sys.stderr)
+        return 1
+
+    # Calculate limit price: bid - small offset (so it likely posts, not crosses)
+    # Use bid price, or fall back to last trade if bid is unavailable
+    base_price = quote.bid if quote.bid > 0 else quote.last
+    if base_price <= 0:
+        print(f"ERROR: Invalid price for {symbol}: bid={quote.bid}, last={quote.last}", file=sys.stderr)
+        return 1
+
+    # Offset: 0.01 (1 cent) below bid to ensure we post
+    limit_price = base_price - Decimal("0.01")
+    print(f"  Limit price: ${limit_price} (bid - $0.01)")
+
+    # Initialize RiskManager to validate order
+    from src.risk import RiskManager
+
+    risk_manager = RiskManager(config)
+    print("\n  Validating order through RiskManager...")
+
+    # Check order notional
+    notional_check = risk_manager.check_order_notional(1, limit_price)
+    if not notional_check.passed:
+        print(f"ERROR: Order failed risk check: {notional_check.reason}", file=sys.stderr)
+        return 1
+    print(f"    [OK] Order notional check passed")
+
+    # Check max positions exposure
+    exposure_check = risk_manager.check_positions_exposure(
+        new_order_quantity=1, new_order_price=limit_price
+    )
+    if not exposure_check.passed:
+        print(f"ERROR: Order failed risk check: {exposure_check.reason}", file=sys.stderr)
+        return 1
+    print(f"    [OK] Positions exposure check passed")
+
+    # Generate client order ID
+    client_order_id = f"test-{uuid.uuid4()}"
+    print(f"\n  Client order ID: {client_order_id}")
+
+    # Submit LIMIT order
+    try:
+        from src.app.models import OrderSide, OrderType
+
+        order = broker.submit_order(
+            symbol=symbol,
+            side=OrderSide.BUY,
+            quantity=1,
+            client_order_id=client_order_id,
+            order_type=OrderType.LIMIT,
+            limit_price=limit_price,
+        )
+        print("\n" + "=" * 70)
+        print("TEST ORDER SUBMITTED SUCCESSFULLY")
+        print("=" * 70)
+        print(f"  Order ID: {order.id}")
+        print(f"  Client Order ID: {client_order_id}")
+        print(f"  Status: {order.status.value}")
+        print(f"  Symbol: {order.symbol}")
+        print(f"  Side: {order.side.value}")
+        print(f"  Type: {order.type.value}")
+        print(f"  Quantity: {order.quantity}")
+        print(f"  Limit Price: ${order.price}")
+        if order.filled_price:
+            print(f"  Filled Price: ${order.filled_price}")
+        print("=" * 70)
+        print("\nWARNING: This was a REAL order in LIVE mode with real money.")
+        print("Monitor your Alpaca dashboard to track this order.")
+        return 0
+    except Exception as e:
+        print(f"ERROR: Failed to submit order: {e}", file=sys.stderr)
+        return 1
+
+
 def run_preflight_check(mode: str, base_url: str | None = None) -> int:
     """
     Run preflight checks for the given mode.
@@ -470,6 +648,74 @@ def main(argv: list[str] | None = None) -> int:
             args.mode = "paper"
 
         return run_paper_test_order(symbol, quantity)
+
+    # Handle live test order
+    if args.test_order:
+        # Load config to get symbols and risk parameters
+        try:
+            config = load_config()
+
+            # Apply mode override from CLI (same pattern as run_trading_loop)
+            if args.mode == "dry-run":
+                config.dry_run = True
+                # Keep existing mode (mock or alpaca)
+            elif args.mode == "paper":
+                config.mode = "alpaca"
+                config.alpaca_base_url = "https://paper-api.alpaca.markets"
+                config.dry_run = False
+            elif args.mode == "live":
+                config.mode = "alpaca"
+                config.alpaca_base_url = "https://api.alpaca.markets"
+                config.dry_run = False
+
+            # Apply symbols override from CLI
+            if args.symbols:
+                config.allowed_symbols = [s.strip() for s in args.symbols.split(",")]
+
+            # Apply risk limit overrides from CLI
+            if args.max_daily_loss is not None:
+                config.max_daily_loss = Decimal(str(args.max_daily_loss))
+            if args.max_order_notional is not None:
+                config.max_order_notional = Decimal(str(args.max_order_notional))
+            if args.max_positions_notional is not None:
+                config.max_positions_notional = Decimal(str(args.max_positions_notional))
+
+            # Apply cost control overrides from CLI
+            if args.use_limit_orders is not None:
+                config.use_limit_orders = args.use_limit_orders
+            if args.max_spread_bps is not None:
+                config.max_spread_bps = Decimal(str(args.max_spread_bps))
+            if args.min_edge_bps is not None:
+                config.min_edge_bps = Decimal(str(args.min_edge_bps))
+            if args.cost_diagnostics is not None:
+                config.cost_diagnostics = args.cost_diagnostics
+
+            # Apply symbol eligibility overrides from CLI
+            if args.min_avg_volume is not None:
+                config.min_avg_volume = args.min_avg_volume
+            if args.min_price is not None:
+                config.min_price = Decimal(str(args.min_price))
+            if args.max_price is not None:
+                config.max_price = Decimal(str(args.max_price))
+            if args.require_quote is not None:
+                config.require_quote = args.require_quote
+            if args.symbol_whitelist:
+                config.symbol_whitelist = (
+                    [s.strip() for s in args.symbol_whitelist.split(",") if s.strip()]
+                    if args.symbol_whitelist
+                    else []
+                )
+            if args.symbol_blacklist:
+                config.symbol_blacklist = (
+                    [s.strip() for s in args.symbol_blacklist.split(",") if s.strip()]
+                    if args.symbol_blacklist
+                    else []
+                )
+        except Exception as e:
+            print(f"ERROR: Failed to load config: {e}", file=sys.stderr)
+            return 1
+
+        return run_live_test_order(config, args.i_understand_live_trading)
 
     # Safety gate: require explicit acknowledgment for live trading
     if args.mode == "live" and not args.i_understand_live_trading:
@@ -1015,18 +1261,23 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                         continue
 
                     latest_bar = bars[-1]
-                    current_time = latest_bar.timestamp
+
+                    # Get actual exchange time (not bar timestamp)
+                    exchange_time = get_exchange_time()
+                    bar_timestamp = latest_bar.timestamp
 
                     # Log symbol processing start
                     logger.info(f"\n  Processing {symbol}:")
+                    logger.info(f"    Bar timestamp: {bar_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
                     logger.info(
-                        f"    Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')} ({current_time.strftime('%A')})"
+                        f"    Exchange time: {exchange_time.strftime('%Y-%m-%d %H:%M:%S %Z')} "
+                        f"({exchange_time.strftime('%A')})"
                     )
                     logger.info(f"    Bars fetched: {len(bars)}")
                     logger.info(f"    Current price: ${latest_bar.close}")
 
-                    # Check market hours
-                    in_market_hours = is_market_hours(current_time, config)
+                    # Check market hours using actual exchange time
+                    in_market_hours = is_market_hours(config)
                     market_open = f"{config.market_open_hour:02d}:{config.market_open_minute:02d}"
                     market_close = (
                         f"{config.market_close_hour:02d}:{config.market_close_minute:02d}"
@@ -1034,8 +1285,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
 
                     if not in_market_hours:
                         logger.info(
-                            f"    Market hours: CLOSED (current: {current_time.strftime('%H:%M')}, "
-                            f"allowed: {market_open}-{market_close} on weekdays)"
+                            f"    Market hours: CLOSED (exchange time: {exchange_time.strftime('%H:%M %Z')}, "
+                            f"trading hours: {market_open}-{market_close} on weekdays)"
                         )
                         if not compute_after_hours:
                             logger.info("    Signal: HOLD (market closed)")
@@ -1044,7 +1295,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                             logger.info("    Note: Computing signals after-hours for diagnostics")
                     else:
                         logger.info(
-                            f"    Market hours: OPEN (allowed: {market_open}-{market_close})"
+                            f"    Market hours: OPEN (exchange time: {exchange_time.strftime('%H:%M %Z')}, "
+                            f"trading hours: {market_open}-{market_close})"
                         )
 
                     # Calculate and log SMAs
