@@ -24,7 +24,15 @@ class Config(BaseModel):
     # Risk parameters
     max_positions: int = Field(default=5, description="Max concurrent positions")
     max_order_quantity: int = Field(default=100, description="Max shares per order")
-    max_daily_loss: Decimal = Field(default=Decimal("1000"), description="Max daily loss threshold")
+    max_daily_loss: Decimal = Field(
+        default=Decimal("500"), description="Max daily loss threshold ($)"
+    )
+    max_order_notional: Decimal = Field(
+        default=Decimal("500"), description="Max order notional value ($)"
+    )
+    max_positions_notional: Decimal = Field(
+        default=Decimal("10000"), description="Max total positions exposure ($)"
+    )
     allowed_symbols: list[str] = Field(
         default=["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"], description="Allowed trading symbols"
     )
@@ -72,7 +80,9 @@ def load_config() -> Config:
         "alpaca_base_url": os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
         "max_positions": int(os.getenv("MAX_POSITIONS", "5")),
         "max_order_quantity": int(os.getenv("MAX_ORDER_QUANTITY", "100")),
-        "max_daily_loss": Decimal(os.getenv("MAX_DAILY_LOSS", "1000")),
+        "max_daily_loss": Decimal(os.getenv("MAX_DAILY_LOSS", "500")),
+        "max_order_notional": Decimal(os.getenv("MAX_ORDER_NOTIONAL", "500")),
+        "max_positions_notional": Decimal(os.getenv("MAX_POSITIONS_NOTIONAL", "10000")),
         "sma_fast_period": int(os.getenv("SMA_FAST_PERIOD", "10")),
         "sma_slow_period": int(os.getenv("SMA_SLOW_PERIOD", "30")),
         "log_level": os.getenv("LOG_LEVEL", "INFO"),

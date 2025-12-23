@@ -20,9 +20,16 @@ class RiskCheckResult:
 class RiskManager:
     """Manages risk checks for trading decisions."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, daily_realized_pnl: Decimal = Decimal("0")):
+        """
+        Initialize risk manager.
+
+        Args:
+            config: Trading configuration
+            daily_realized_pnl: Current day's realized PnL (from state)
+        """
         self.config = config
-        self.daily_pnl = Decimal("0")
+        self.daily_pnl = daily_realized_pnl
         self.positions: dict[str, Position] = {}
 
     def check_signal(self, signal: Signal) -> RiskCheckResult:
@@ -70,6 +77,76 @@ class RiskManager:
             return RiskCheckResult(False, "Order quantity must be positive")
 
         return RiskCheckResult(True, "Quantity check passed")
+
+    def check_order_notional(self, quantity: int, price: Decimal) -> RiskCheckResult:
+        """
+        Check if order notional value is within limits.
+
+        Args:
+            quantity: Order quantity
+            price: Order price
+
+        Returns:
+            RiskCheckResult with pass/fail and reason
+        """
+        notional = abs(Decimal(quantity) * price)
+        max_notional = self.config.max_order_notional
+
+        if notional > max_notional:
+            return RiskCheckResult(
+                False,
+                f"Order notional ${notional:.2f} exceeds limit ${max_notional:.2f}",
+            )
+
+        return RiskCheckResult(True, "Notional check passed")
+
+    def check_positions_exposure(
+        self, new_order_quantity: int, new_order_price: Decimal
+    ) -> RiskCheckResult:
+        """
+        Check if adding a new order would exceed total positions exposure limit.
+
+        Exposure = sum(abs(qty) * avg_entry_price) across all positions + new order notional
+
+        Args:
+            new_order_quantity: Quantity of new order
+            new_order_price: Price of new order
+
+        Returns:
+            RiskCheckResult with pass/fail and reason
+        """
+        # Calculate current exposure from existing positions
+        current_exposure = Decimal("0")
+        for pos in self.positions.values():
+            current_exposure += abs(pos.quantity) * pos.avg_price
+
+        # Calculate new order notional
+        new_order_notional = abs(Decimal(new_order_quantity) * new_order_price)
+
+        # Total exposure after this order
+        total_exposure = current_exposure + new_order_notional
+        max_exposure = self.config.max_positions_notional
+
+        if total_exposure > max_exposure:
+            return RiskCheckResult(
+                False,
+                f"Total exposure ${total_exposure:.2f} (current: ${current_exposure:.2f} + "
+                f"new: ${new_order_notional:.2f}) exceeds limit ${max_exposure:.2f}",
+            )
+
+        return RiskCheckResult(True, "Exposure check passed")
+
+    def get_current_exposure(self) -> Decimal:
+        """
+        Get current total positions exposure.
+
+        Returns:
+            Total exposure across all positions
+        """
+        exposure = Decimal("0")
+        for pos in self.positions.values():
+            exposure += abs(pos.quantity) * pos.avg_price
+        return exposure
 
     def update_position(self, symbol: str, quantity: int, price: Decimal):
         """

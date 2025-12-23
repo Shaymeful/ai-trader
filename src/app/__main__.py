@@ -174,6 +174,27 @@ Examples:
         help="Reconcile state with broker (sync orders/positions) and exit without running trading loop",
     )
 
+    parser.add_argument(
+        "--max-daily-loss",
+        type=float,
+        default=500,
+        help="Maximum daily loss threshold in dollars (default: 500)",
+    )
+
+    parser.add_argument(
+        "--max-order-notional",
+        type=float,
+        default=500,
+        help="Maximum order notional value in dollars (default: 500)",
+    )
+
+    parser.add_argument(
+        "--max-positions-notional",
+        type=float,
+        default=10000,
+        help="Maximum total positions exposure in dollars (default: 10000)",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -429,6 +450,9 @@ def main(argv: list[str] | None = None) -> int:
             compute_after_hours=args.compute_after_hours,
             allow_after_hours_orders=args.allow_after_hours_orders,
             reconcile_only=args.reconcile_only,
+            max_daily_loss=args.max_daily_loss,
+            max_order_notional=args.max_order_notional,
+            max_positions_notional=args.max_positions_notional,
         )
         return 0
     except Exception as e:
@@ -523,6 +547,9 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             - compute_after_hours: Fetch bars and compute signals even when market closed
             - allow_after_hours_orders: Allow order submission when market closed (requires compute_after_hours)
             - reconcile_only: Reconcile state with broker and exit without running trading loop
+            - max_daily_loss: Maximum daily loss threshold
+            - max_order_notional: Maximum order notional value
+            - max_positions_notional: Maximum total positions exposure
     """
     # Extract CLI overrides
     mode_override = kwargs.get("mode")
@@ -532,6 +559,9 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     compute_after_hours = kwargs.get("compute_after_hours", False)
     allow_after_hours_orders = kwargs.get("allow_after_hours_orders", False)
     reconcile_only = kwargs.get("reconcile_only", False)
+    max_daily_loss_override = kwargs.get("max_daily_loss")
+    max_order_notional_override = kwargs.get("max_order_notional")
+    max_positions_notional_override = kwargs.get("max_positions_notional")
 
     # Use max_iterations if provided
     if max_iterations is not None:
@@ -561,6 +591,20 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     if symbols_override is not None:
         config.allowed_symbols = symbols_override
 
+    # Apply risk limit overrides from CLI
+    if max_daily_loss_override is not None:
+        from decimal import Decimal
+
+        config.max_daily_loss = Decimal(str(max_daily_loss_override))
+    if max_order_notional_override is not None:
+        from decimal import Decimal
+
+        config.max_order_notional = Decimal(str(max_order_notional_override))
+    if max_positions_notional_override is not None:
+        from decimal import Decimal
+
+        config.max_positions_notional = Decimal(str(max_positions_notional_override))
+
     logger = setup_logging(config.log_level, run_id)
 
     try:
@@ -575,7 +619,9 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         logger.info(f"Allowed symbols: {config.allowed_symbols}")
         logger.info(f"Max positions: {config.max_positions}")
         logger.info(f"Max order quantity: {config.max_order_quantity}")
-        logger.info(f"Max daily loss: {config.max_daily_loss}")
+        logger.info(f"Max daily loss: ${config.max_daily_loss}")
+        logger.info(f"Max order notional: ${config.max_order_notional}")
+        logger.info(f"Max positions notional: ${config.max_positions_notional}")
         logger.info(f"SMA periods: fast={config.sma_fast_period}, slow={config.sma_slow_period}")
 
         # Ensure output directories exist
@@ -648,7 +694,11 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             return
 
         # Initialize risk manager and strategy
-        risk_manager = RiskManager(config)
+        from src.app.state import get_daily_realized_pnl
+
+        daily_pnl = get_daily_realized_pnl(state)
+        logger.info(f"Today's realized PnL: ${daily_pnl}")
+        risk_manager = RiskManager(config, daily_realized_pnl=daily_pnl)
         strategy = SMAStrategy(config)
 
         # Reconcile state with broker before starting trading loop
