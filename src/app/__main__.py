@@ -47,7 +47,13 @@ def get_run_output_dir(run_id: str) -> Path:
     return run_dir
 
 
-def print_dry_run_preview(symbol: str, decision: str, qty: int | None = None, limit_price: Decimal | None = None, reason: str = ""):
+def print_dry_run_preview(
+    symbol: str,
+    decision: str,
+    qty: int | None = None,
+    limit_price: Decimal | None = None,
+    reason: str = "",
+):
     """
     Print a concise dry-run preview row to console.
 
@@ -1618,8 +1624,10 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     # FAIL-FAST SAFETY GATE: Check live trading requirements before ANY operations
     # This prevents any file I/O, logging, or API calls if safety flags are missing
     # EXCEPTION: Skip safety gates when dry_run is True (no orders will be submitted)
-    if not config.dry_run and is_live_trading_mode(config) and (
-        not config.enable_live_trading or not config.i_understand_live_trading_risk
+    if (
+        not config.dry_run
+        and is_live_trading_mode(config)
+        and (not config.enable_live_trading or not config.i_understand_live_trading_risk)
     ):
         error_msg = (
             "Live trading disabled. Set ENABLE_LIVE_TRADING=true and "
@@ -1966,7 +1974,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                                     signal.side.value.upper(),
                                     qty=quantity,
                                     limit_price=limit_price,
-                                    reason=signal.reason
+                                    reason=signal.reason,
                                 )
                             else:
                                 logger.info(
