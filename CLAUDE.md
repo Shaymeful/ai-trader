@@ -51,3 +51,8 @@
 
 * Prefer readable code, small functions, typed models (Pydantic).
 * Add a structured JSON log per run plus a human-readable summary.
+
+## Development Setup
+
+* Run `pre-commit install` once to enable automatic linting/formatting on commit.
+* CI enforces the same ruff checks as pre-commit.
