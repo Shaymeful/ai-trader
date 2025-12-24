@@ -264,6 +264,14 @@ Examples:
     )
 
     parser.add_argument(
+        "--max-session-loss",
+        type=float,
+        default=None,
+        help="Maximum session loss threshold in dollars (default: disabled). "
+        "Session loss is reset on each bot restart.",
+    )
+
+    parser.add_argument(
         "--max-order-notional",
         type=float,
         default=500,
@@ -1136,6 +1144,8 @@ def main(argv: list[str] | None = None) -> int:
             # Apply risk limit overrides from CLI
             if args.max_daily_loss is not None:
                 config.max_daily_loss = Decimal(str(args.max_daily_loss))
+            if args.max_session_loss is not None:
+                config.max_session_loss = Decimal(str(args.max_session_loss))
             if args.max_order_notional is not None:
                 config.max_order_notional = Decimal(str(args.max_order_notional))
             if args.max_positions_notional is not None:
@@ -1312,6 +1322,7 @@ def main(argv: list[str] | None = None) -> int:
             reconcile_only=args.reconcile_only,
             dry_run=args.dry_run,
             max_daily_loss=args.max_daily_loss,
+            max_session_loss=args.max_session_loss,
             max_order_notional=args.max_order_notional,
             max_positions_notional=args.max_positions_notional,
             use_limit_orders=args.use_limit_orders,
@@ -1502,6 +1513,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             - allow_after_hours_orders: Allow order submission when market closed (requires compute_after_hours)
             - reconcile_only: Reconcile state with broker and exit without running trading loop
             - max_daily_loss: Maximum daily loss threshold
+            - max_session_loss: Maximum session loss threshold (not persisted across restarts)
             - max_order_notional: Maximum order notional value
             - max_positions_notional: Maximum total positions exposure
             - use_limit_orders: Use limit orders instead of market orders
@@ -1519,6 +1531,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     reconcile_only = kwargs.get("reconcile_only", False)
     dry_run_override = kwargs.get("dry_run", False)
     max_daily_loss_override = kwargs.get("max_daily_loss")
+    max_session_loss_override = kwargs.get("max_session_loss")
     max_order_notional_override = kwargs.get("max_order_notional")
     max_positions_notional_override = kwargs.get("max_positions_notional")
     use_limit_orders_override = kwargs.get("use_limit_orders")
@@ -1570,6 +1583,10 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         from decimal import Decimal
 
         config.max_daily_loss = Decimal(str(max_daily_loss_override))
+    if max_session_loss_override is not None:
+        from decimal import Decimal
+
+        config.max_session_loss = Decimal(str(max_session_loss_override))
     if max_order_notional_override is not None:
         from decimal import Decimal
 

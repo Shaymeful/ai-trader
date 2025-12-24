@@ -108,6 +108,12 @@ On startup, the bot reconciles its local state with the broker's actual state to
 - `--test-order` - Submit test LIMIT buy (1 share) for first symbol in LIVE mode and exit
 - `--reconcile-only` - Reconcile state with broker and exit (no trading loop)
 
+### Risk Control Flags
+- `--max-daily-loss <dollars>` - Maximum daily loss threshold (default: 500)
+- `--max-session-loss <dollars>` - Maximum session loss threshold, resets on restart (default: disabled)
+- `--max-order-notional <dollars>` - Maximum order notional value (default: 500)
+- `--max-positions-notional <dollars>` - Maximum total positions exposure (default: 10000)
+
 ### Order Management Flags
 Order management commands support all trading modes (mock, paper, live) with mode-appropriate safety gates.
 
@@ -326,6 +332,63 @@ Order management commands enforce mode-appropriate safety gates:
 - After-hours order submission blocked by default (use `--allow-after-hours-orders` in paper/dry-run only)
 - Paper test order cannot run in live mode
 - Live mode cannot use `--allow-after-hours-orders`
+
+### Session Kill Switch (MAX_SESSION_LOSS)
+The session kill switch is an in-session safety feature that stops all new order submissions once session losses exceed a threshold.
+
+**Key Characteristics:**
+- **Not persisted**: Session PnL resets to $0 on each bot restart
+- **In-session protection**: Prevents runaway losses within a single bot session
+- **Optional**: Disabled by default (set via `--max-session-loss` flag or `MAX_SESSION_LOSS` env var)
+- **Complementary to daily loss**: Session loss and daily loss are tracked independently
+
+**Behavior:**
+1. Session PnL starts at $0 when bot starts
+2. Session PnL accumulates as positions are closed (realized PnL only)
+3. When `session_pnl <= -max_session_loss`:
+   - All new order submissions are blocked for the remainder of the session
+   - A clear WARNING is logged on first trip (logged once to avoid spam)
+   - Bot continues running (data fetching, reconciliation, logging)
+4. Next bot restart: Session PnL resets to $0 (fresh start)
+
+**CLI Flag:**
+```bash
+# Enable $100 session loss limit
+python -m src.app --max-session-loss 100
+
+# Disabled by default
+python -m src.app  # No session loss limit
+```
+
+**Use Cases:**
+- **Intraday protection**: Stop trading after -$100 loss in current session
+- **Development/testing**: Test risk controls without persisted state
+- **Complementary to daily limit**: Layer multiple safety thresholds (e.g., $100 session, $500 daily)
+
+**Example:**
+```bash
+# Bot starts at 9:30 AM
+python -m src.app --max-session-loss 100
+
+# 10:00 AM: Loses $80 (still trading, under limit)
+# 10:15 AM: Loses another $25 (total: -$105)
+# -> KILL SWITCH TRIPS: No more orders this session
+# -> Bot continues running but won't submit orders
+
+# Bot restarts at 11:00 AM
+python -m src.app --max-session-loss 100
+# -> Session PnL resets to $0
+# -> Can trade again (daily PnL still tracked separately)
+```
+
+**Comparison to Daily Loss:**
+| Feature | Daily Loss (MAX_DAILY_LOSS) | Session Loss (MAX_SESSION_LOSS) |
+|---------|----------------------------|--------------------------------|
+| Persistence | Persisted across restarts | NOT persisted (resets on restart) |
+| Scope | Calendar day (US/Eastern) | Current bot session |
+| Reset | Automatic at midnight ET | Manual (restart bot) |
+| Use Case | Prevent daily loss bypass | In-session runaway protection |
+| Default | $500 | Disabled (None) |
 
 ---
 
