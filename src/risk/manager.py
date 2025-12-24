@@ -1,9 +1,12 @@
 """Risk management and position validation."""
 
+import logging
 from decimal import Decimal
 
 from src.app.config import Config
 from src.app.models import OrderSide, Position, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class RiskCheckResult:
@@ -30,6 +33,8 @@ class RiskManager:
         """
         self.config = config
         self.daily_pnl = daily_realized_pnl
+        self.session_pnl = Decimal("0")  # Session PnL (not persisted across restarts)
+        self.session_kill_switch_tripped = False  # Track if kill switch has been triggered
         self.positions: dict[str, Position] = {}
 
     def check_signal(self, signal: Signal) -> RiskCheckResult:
@@ -54,6 +59,25 @@ class RiskManager:
         if self.daily_pnl <= -self.config.max_daily_loss:
             return RiskCheckResult(
                 False, f"Daily loss limit ({self.config.max_daily_loss}) exceeded"
+            )
+
+        # Check session loss limit (kill switch)
+        if (
+            self.config.max_session_loss is not None
+            and self.session_pnl <= -self.config.max_session_loss
+        ):
+            # Log warning on first trip (avoid spam)
+            if not self.session_kill_switch_tripped:
+                logger.warning(
+                    f"SESSION KILL SWITCH TRIGGERED: Session PnL ${self.session_pnl:.2f} "
+                    f"<= threshold -${self.config.max_session_loss:.2f}. "
+                    f"Blocking all new orders for remainder of session."
+                )
+                self.session_kill_switch_tripped = True
+            return RiskCheckResult(
+                False,
+                f"Session loss limit ({self.config.max_session_loss}) exceeded "
+                f"(current: {self.session_pnl})",
             )
 
         return RiskCheckResult(True, "All checks passed")
@@ -166,6 +190,7 @@ class RiskManager:
                 # Position closed
                 realized_pnl = (price - pos.avg_price) * abs(quantity)
                 self.daily_pnl += realized_pnl
+                self.session_pnl += realized_pnl
                 del self.positions[symbol]
             elif new_qty > 0:
                 # Adding to or reducing long position
@@ -178,6 +203,7 @@ class RiskManager:
                     # Reducing long
                     realized_pnl = (price - pos.avg_price) * abs(quantity)
                     self.daily_pnl += realized_pnl
+                    self.session_pnl += realized_pnl
                     pos.quantity = new_qty
                 pos.update_price(price)
             else:

@@ -27,6 +27,9 @@ class Config(BaseModel):
     max_daily_loss: Decimal = Field(
         default=Decimal("500"), description="Max daily loss threshold ($)"
     )
+    max_session_loss: Decimal | None = Field(
+        default=None, description="Max session loss threshold ($) - disabled if None"
+    )
     max_order_notional: Decimal = Field(
         default=Decimal("500"), description="Max order notional value ($)"
     )
@@ -105,6 +108,9 @@ def load_config() -> Config:
         "max_positions": int(os.getenv("MAX_POSITIONS", "5")),
         "max_order_quantity": int(os.getenv("MAX_ORDER_QUANTITY", "100")),
         "max_daily_loss": Decimal(os.getenv("MAX_DAILY_LOSS", "500")),
+        "max_session_loss": Decimal(os.getenv("MAX_SESSION_LOSS"))
+        if os.getenv("MAX_SESSION_LOSS")
+        else None,
         "max_order_notional": Decimal(os.getenv("MAX_ORDER_NOTIONAL", "500")),
         "max_positions_notional": Decimal(os.getenv("MAX_POSITIONS_NOTIONAL", "10000")),
         "use_limit_orders": os.getenv("USE_LIMIT_ORDERS", "true").lower() == "true",
