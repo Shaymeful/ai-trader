@@ -202,9 +202,13 @@ def test_main_paper_mode_without_keys_fails(monkeypatch, capsys):
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
 
-    # Clear any existing API key environment variables
+    # Clear any existing API key environment variables (both legacy and mode-specific)
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_PAPER_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_PAPER_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_LIVE_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
 
     result = main(["--mode", "paper"])
 
@@ -213,9 +217,9 @@ def test_main_paper_mode_without_keys_fails(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "ERROR" in captured.err
-    assert "paper mode requires alpaca api credentials" in captured.err.lower()
-    assert "ALPACA_API_KEY" in captured.err
-    assert "ALPACA_SECRET_KEY" in captured.err
+    assert "paper mode requires alpaca" in captured.err.lower()
+    assert "ALPACA_PAPER_KEY_ID" in captured.err
+    assert "ALPACA_PAPER_SECRET_KEY" in captured.err
 
 
 def test_main_live_mode_with_ack_without_keys_fails(monkeypatch, capsys):
@@ -223,9 +227,13 @@ def test_main_live_mode_with_ack_without_keys_fails(monkeypatch, capsys):
     mock_loop = MagicMock()
     monkeypatch.setattr("src.app.__main__.run_trading_loop", mock_loop)
 
-    # Clear any existing API key environment variables
+    # Clear any existing API key environment variables (both legacy and mode-specific)
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_PAPER_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_PAPER_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_LIVE_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
 
     result = main(["--mode", "live", "--i-understand-live-trading"])
 
@@ -234,9 +242,9 @@ def test_main_live_mode_with_ack_without_keys_fails(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "ERROR" in captured.err
-    assert "live mode requires alpaca api credentials" in captured.err.lower()
-    assert "ALPACA_API_KEY" in captured.err
-    assert "ALPACA_SECRET_KEY" in captured.err
+    assert "live mode requires alpaca" in captured.err.lower()
+    assert "ALPACA_LIVE_KEY_ID" in captured.err
+    assert "ALPACA_LIVE_SECRET_KEY" in captured.err
 
 
 def test_parse_args_preflight_flag():

@@ -263,6 +263,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--check-env",
+        action="store_true",
+        help="Check environment configuration and credentials without running bot",
+    )
+
+    parser.add_argument(
         "--max-daily-loss",
         type=float,
         default=500,
@@ -1256,6 +1262,105 @@ def run_status(mode: str) -> int:
         return 1
 
 
+def run_check_env(mode: str) -> int:
+    """
+    Check environment configuration and credentials.
+
+    Validates:
+    - Which mode is selected
+    - Whether required credentials exist
+    - Prints key fingerprints (last 4 chars) without exposing full secrets
+
+    Args:
+        mode: Trading mode (dry-run, paper, live)
+
+    Returns:
+        Exit code (0 if valid, 1 if missing credentials)
+    """
+    from src.app.config import get_alpaca_credentials, validate_alpaca_credentials
+
+    print("\n" + "=" * 80)
+    print("ENVIRONMENT CHECK")
+    print("=" * 80)
+    print(f"Selected Mode: {mode}")
+    print()
+
+    # Determine actual mode for credential checking
+    if mode == "dry-run":
+        print("Trading Mode: Mock (no credentials required)")
+        print()
+        print("✓ Dry-run mode does not require Alpaca credentials")
+        print("=" * 80)
+        return 0
+
+    # Map CLI mode to credential mode
+    if mode == "paper":
+        cred_mode = "paper"
+        print("Trading Mode: Paper (simulated trading)")
+    elif mode == "live":
+        cred_mode = "live"
+        print("Trading Mode: Live (REAL MONEY)")
+    else:
+        print(f"Trading Mode: {mode}")
+        print("=" * 80)
+        return 0
+
+    print()
+
+    # Get credentials
+    api_key, secret_key, base_url = get_alpaca_credentials(cred_mode)
+
+    # Print expected env vars
+    if cred_mode == "paper":
+        print("Expected Environment Variables:")
+        print("  ALPACA_PAPER_KEY_ID")
+        print("  ALPACA_PAPER_SECRET_KEY")
+    else:
+        print("Expected Environment Variables:")
+        print("  ALPACA_LIVE_KEY_ID")
+        print("  ALPACA_LIVE_SECRET_KEY")
+
+    print()
+    print("Configuration:")
+    print(f"  API Base URL: {base_url}")
+    print()
+
+    # Check if credentials are set
+    if api_key and secret_key:
+        # Print key fingerprints (last 4 chars only)
+        api_key_fingerprint = f"...{api_key[-4:]}" if len(api_key) >= 4 else "****"
+        secret_key_fingerprint = "..." + ("*" * 4)  # Never show secret, even partial
+
+        print("Credentials Status: ✓ Found")
+        print(f"  API Key: {api_key_fingerprint}")
+        print(f"  Secret Key: {secret_key_fingerprint}")
+        print()
+
+        # Validate
+        is_valid, error_msg = validate_alpaca_credentials(cred_mode, require_credentials=True)
+        if is_valid:
+            print("✓ All required credentials are set")
+            print()
+            if cred_mode == "live":
+                print("⚠  WARNING: Live mode uses REAL MONEY")
+                print("   Ensure you understand the risks before trading")
+            print("=" * 80)
+            return 0
+        else:
+            print(f"✗ Validation failed: {error_msg}")
+            print("=" * 80)
+            return 1
+    else:
+        print("Credentials Status: ✗ Missing")
+        print()
+
+        # Print detailed help
+        is_valid, error_msg = validate_alpaca_credentials(cred_mode, require_credentials=True)
+        print(error_msg)
+        print("=" * 80)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """
     Main entry point for the trading bot CLI.
@@ -1471,17 +1576,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.status:
         return run_status(args.mode)
 
+    # Handle --check-env flag
+    if args.check_env:
+        return run_check_env(args.mode)
+
     # Environment preflight check: paper/live modes require Alpaca API credentials
     # Exception: Skip credential check when --dry-run is set (no orders will be submitted)
     if args.mode in ("paper", "live") and not args.dry_run:
-        import os
+        from src.app.config import validate_alpaca_credentials
 
-        if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
-            print(
-                f"ERROR: {args.mode.capitalize()} mode requires Alpaca API credentials.\n"
-                "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
-                file=sys.stderr,
-            )
+        is_valid, error_msg = validate_alpaca_credentials(args.mode, require_credentials=True)
+        if not is_valid:
+            print(error_msg, file=sys.stderr)
             return 1
 
     # Parse symbols if provided
