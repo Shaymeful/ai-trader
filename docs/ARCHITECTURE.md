@@ -107,6 +107,8 @@ On startup, the bot reconciles its local state with the broker's actual state to
 - `--paper-test-order SYMBOL QTY` - Submit single test MARKET order in paper mode and exit
 - `--test-order` - Submit test LIMIT buy (1 share) for first symbol in LIVE mode and exit
 - `--reconcile-only` - Reconcile state with broker and exit (no trading loop)
+- `--status` - Print operator-facing status/metrics snapshot and exit (no trading loop)
+- `--check-env` - Check environment configuration and credentials without running bot
 
 ### Risk Control Flags
 - `--max-daily-loss <dollars>` - Maximum daily loss threshold (default: 500)
@@ -155,6 +157,118 @@ python -m src.app --mode live --i-understand-live-trading \
 - `--iterations` works identically to `--max-iterations`
 - Both flags accept an integer value and control the number of trading loop iterations
 - Default: 5 iterations if not specified
+
+---
+
+## Environment Variables
+
+The bot supports mode-specific Alpaca API credentials, allowing you to maintain both paper and live credentials simultaneously without manual swapping.
+
+### Alpaca Credentials
+
+**Paper Trading (Simulated):**
+- `ALPACA_PAPER_KEY_ID` - Paper trading API key (starts with "PK")
+- `ALPACA_PAPER_SECRET_KEY` - Paper trading secret key
+
+**Live Trading (Real Money):**
+- `ALPACA_LIVE_KEY_ID` - Live trading API key (starts with "AK")
+- `ALPACA_LIVE_SECRET_KEY` - Live trading secret key
+
+**Legacy (Backward Compatibility):**
+- `ALPACA_API_KEY` - Falls back if mode-specific vars not set
+- `ALPACA_SECRET_KEY` - Falls back if mode-specific vars not set
+
+### Mode Selection
+
+The bot automatically selects the correct credential set based on the `--mode` flag:
+- `--mode paper` → Uses `ALPACA_PAPER_KEY_ID` and `ALPACA_PAPER_SECRET_KEY`
+- `--mode live` → Uses `ALPACA_LIVE_KEY_ID` and `ALPACA_LIVE_SECRET_KEY`
+- `--mode dry-run` → No credentials required (mock mode)
+
+### Setting Environment Variables
+
+**Windows PowerShell:**
+```powershell
+# Paper trading credentials
+$env:ALPACA_PAPER_KEY_ID = "PKxxxxxxxxxxxxxxxxxx"
+$env:ALPACA_PAPER_SECRET_KEY = "yyyyyyyyyyyyyyyyyyyy"
+
+# Live trading credentials (REAL MONEY)
+$env:ALPACA_LIVE_KEY_ID = "AKxxxxxxxxxxxxxxxxxx"
+$env:ALPACA_LIVE_SECRET_KEY = "zzzzzzzzzzzzzzzzzzzz"
+```
+
+**Linux/Mac Bash:**
+```bash
+# Paper trading credentials
+export ALPACA_PAPER_KEY_ID="PKxxxxxxxxxxxxxxxxxx"
+export ALPACA_PAPER_SECRET_KEY="yyyyyyyyyyyyyyyyyyyy"
+
+# Live trading credentials (REAL MONEY)
+export ALPACA_LIVE_KEY_ID="AKxxxxxxxxxxxxxxxxxx"
+export ALPACA_LIVE_SECRET_KEY="zzzzzzzzzzzzzzzzzzzz"
+```
+
+**Using .env File (Recommended):**
+```bash
+# .env file (do NOT commit this file to git)
+ALPACA_PAPER_KEY_ID=PKxxxxxxxxxxxxxxxxxx
+ALPACA_PAPER_SECRET_KEY=yyyyyyyyyyyyyyyyyyyy
+
+ALPACA_LIVE_KEY_ID=AKxxxxxxxxxxxxxxxxxx
+ALPACA_LIVE_SECRET_KEY=zzzzzzzzzzzzzzzzzzzz
+```
+
+### Checking Configuration
+
+Use `--check-env` to validate your environment setup:
+
+```bash
+# Check paper mode configuration
+python -m src.app --mode paper --check-env
+
+# Check live mode configuration
+python -m src.app --mode live --check-env
+```
+
+**Output Example:**
+```
+================================================================================
+ENVIRONMENT CHECK
+================================================================================
+Selected Mode: paper
+Trading Mode: Paper (simulated trading)
+
+Expected Environment Variables:
+  ALPACA_PAPER_KEY_ID
+  ALPACA_PAPER_SECRET_KEY
+
+Configuration:
+  API Base URL: https://paper-api.alpaca.markets
+
+Credentials Status: ✓ Found
+  API Key: ...XY12
+  Secret Key: ...****
+
+✓ All required credentials are set
+================================================================================
+```
+
+### Safety Features
+
+1. **Mode Isolation**: Paper credentials cannot accidentally be used in live mode and vice versa
+2. **Validation**: Bot validates required credentials at startup with clear error messages
+3. **No Secret Exposure**: `--check-env` only shows last 4 characters of API key, never shows secrets
+4. **Explicit Base URLs**: Each mode has a fixed base URL (paper: `https://paper-api.alpaca.markets`, live: `https://api.alpaca.markets`)
+
+### Migration from Legacy Variables
+
+If you're currently using `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`:
+1. The bot will continue to work (backward compatible)
+2. To use both paper and live:
+   - Rename paper credentials to `ALPACA_PAPER_KEY_ID` and `ALPACA_PAPER_SECRET_KEY`
+   - Add live credentials as `ALPACA_LIVE_KEY_ID` and `ALPACA_LIVE_SECRET_KEY`
+   - Remove old `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` vars
 
 ---
 
@@ -507,6 +621,127 @@ All tests are offline (no network calls, mock broker/provider).
 3. Session 3: Load state (-$70), add -$35 loss, save state (-$105), exit
 4. Session 4: Load state (-$105), trading blocked (exceeds -$100 limit)
 5. ✅ Loss persists and accumulates correctly
+
+---
+
+## Operator Observability
+
+The `--status` flag provides an operator-facing snapshot of current bot state and metrics for monitoring and debugging purposes.
+
+### Purpose
+Provide real-time visibility into bot health, risk status, and trading activity without running the full trading loop.
+
+### Features
+- **No market hours required**: Works anytime (market open or closed)
+- **No credentials required**: Works in mock mode without Alpaca API keys
+- **Human-readable output**: Formatted table printed to console
+- **Machine-readable output**: JSON file written to `out/status.json`
+- **Fast execution**: Exits immediately after displaying status
+
+### Metrics Displayed
+
+**System Info:**
+- Timestamp (UTC + US/Eastern)
+- Trading mode (mock/paper/live)
+
+**PnL Tracking:**
+- Daily realized PnL (persisted across restarts)
+- Session realized PnL (in-memory, resets on restart)
+
+**Risk Status:**
+- Daily loss kill-switch status (tripped/not tripped)
+- Session loss kill-switch status (tripped/not tripped)
+
+**Trading Activity:**
+- Open positions count and details
+- Open orders count and details
+
+**Signals:**
+- Last signal per symbol (currently not persisted, shows "N/A")
+
+### Usage
+
+```bash
+# Check status in mock mode (no credentials needed)
+python -m src.app --status
+
+# Check status in paper mode
+python -m src.app --mode paper --status
+
+# Check status in live mode (requires safety gates)
+python -m src.app --mode live --i-understand-live-trading --status
+```
+
+### Output Format
+
+**Console Output:**
+```
+================================================================================
+OPERATOR STATUS SNAPSHOT
+================================================================================
+Timestamp (UTC):        2024-01-15 15:30:45
+Timestamp (US/Eastern): 2024-01-15 10:30:45
+
+Mode:                   dry-run
+Daily PnL:              $   -123.45
+Session PnL:            $      0.00
+
+Open Positions:                  2
+Open Orders:                     1
+
+Daily Loss Kill-Switch: False
+Session Loss Kill-Switch: False
+
+Positions:
+  AAPL: 10 shares @ $150.25
+  MSFT: 5 shares @ $380.50
+
+Open Orders:
+  GOOGL: BUY 10 @ $142.30
+
+Last Signals: (Not persisted)
+================================================================================
+
+Machine-readable output written to: out/status.json
+```
+
+**JSON Output (`out/status.json`):**
+```json
+{
+  "timestamp_utc": "2024-01-15T15:30:45.123456",
+  "timestamp_eastern": "2024-01-15T10:30:45.123456-05:00",
+  "mode": "dry-run",
+  "daily_pnl": -123.45,
+  "session_pnl": 0.0,
+  "open_positions_count": 2,
+  "open_orders_count": 1,
+  "daily_loss_kill_switch_tripped": false,
+  "session_loss_kill_switch_tripped": false,
+  "positions": [
+    {"symbol": "AAPL", "quantity": 10, "avg_price": 150.25},
+    {"symbol": "MSFT", "quantity": 5, "avg_price": 380.50}
+  ],
+  "orders": [
+    {"symbol": "GOOGL", "side": "BUY", "qty": 10, "limit_price": 142.30}
+  ],
+  "last_signals": {}
+}
+```
+
+### Use Cases
+
+1. **Pre-trading checks**: Verify bot state before starting trading session
+2. **Health monitoring**: Quick check of PnL, positions, and risk status
+3. **Debugging**: Inspect state after unexpected behavior
+4. **Automation**: Parse JSON for monitoring dashboards or alerts
+5. **Risk management**: Verify kill-switch status without starting bot
+
+### Implementation Notes
+
+- **Session PnL**: Always shows 0 in status output (not persisted, only tracks within running session)
+- **Daily PnL**: Loaded from `state.json` (persisted across restarts)
+- **Kill-switch status**: Computed based on current PnL vs configured limits
+- **Positions/Orders**: Fetched from broker (MockBroker in mock mode, Alpaca API in paper/live)
 
 ---
 

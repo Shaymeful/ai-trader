@@ -91,6 +91,56 @@ class Config(BaseModel):
     )
 
 
+def get_alpaca_credentials(mode: str) -> tuple[str, str, str]:
+    """
+    Get Alpaca credentials based on trading mode.
+
+    Loads credentials from mode-specific environment variables:
+    - Paper mode: ALPACA_PAPER_KEY_ID, ALPACA_PAPER_SECRET_KEY
+    - Live mode: ALPACA_LIVE_KEY_ID, ALPACA_LIVE_SECRET_KEY
+
+    Falls back to legacy ALPACA_API_KEY and ALPACA_SECRET_KEY if mode-specific vars not found.
+
+    Args:
+        mode: Trading mode (mock, paper, live, dry-run, or alpaca)
+
+    Returns:
+        Tuple of (api_key, secret_key, base_url)
+    """
+    # Determine if we're in live mode
+    is_live = mode == "live" or (
+        mode == "alpaca" and "paper" not in os.getenv("ALPACA_BASE_URL", "").lower()
+    )
+
+    if is_live:
+        # Live mode: use ALPACA_LIVE_KEY_ID and ALPACA_LIVE_SECRET_KEY
+        api_key = os.getenv("ALPACA_LIVE_KEY_ID", "")
+        secret_key = os.getenv("ALPACA_LIVE_SECRET_KEY", "")
+        base_url = "https://api.alpaca.markets"
+
+        # Fallback to legacy vars if new vars not set
+        if not api_key:
+            api_key = os.getenv("ALPACA_API_KEY", "")
+        if not secret_key:
+            secret_key = os.getenv("ALPACA_SECRET_KEY", "")
+    else:
+        # Paper mode: use ALPACA_PAPER_KEY_ID and ALPACA_PAPER_SECRET_KEY
+        api_key = os.getenv("ALPACA_PAPER_KEY_ID", "")
+        secret_key = os.getenv("ALPACA_PAPER_SECRET_KEY", "")
+        base_url = "https://paper-api.alpaca.markets"
+
+        # Fallback to legacy vars if new vars not set
+        if not api_key:
+            api_key = os.getenv("ALPACA_API_KEY", "")
+        if not secret_key:
+            secret_key = os.getenv("ALPACA_SECRET_KEY", "")
+
+    # Allow explicit base URL override
+    base_url = os.getenv("ALPACA_BASE_URL", base_url)
+
+    return api_key, secret_key, base_url
+
+
 def load_config() -> Config:
     """Load configuration from .env file and environment variables."""
     # Load .env file from repo root (works regardless of CWD)
@@ -99,12 +149,18 @@ def load_config() -> Config:
     dotenv_path = repo_root / ".env"
     load_dotenv(dotenv_path=dotenv_path, override=False)
 
+    # Get mode first
+    mode = os.getenv("MODE", "mock")
+
+    # Get Alpaca credentials based on mode
+    api_key, secret_key, base_url = get_alpaca_credentials(mode)
+
     # Build config from environment variables
     config_dict = {
-        "mode": os.getenv("MODE", "mock"),
-        "alpaca_api_key": os.getenv("ALPACA_API_KEY", ""),
-        "alpaca_secret_key": os.getenv("ALPACA_SECRET_KEY", ""),
-        "alpaca_base_url": os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
+        "mode": mode,
+        "alpaca_api_key": api_key,
+        "alpaca_secret_key": secret_key,
+        "alpaca_base_url": base_url,
         "max_positions": int(os.getenv("MAX_POSITIONS", "5")),
         "max_order_quantity": int(os.getenv("MAX_ORDER_QUANTITY", "100")),
         "max_daily_loss": Decimal(os.getenv("MAX_DAILY_LOSS", "500")),
@@ -169,3 +225,63 @@ def is_live_trading_mode(config: Config) -> bool:
         True if live trading mode, False otherwise
     """
     return config.mode == "alpaca" and "paper" not in config.alpaca_base_url.lower()
+
+
+def validate_alpaca_credentials(mode: str, require_credentials: bool = True) -> tuple[bool, str]:
+    """
+    Validate that required Alpaca credentials are present for the given mode.
+
+    Args:
+        mode: Trading mode (paper or live)
+        require_credentials: If True, missing credentials is an error
+
+    Returns:
+        Tuple of (is_valid, error_message). error_message is empty if valid.
+    """
+    if mode not in ("paper", "live"):
+        # Mock/dry-run modes don't need credentials
+        return True, ""
+
+    api_key, secret_key, base_url = get_alpaca_credentials(mode)
+
+    if not require_credentials:
+        # Just checking what's available, not enforcing
+        return bool(api_key and secret_key), ""
+
+    if mode == "paper":
+        if not api_key or not secret_key:
+            msg = (
+                "ERROR: Paper mode requires Alpaca paper trading credentials.\n"
+                "Please set environment variables:\n"
+                "  ALPACA_PAPER_KEY_ID=your_paper_key\n"
+                "  ALPACA_PAPER_SECRET_KEY=your_paper_secret\n"
+                "\n"
+                "Windows PowerShell example:\n"
+                '  $env:ALPACA_PAPER_KEY_ID = "PK..."\n'
+                '  $env:ALPACA_PAPER_SECRET_KEY = "..."\n'
+                "\n"
+                "Or add to .env file (do NOT commit this file):\n"
+                "  ALPACA_PAPER_KEY_ID=PK...\n"
+                "  ALPACA_PAPER_SECRET_KEY=...\n"
+            )
+            return False, msg
+    elif mode == "live" and (not api_key or not secret_key):
+        msg = (
+            "ERROR: Live mode requires Alpaca live trading credentials.\n"
+            "Please set environment variables:\n"
+            "  ALPACA_LIVE_KEY_ID=your_live_key\n"
+            "  ALPACA_LIVE_SECRET_KEY=your_live_secret\n"
+            "\n"
+            "Windows PowerShell example:\n"
+            '  $env:ALPACA_LIVE_KEY_ID = "AK..."\n'
+            '  $env:ALPACA_LIVE_SECRET_KEY = "..."\n'
+            "\n"
+            "Or add to .env file (do NOT commit this file):\n"
+            "  ALPACA_LIVE_KEY_ID=AK...\n"
+            "  ALPACA_LIVE_SECRET_KEY=...\n"
+            "\n"
+            "WARNING: Live mode uses REAL MONEY. Ensure you understand the risks.\n"
+        )
+        return False, msg
+
+    return True, ""
