@@ -1752,7 +1752,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             return
 
         # Initialize risk manager and strategy
-        from src.app.state import get_daily_realized_pnl
+        from src.app.state import get_daily_realized_pnl, update_daily_realized_pnl
 
         daily_pnl = get_daily_realized_pnl(state)
         logger.info(f"Today's realized PnL: ${daily_pnl}")
@@ -1771,6 +1771,14 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         # If reconcile-only mode, print summary and exit
         if reconcile_only:
             logger.info("Reconcile-only mode: Exiting without running trading loop")
+
+            # Sync daily PnL from RiskManager to state after reconciliation
+            current_daily_pnl = get_daily_realized_pnl(state)
+            risk_manager_pnl = risk_manager.get_daily_pnl()
+            pnl_delta = risk_manager_pnl - current_daily_pnl
+            if pnl_delta != Decimal("0"):
+                update_daily_realized_pnl(state, pnl_delta)
+
             # Save state after reconciliation when in reconcile-only mode
             save_state(state)
             print("\n" + "=" * 60)
@@ -1991,6 +1999,13 @@ def run_trading_loop(iterations: int = 5, **kwargs):
 
                             # Update last processed timestamp
                             state.last_processed_timestamp[symbol] = exchange_time.isoformat()
+
+                            # Sync daily PnL from RiskManager to state (ensures persistence across restarts)
+                            current_daily_pnl = get_daily_realized_pnl(state)
+                            risk_manager_pnl = risk_manager.get_daily_pnl()
+                            pnl_delta = risk_manager_pnl - current_daily_pnl
+                            if pnl_delta != Decimal("0"):
+                                update_daily_realized_pnl(state, pnl_delta)
 
                             # Save state after each order
                             save_state(state)

@@ -329,6 +329,124 @@ Order management commands enforce mode-appropriate safety gates:
 
 ---
 
+## State Persistence & Daily Loss Tracking
+
+### Purpose
+Daily loss enforcement must persist across bot restarts to prevent circumvention of `MAX_DAILY_LOSS` limits. All daily counters reset automatically when the trading day changes (US/Eastern timezone).
+
+### Critical Safety Requirement
+**The bot MUST NOT allow users to bypass daily loss limits by restarting.** If a bot accumulates -$100 loss (approaching the limit), restarting the bot must NOT reset that counter to $0.
+
+### Persisted State Fields
+The following fields are persisted in `state.json` (located at `out/state.json`):
+
+**`daily_date`** (string, YYYY-MM-DD):
+- Current trading day in US/Eastern timezone
+- Used to detect day rollover
+- Automatically updated when loading state on a new day
+
+**`daily_realized_pnl`** (dict[str, str]):
+- Maps date strings (YYYY-MM-DD) to realized PnL (Decimal as string)
+- Example: `{"2024-01-15": "-80.50", "2024-01-16": "25.00"}`
+- Preserves historical daily PnL for analysis
+- Only today's entry is used for risk checks
+
+### Day Rollover Logic
+When `load_state()` is called (at startup):
+1. Computes today's date in US/Eastern timezone
+2. Compares `state.daily_date` to today
+3. If different (new trading day):
+   - Updates `state.daily_date = today`
+   - Does NOT delete historical PnL entries
+   - Today's PnL starts at $0 (no entry in dict yet)
+4. If same (same trading day):
+   - Loads persisted daily PnL from state
+   - RiskManager initialized with this value
+   - Trading blocked if daily loss limit exceeded
+
+### Daily PnL Synchronization
+The bot syncs daily PnL from RiskManager back to state at multiple points:
+
+1. **After each order** (in main trading loop):
+   - Computes delta between RiskManager PnL and state PnL
+   - Calls `update_daily_realized_pnl(state, delta)`
+   - Saves state to disk
+
+2. **After reconciliation** (startup sync with broker):
+   - Syncs any PnL changes from reconciled positions
+   - Ensures state matches broker reality
+
+3. **Never** during dry-run mode:
+   - Dry-run does not modify state
+   - Daily PnL not updated in dry-run
+
+### RiskManager Integration
+**Initialization:**
+```python
+daily_pnl = get_daily_realized_pnl(state)  # Loads persisted PnL
+risk_manager = RiskManager(config, daily_realized_pnl=daily_pnl)
+```
+
+**Daily Loss Check:**
+```python
+if self.daily_pnl <= -self.config.max_daily_loss:
+    return RiskCheckResult(False, f"Daily loss limit ({self.config.max_daily_loss}) exceeded")
+```
+
+- Check: `daily_pnl <= -max_daily_loss` (e.g., -$100 <= -$100 blocks trading)
+- Blocks ALL new orders once limit reached
+- Persists across restarts (cannot be bypassed)
+
+### Implementation Files
+- `src/app/state.py`: State model, load/save, daily PnL tracking
+  - `BotState.daily_date`: Current trading day
+  - `BotState.daily_realized_pnl`: Historical daily PnL
+  - `get_today_date_eastern()`: Get current date in Eastern timezone
+  - `get_daily_realized_pnl(state)`: Get today's PnL
+  - `update_daily_realized_pnl(state, delta)`: Update today's PnL
+  - `load_state()`: Handles day rollover logic
+- `src/app/__main__.py`: Main trading loop
+  - Loads daily PnL from state on startup
+  - Syncs RiskManager PnL back to state after fills
+- `src/risk/manager.py`: Risk checks
+  - Initialized with persisted daily_realized_pnl
+  - Enforces max_daily_loss limit
+
+### Testing
+Comprehensive tests in `tests/test_daily_loss_persistence.py`:
+- **Restart persistence**: Daily loss survives bot restarts
+- **Day rollover**: Counters reset on new trading day (Eastern timezone)
+- **Blocking behavior**: Trading blocked immediately after restart when limit exceeded
+- **Multiple restarts**: Loss accumulates correctly across N restarts
+- **Timezone**: All tests use US/Eastern timezone
+
+All tests are offline (no network calls, mock broker/provider).
+
+### Example Scenarios
+
+**Scenario 1: Restart bypass attempt (BLOCKED)**
+1. Bot runs, accumulates -$100 loss
+2. User restarts bot hoping to reset counter
+3. `load_state()` loads persisted -$100 loss
+4. RiskManager blocks all new trades
+5. ✅ Restart bypass prevented
+
+**Scenario 2: New trading day (ALLOWED)**
+1. Bot runs on Monday, accumulates -$100 loss, stops trading
+2. Tuesday morning, bot starts
+3. `load_state()` detects day rollover (Monday → Tuesday)
+4. Daily PnL resets to $0 for Tuesday
+5. ✅ Trading allowed on new day
+
+**Scenario 3: Multiple restarts, accumulating loss**
+1. Session 1: -$30 loss, save state, exit
+2. Session 2: Load state (-$30), add -$40 loss, save state (-$70), exit
+3. Session 3: Load state (-$70), add -$35 loss, save state (-$105), exit
+4. Session 4: Load state (-$105), trading blocked (exceeds -$100 limit)
+5. ✅ Loss persists and accumulates correctly
+
+---
+
 ## Cost-Aware Trading & Execution Controls
 
 The system includes explicit mechanisms to model, limit, and diagnose trading costs that arise from spreads and execution quality.
