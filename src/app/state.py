@@ -42,7 +42,7 @@ def get_today_date_eastern() -> str:
     return now_eastern.strftime("%Y-%m-%d")
 
 
-def load_state(state_file: Path = Path("out/state.json")) -> BotState:
+def load_state(state_file: Path | None = None) -> BotState:
     """
     Load state from file if it exists, otherwise return default state.
 
@@ -52,11 +52,18 @@ def load_state(state_file: Path = Path("out/state.json")) -> BotState:
     - Prevents daily loss limit bypass via restart
 
     Args:
-        state_file: Path to state file
+        state_file: Path to state file (defaults to out/state.json or AI_TRADER_STATE_FILE env var)
 
     Returns:
         BotState (always returns a valid state object, never None)
     """
+    # Check for environment variable override (for testing)
+    if state_file is None:
+        import os
+
+        env_path = os.getenv("AI_TRADER_STATE_FILE")
+        state_file = Path(env_path) if env_path else Path("out/state.json")
+
     today_date = get_today_date_eastern()
 
     if not state_file.exists():
@@ -84,14 +91,21 @@ def load_state(state_file: Path = Path("out/state.json")) -> BotState:
         return state
 
 
-def save_state(state: BotState, state_file: Path = Path("out/state.json")):
+def save_state(state: BotState, state_file: Path | None = None):
     """
     Save state to file.
 
     Args:
         state: State to save
-        state_file: Path to state file
+        state_file: Path to state file (defaults to out/state.json or AI_TRADER_STATE_FILE env var)
     """
+    # Check for environment variable override (for testing)
+    if state_file is None:
+        import os
+
+        env_path = os.getenv("AI_TRADER_STATE_FILE")
+        state_file = Path(env_path) if env_path else Path("out/state.json")
+
     # Ensure directory exists
     state_file.parent.mkdir(exist_ok=True)
 

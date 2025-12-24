@@ -107,6 +107,7 @@ On startup, the bot reconciles its local state with the broker's actual state to
 - `--paper-test-order SYMBOL QTY` - Submit single test MARKET order in paper mode and exit
 - `--test-order` - Submit test LIMIT buy (1 share) for first symbol in LIVE mode and exit
 - `--reconcile-only` - Reconcile state with broker and exit (no trading loop)
+- `--status` - Print operator-facing status/metrics snapshot and exit (no trading loop)
 
 ### Risk Control Flags
 - `--max-daily-loss <dollars>` - Maximum daily loss threshold (default: 500)
@@ -507,6 +508,127 @@ All tests are offline (no network calls, mock broker/provider).
 3. Session 3: Load state (-$70), add -$35 loss, save state (-$105), exit
 4. Session 4: Load state (-$105), trading blocked (exceeds -$100 limit)
 5. ✅ Loss persists and accumulates correctly
+
+---
+
+## Operator Observability
+
+The `--status` flag provides an operator-facing snapshot of current bot state and metrics for monitoring and debugging purposes.
+
+### Purpose
+Provide real-time visibility into bot health, risk status, and trading activity without running the full trading loop.
+
+### Features
+- **No market hours required**: Works anytime (market open or closed)
+- **No credentials required**: Works in mock mode without Alpaca API keys
+- **Human-readable output**: Formatted table printed to console
+- **Machine-readable output**: JSON file written to `out/status.json`
+- **Fast execution**: Exits immediately after displaying status
+
+### Metrics Displayed
+
+**System Info:**
+- Timestamp (UTC + US/Eastern)
+- Trading mode (mock/paper/live)
+
+**PnL Tracking:**
+- Daily realized PnL (persisted across restarts)
+- Session realized PnL (in-memory, resets on restart)
+
+**Risk Status:**
+- Daily loss kill-switch status (tripped/not tripped)
+- Session loss kill-switch status (tripped/not tripped)
+
+**Trading Activity:**
+- Open positions count and details
+- Open orders count and details
+
+**Signals:**
+- Last signal per symbol (currently not persisted, shows "N/A")
+
+### Usage
+
+```bash
+# Check status in mock mode (no credentials needed)
+python -m src.app --status
+
+# Check status in paper mode
+python -m src.app --mode paper --status
+
+# Check status in live mode (requires safety gates)
+python -m src.app --mode live --i-understand-live-trading --status
+```
+
+### Output Format
+
+**Console Output:**
+```
+================================================================================
+OPERATOR STATUS SNAPSHOT
+================================================================================
+Timestamp (UTC):        2024-01-15 15:30:45
+Timestamp (US/Eastern): 2024-01-15 10:30:45
+
+Mode:                   dry-run
+Daily PnL:              $   -123.45
+Session PnL:            $      0.00
+
+Open Positions:                  2
+Open Orders:                     1
+
+Daily Loss Kill-Switch: False
+Session Loss Kill-Switch: False
+
+Positions:
+  AAPL: 10 shares @ $150.25
+  MSFT: 5 shares @ $380.50
+
+Open Orders:
+  GOOGL: BUY 10 @ $142.30
+
+Last Signals: (Not persisted)
+================================================================================
+
+Machine-readable output written to: out/status.json
+```
+
+**JSON Output (`out/status.json`):**
+```json
+{
+  "timestamp_utc": "2024-01-15T15:30:45.123456",
+  "timestamp_eastern": "2024-01-15T10:30:45.123456-05:00",
+  "mode": "dry-run",
+  "daily_pnl": -123.45,
+  "session_pnl": 0.0,
+  "open_positions_count": 2,
+  "open_orders_count": 1,
+  "daily_loss_kill_switch_tripped": false,
+  "session_loss_kill_switch_tripped": false,
+  "positions": [
+    {"symbol": "AAPL", "quantity": 10, "avg_price": 150.25},
+    {"symbol": "MSFT", "quantity": 5, "avg_price": 380.50}
+  ],
+  "orders": [
+    {"symbol": "GOOGL", "side": "BUY", "qty": 10, "limit_price": 142.30}
+  ],
+  "last_signals": {}
+}
+```
+
+### Use Cases
+
+1. **Pre-trading checks**: Verify bot state before starting trading session
+2. **Health monitoring**: Quick check of PnL, positions, and risk status
+3. **Debugging**: Inspect state after unexpected behavior
+4. **Automation**: Parse JSON for monitoring dashboards or alerts
+5. **Risk management**: Verify kill-switch status without starting bot
+
+### Implementation Notes
+
+- **Session PnL**: Always shows 0 in status output (not persisted, only tracks within running session)
+- **Daily PnL**: Loaded from `state.json` (persisted across restarts)
+- **Kill-switch status**: Computed based on current PnL vs configured limits
+- **Positions/Orders**: Fetched from broker (MockBroker in mock mode, Alpaca API in paper/live)
 
 ---
 

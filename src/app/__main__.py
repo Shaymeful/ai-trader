@@ -5,7 +5,7 @@ import json
 import logging
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,7 +15,7 @@ from src.app.config import Config, is_live_trading_mode, load_config
 from src.app.models import FillRecord, OrderRecord, OrderSide, TradeRecord
 from src.app.order_pipeline import submit_signal_order
 from src.app.reconciliation import reconcile_with_broker
-from src.app.state import load_state, save_state
+from src.app.state import get_daily_realized_pnl, load_state, save_state
 from src.broker import AlpacaBroker, MockBroker
 from src.data import AlpacaDataProvider, MockDataProvider
 from src.risk import RiskManager
@@ -254,6 +254,12 @@ Examples:
         "--reconcile-only",
         action="store_true",
         help="Reconcile state with broker (sync orders/positions) and exit without running trading loop",
+    )
+
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print operator-facing status/metrics snapshot and exit (no trading loop)",
     )
 
     parser.add_argument(
@@ -1078,6 +1084,178 @@ def run_preflight_check(mode: str, base_url: str | None = None) -> int:
         return 1
 
 
+def run_status(mode: str) -> int:
+    """
+    Print operator-facing status/metrics snapshot and exit.
+
+    Displays:
+    - Mode (mock/paper/live)
+    - Session PnL (in-memory, resets on restart)
+    - Daily PnL (persisted across restarts)
+    - Open positions count
+    - Open orders count
+    - Daily loss kill-switch status
+    - Session loss kill-switch status
+    - Last signal per symbol (from state)
+    - Timestamp (UTC + US/Eastern)
+
+    Also writes machine-readable JSON to out/status.json.
+
+    Args:
+        mode: Trading mode (dry-run, paper, live)
+
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    try:
+        # Load configuration
+        config = load_config()
+
+        # Apply mode override
+        if mode == "dry-run":
+            config.dry_run = True
+        elif mode == "paper":
+            config.mode = "alpaca"
+            config.alpaca_base_url = "https://paper-api.alpaca.markets"
+        elif mode == "live":
+            config.mode = "alpaca"
+            config.alpaca_base_url = "https://api.alpaca.markets"
+
+        # Load state
+        state = load_state()
+
+        # Get daily realized PnL from state
+        daily_pnl = get_daily_realized_pnl(state)
+
+        # Initialize broker
+        if config.mode == "mock":
+            broker = MockBroker()
+        else:
+            broker = AlpacaBroker(
+                api_key=config.alpaca_api_key,
+                secret_key=config.alpaca_secret_key,
+                base_url=config.alpaca_base_url,
+            )
+
+        # Initialize risk manager
+        risk_manager = RiskManager(config, daily_realized_pnl=daily_pnl)
+
+        # Fetch open positions and orders
+        positions = broker.get_positions()
+        orders = broker.get_open_orders()
+
+        # Calculate metrics
+        mode_display = mode
+        session_pnl = risk_manager.session_pnl
+        open_positions_count = len(positions)
+        open_orders_count = len(orders)
+
+        # Check if kill switches are tripped
+        daily_loss_tripped = daily_pnl <= -config.max_daily_loss
+        session_loss_tripped = (
+            config.max_session_loss is not None and session_pnl <= -config.max_session_loss
+        )
+
+        # Get timestamps
+        now_utc = datetime.now(timezone.utc)  # noqa: UP017
+        now_eastern = get_exchange_time()
+
+        # Last signal per symbol (stored in state)
+        # For now, we'll show "N/A" as signals are not persisted
+        last_signals = {}
+
+        # Print human-readable table
+        print("\n" + "=" * 80)
+        print("OPERATOR STATUS SNAPSHOT")
+        print("=" * 80)
+        print(f"Timestamp (UTC):        {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Timestamp (US/Eastern): {now_eastern.strftime('%Y-%m-%d %H:%M:%S')}")
+        print()
+        print(f"Mode:                   {mode_display}")
+        print(f"Daily PnL:              ${daily_pnl:>10.2f}")
+        print(f"Session PnL:            ${session_pnl:>10.2f}")
+        print()
+        print(f"Open Positions:         {open_positions_count:>10}")
+        print(f"Open Orders:            {open_orders_count:>10}")
+        print()
+        print(f"Daily Loss Kill-Switch: {daily_loss_tripped}")
+        print(f"Session Loss Kill-Switch: {session_loss_tripped}")
+        print()
+
+        if positions:
+            print("Positions:")
+            for symbol, pos in positions.items():
+                print(f"  {symbol}: {pos['quantity']} shares @ ${pos['avg_price']:.2f}")
+        else:
+            print("Positions: None")
+
+        print()
+        if orders:
+            print("Open Orders:")
+            for order in orders:
+                print(
+                    f"  {order.get('symbol', 'N/A')}: {order.get('side', 'N/A')} "
+                    f"{order.get('qty', 'N/A')} @ ${order.get('limit_price', order.get('filled_avg_price', 'N/A'))}"
+                )
+        else:
+            print("Open Orders: None")
+
+        print()
+        print("Last Signals: (Not persisted)")
+        print("=" * 80)
+
+        # Write machine-readable JSON
+        status_data = {
+            "timestamp_utc": now_utc.isoformat(),
+            "timestamp_eastern": now_eastern.isoformat(),
+            "mode": mode_display,
+            "daily_pnl": float(daily_pnl),
+            "session_pnl": float(session_pnl),
+            "open_positions_count": open_positions_count,
+            "open_orders_count": open_orders_count,
+            "daily_loss_kill_switch_tripped": daily_loss_tripped,
+            "session_loss_kill_switch_tripped": session_loss_tripped,
+            "positions": [
+                {
+                    "symbol": symbol,
+                    "quantity": pos["quantity"],
+                    "avg_price": float(pos["avg_price"]),
+                }
+                for symbol, pos in positions.items()
+            ],
+            "orders": [
+                {
+                    "symbol": order.get("symbol", "N/A"),
+                    "side": order.get("side", "N/A"),
+                    "qty": order.get("qty", "N/A"),
+                    "limit_price": order.get("limit_price", order.get("filled_avg_price", "N/A")),
+                }
+                for order in orders
+            ],
+            "last_signals": last_signals,
+        }
+
+        # Ensure out directory exists
+        out_dir = Path("out")
+        out_dir.mkdir(exist_ok=True)
+
+        # Write JSON file
+        status_file = out_dir / "status.json"
+        with open(status_file, "w") as f:
+            json.dump(status_data, f, indent=2)
+
+        print(f"\nMachine-readable output written to: {status_file}")
+
+        return 0
+
+    except Exception as e:
+        print(f"ERROR: Failed to retrieve status - {e}", file=sys.stderr)
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """
     Main entry point for the trading bot CLI.
@@ -1288,6 +1466,10 @@ def main(argv: list[str] | None = None) -> int:
             base_url = None
 
         return run_preflight_check(args.mode, base_url)
+
+    # Handle --status flag
+    if args.status:
+        return run_status(args.mode)
 
     # Environment preflight check: paper/live modes require Alpaca API credentials
     # Exception: Skip credential check when --dry-run is set (no orders will be submitted)
