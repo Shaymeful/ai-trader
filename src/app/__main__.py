@@ -578,105 +578,138 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
         return 1
 
 
+def _check_live_trading_safety_gates(
+    config: Config, i_understand_live_trading: bool, command: str
+) -> tuple[bool, str | None]:
+    """
+    Check if live trading safety gates are satisfied.
+
+    Returns:
+        (passes, error_message): True if gates pass, False with error message otherwise
+    """
+    import os
+
+    # Only enforce safety gates for live mode
+    if config.alpaca_base_url != "https://api.alpaca.markets":
+        return (True, None)
+
+    if not i_understand_live_trading:
+        return (
+            False,
+            f"ERROR: {command} in live mode requires --i-understand-live-trading flag.\n"
+            "This operation affects live trading account.",
+        )
+
+    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
+    if enable_live_trading != "true":
+        return (
+            False,
+            f"ERROR: {command} in live mode requires ENABLE_LIVE_TRADING=true environment variable.\n"
+            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
+        )
+
+    return (True, None)
+
+
 def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int:
     """
     List all open orders and exit.
 
-    Safety gates:
-    - Requires mode=live
-    - Requires --i-understand-live-trading flag
-    - Requires ENABLE_LIVE_TRADING=true environment variable
+    Supports all trading modes:
+    - mock/dry-run: Uses MockBroker (no network, no credentials required)
+    - paper: Uses Alpaca paper endpoint (requires API keys)
+    - live: Uses Alpaca live endpoint (requires API keys + safety flags)
 
     Args:
         config: Configuration with broker settings
         i_understand_live_trading: Whether user acknowledged live trading risks
 
     Returns:
-        Exit code (0 for success, 1 for failure)
+        Exit code: 0=success, 1=user error, 2=network/broker error
     """
     import os
 
+    # Determine mode - check mock first
+    is_mock = config.mode in ("mock", "dry-run")
+    is_live = config.alpaca_base_url == "https://api.alpaca.markets" and not is_mock
+
+    # Print header
     print("=" * 70)
-    print("LIST OPEN ORDERS - LIVE MODE")
+    if is_mock:
+        print("LIST OPEN ORDERS - MOCK MODE")
+    elif is_live:
+        print("LIST OPEN ORDERS - LIVE MODE")
+    else:
+        print("LIST OPEN ORDERS - PAPER MODE")
     print("=" * 70)
 
-    # Safety gate checks (same as test-order)
-    if config.alpaca_base_url != "https://api.alpaca.markets":
-        print(
-            f"ERROR: --list-open-orders requires --mode live (current base URL: {config.alpaca_base_url})",
-            file=sys.stderr,
+    # Safety gate checks for live mode only
+    if is_live:
+        passes, error_msg = _check_live_trading_safety_gates(
+            config, i_understand_live_trading, "--list-open-orders"
         )
-        return 1
-
-    if not i_understand_live_trading:
-        print(
-            "ERROR: --list-open-orders requires --i-understand-live-trading flag.\n"
-            "This operation accesses live trading account.",
-            file=sys.stderr,
-        )
-        return 1
-
-    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
-    if enable_live_trading != "true":
-        print(
-            "ERROR: --list-open-orders requires ENABLE_LIVE_TRADING=true environment variable.\n"
-            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Check for API credentials
-    api_key = os.getenv("ALPACA_API_KEY")
-    secret_key = os.getenv("ALPACA_SECRET_KEY")
-
-    if not api_key or not secret_key:
-        print(
-            "ERROR: List orders requires Alpaca API credentials.\n"
-            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
-            file=sys.stderr,
-        )
-        return 1
+        if not passes:
+            print(error_msg, file=sys.stderr)
+            return 1
 
     # Initialize broker
     try:
-        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
-        print("  [OK] Connected to Alpaca (LIVE mode)")
+        if is_mock:
+            broker = MockBroker()
+            print("  [OK] Using MockBroker (offline mode)")
+        else:
+            # Paper or live mode - need API keys
+            api_key = os.getenv("ALPACA_API_KEY")
+            secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+            if not api_key or not secret_key:
+                print(
+                    "ERROR: Alpaca mode requires API credentials.\n"
+                    "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
-        return 1
+        return 2
 
     # List open orders
     try:
         orders = broker.list_open_orders_detailed()
 
         if not orders:
-            print("\nNo open orders found.")
+            print("\n✓ No open orders found.")
+            print("=" * 70)
             return 0
 
-        print(f"\nOpen Orders ({len(orders)}):")
-        print("-" * 70)
+        print(f"\n{'Open Orders':<40} Count: {len(orders)}")
+        print("-" * 120)
 
         # Print table header
-        print(f"{'Symbol':<8} {'Side':<6} {'Qty':<6} {'Type':<8} {'Limit':<10} {'Status':<10}")
-        print(f"{'Order ID':<20} {'Client Order ID':<30}")
-        print("-" * 70)
+        print(
+            f"{'Symbol':<8} {'Side':<5} {'Qty':>5} {'Type':<7} {'Limit':>10} {'Status':<10} "
+            f"{'Order ID':<20} {'Client Order ID':<20}"
+        )
+        print("-" * 120)
 
         # Print each order
         for order in orders:
-            print(
-                f"{order.symbol:<8} {order.side.value:<6} {order.quantity:<6} {order.type.value:<8} "
-                f"{('$' + str(order.price) if order.price else 'N/A'):<10} {order.status.value:<10}"
-            )
-            # Get client_order_id if available (may not be in Order model yet)
+            limit_price = f"${order.price:.2f}" if order.price else "N/A"
             client_id = getattr(order, "client_order_id", "N/A")
-            print(f"{order.id:<20} {client_id:<30}")
-            print()
+            print(
+                f"{order.symbol:<8} {order.side.value:<5} {order.quantity:>5} {order.type.value:<7} "
+                f"{limit_price:>10} {order.status.value:<10} {order.id:<20} {client_id:<20}"
+            )
 
+        print("-" * 120)
         print("=" * 70)
         return 0
     except Exception as e:
         print(f"ERROR: Failed to list orders: {e}", file=sys.stderr)
-        return 1
+        return 2
 
 
 def run_cancel_order(
@@ -688,10 +721,10 @@ def run_cancel_order(
     """
     Cancel an order by ID and exit.
 
-    Safety gates:
-    - Requires mode=live
-    - Requires --i-understand-live-trading flag
-    - Requires ENABLE_LIVE_TRADING=true environment variable
+    Supports all trading modes:
+    - mock/dry-run: Uses MockBroker (no network, no credentials required)
+    - paper: Uses Alpaca paper endpoint (requires API keys)
+    - live: Uses Alpaca live endpoint (requires API keys + safety flags)
 
     Args:
         config: Configuration with broker settings
@@ -700,94 +733,95 @@ def run_cancel_order(
         client_order_id: Client order ID to cancel (if provided)
 
     Returns:
-        Exit code (0 for success, 1 for failure)
+        Exit code: 0=success, 1=user error, 2=network/broker error
     """
     import os
 
+    # Validate inputs
+    if not order_id and not client_order_id:
+        print("ERROR: No order ID provided", file=sys.stderr)
+        return 1
+
+    # Determine mode - check mock first
+    is_mock = config.mode in ("mock", "dry-run")
+    is_live = config.alpaca_base_url == "https://api.alpaca.markets" and not is_mock
+
+    # Print header
     print("=" * 70)
-    print("CANCEL ORDER - LIVE MODE")
+    if is_mock:
+        print("CANCEL ORDER - MOCK MODE")
+    elif is_live:
+        print("CANCEL ORDER - LIVE MODE")
+    else:
+        print("CANCEL ORDER - PAPER MODE")
     print("=" * 70)
 
-    # Safety gate checks
-    if config.alpaca_base_url != "https://api.alpaca.markets":
-        print(
-            f"ERROR: Cancel order requires --mode live (current base URL: {config.alpaca_base_url})",
-            file=sys.stderr,
+    # Safety gate checks for live mode only
+    if is_live:
+        passes, error_msg = _check_live_trading_safety_gates(
+            config, i_understand_live_trading, "--cancel-order"
         )
-        return 1
-
-    if not i_understand_live_trading:
-        print(
-            "ERROR: Cancel order requires --i-understand-live-trading flag.\n"
-            "This operation affects live trading account.",
-            file=sys.stderr,
-        )
-        return 1
-
-    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
-    if enable_live_trading != "true":
-        print(
-            "ERROR: Cancel order requires ENABLE_LIVE_TRADING=true environment variable.\n"
-            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Check for API credentials
-    api_key = os.getenv("ALPACA_API_KEY")
-    secret_key = os.getenv("ALPACA_SECRET_KEY")
-
-    if not api_key or not secret_key:
-        print(
-            "ERROR: Cancel order requires Alpaca API credentials.\n"
-            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
-            file=sys.stderr,
-        )
-        return 1
+        if not passes:
+            print(error_msg, file=sys.stderr)
+            return 1
 
     # Initialize broker
     try:
-        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
-        print("  [OK] Connected to Alpaca (LIVE mode)")
+        if is_mock:
+            broker = MockBroker()
+            print("  [OK] Using MockBroker (offline mode)")
+        else:
+            # Paper or live mode - need API keys
+            api_key = os.getenv("ALPACA_API_KEY")
+            secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+            if not api_key or not secret_key:
+                print(
+                    "ERROR: Alpaca mode requires API credentials.\n"
+                    "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
-        return 1
+        return 2
 
     # Cancel order
     try:
         if order_id:
             print(f"\nCanceling order by ID: {order_id}")
             success = broker.cancel_order(order_id)
-        elif client_order_id:
+        else:
             print(f"\nCanceling order by client ID: {client_order_id}")
             success = broker.cancel_order_by_client_id(client_order_id)
-        else:
-            print("ERROR: No order ID provided", file=sys.stderr)
-            return 1
 
         if success:
             print("\n" + "=" * 70)
-            print("ORDER CANCELED SUCCESSFULLY")
+            print("✓ ORDER CANCELED SUCCESSFULLY")
             print("=" * 70)
 
-            # Verify cancellation
+            # Verify cancellation (only for broker order IDs)
             if order_id:
                 try:
                     status = broker.get_order_status(order_id)
-                    print(f"Verified status: {status.status.value}")
+                    print(f"  Verified status: {status.status.value}")
                 except Exception:
-                    print("Note: Could not verify final status")
+                    print("  Note: Could not verify final status")
 
+            print("=" * 70)
             return 0
         else:
             print(
-                "ERROR: Failed to cancel order (order may not exist or already filled)",
+                "\nERROR: Failed to cancel order (order may not exist or already filled)",
                 file=sys.stderr,
             )
-            return 1
+            return 2
     except Exception as e:
-        print(f"ERROR: Failed to cancel order: {e}", file=sys.stderr)
-        return 1
+        print(f"\nERROR: Failed to cancel order: {e}", file=sys.stderr)
+        return 2
 
 
 def run_replace_order(
@@ -800,11 +834,12 @@ def run_replace_order(
     """
     Replace/modify an order and exit.
 
-    Safety gates:
-    - Requires mode=live
-    - Requires --i-understand-live-trading flag
-    - Requires ENABLE_LIVE_TRADING=true environment variable
-    - Must pass RiskManager checks
+    Supports all trading modes:
+    - mock/dry-run: Uses MockBroker (no network, no credentials required)
+    - paper: Uses Alpaca paper endpoint (requires API keys)
+    - live: Uses Alpaca live endpoint (requires API keys + safety flags)
+
+    All modes validate replacement through RiskManager.
 
     Args:
         config: Configuration with broker settings and risk parameters
@@ -814,58 +849,56 @@ def run_replace_order(
         quantity: New quantity (optional)
 
     Returns:
-        Exit code (0 for success, 1 for failure)
+        Exit code: 0=success, 1=user error, 2=network/broker error
     """
     import os
 
+    # Determine mode - check mock first
+    is_mock = config.mode in ("mock", "dry-run")
+    is_live = config.alpaca_base_url == "https://api.alpaca.markets" and not is_mock
+
+    # Print header
     print("=" * 70)
-    print("REPLACE ORDER - LIVE MODE")
+    if is_mock:
+        print("REPLACE ORDER - MOCK MODE")
+    elif is_live:
+        print("REPLACE ORDER - LIVE MODE")
+    else:
+        print("REPLACE ORDER - PAPER MODE")
     print("=" * 70)
 
-    # Safety gate checks
-    if config.alpaca_base_url != "https://api.alpaca.markets":
-        print(
-            f"ERROR: Replace order requires --mode live (current base URL: {config.alpaca_base_url})",
-            file=sys.stderr,
+    # Safety gate checks for live mode only
+    if is_live:
+        passes, error_msg = _check_live_trading_safety_gates(
+            config, i_understand_live_trading, "--replace-order"
         )
-        return 1
-
-    if not i_understand_live_trading:
-        print(
-            "ERROR: Replace order requires --i-understand-live-trading flag.\n"
-            "This operation affects live trading account.",
-            file=sys.stderr,
-        )
-        return 1
-
-    enable_live_trading = os.getenv("ENABLE_LIVE_TRADING", "").lower()
-    if enable_live_trading != "true":
-        print(
-            "ERROR: Replace order requires ENABLE_LIVE_TRADING=true environment variable.\n"
-            f"Current value: {os.getenv('ENABLE_LIVE_TRADING', '(not set)')}",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Check for API credentials
-    api_key = os.getenv("ALPACA_API_KEY")
-    secret_key = os.getenv("ALPACA_SECRET_KEY")
-
-    if not api_key or not secret_key:
-        print(
-            "ERROR: Replace order requires Alpaca API credentials.\n"
-            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
-            file=sys.stderr,
-        )
-        return 1
+        if not passes:
+            print(error_msg, file=sys.stderr)
+            return 1
 
     # Initialize broker
     try:
-        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
-        print("  [OK] Connected to Alpaca (LIVE mode)")
+        if is_mock:
+            broker = MockBroker()
+            print("  [OK] Using MockBroker (offline mode)")
+        else:
+            # Paper or live mode - need API keys
+            api_key = os.getenv("ALPACA_API_KEY")
+            secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+            if not api_key or not secret_key:
+                print(
+                    "ERROR: Alpaca mode requires API credentials.\n"
+                    "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
-        return 1
+        return 2
 
     # Get existing order details for risk check
     try:
@@ -878,7 +911,7 @@ def run_replace_order(
         print(f"  New: limit_price=${limit_price}" + (f", quantity={quantity}" if quantity else ""))
     except Exception as e:
         print(f"ERROR: Could not fetch existing order: {e}", file=sys.stderr)
-        return 1
+        return 2
 
     # Risk check: validate new order parameters
     from src.risk import RiskManager
@@ -910,7 +943,7 @@ def run_replace_order(
         new_order = broker.replace_order(order_id, limit_price_decimal, quantity)
 
         print("\n" + "=" * 70)
-        print("ORDER REPLACED SUCCESSFULLY")
+        print("✓ ORDER REPLACED SUCCESSFULLY")
         print("=" * 70)
         print(f"  New Order ID: {new_order.id}")
         print(f"  Status: {new_order.status.value}")
@@ -919,12 +952,15 @@ def run_replace_order(
         print(f"  Quantity: {new_order.quantity}")
         print(f"  Limit Price: ${new_order.price}")
         print("=" * 70)
-        print("\nWARNING: This replacement was executed in LIVE mode with real money.")
-        print("Monitor your Alpaca dashboard to track this order.")
+
+        if is_live:
+            print("\nWARNING: This replacement was executed in LIVE mode with real money.")
+            print("Monitor your Alpaca dashboard to track this order.")
+
         return 0
     except Exception as e:
         print(f"ERROR: Failed to replace order: {e}", file=sys.stderr)
-        return 1
+        return 2
 
 
 def run_preflight_check(mode: str, base_url: str | None = None) -> int:

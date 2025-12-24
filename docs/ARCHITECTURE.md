@@ -107,11 +107,8 @@ On startup, the bot reconciles its local state with the broker's actual state to
 - `--test-order` - Submit test LIMIT buy (1 share) for first symbol in LIVE mode and exit
 - `--reconcile-only` - Reconcile state with broker and exit (no trading loop)
 
-### Order Management Flags (Live Mode Only)
-All order management commands require:
-- `--mode live`
-- `--i-understand-live-trading`
-- `ENABLE_LIVE_TRADING=true` environment variable
+### Order Management Flags
+Order management commands support all trading modes (mock, paper, live) with mode-appropriate safety gates.
 
 **Commands:**
 - `--list-open-orders` - List all open orders and exit
@@ -119,24 +116,32 @@ All order management commands require:
 - `--cancel-client-order-id CLIENT_ORDER_ID` - Cancel order by client order ID and exit
 - `--replace-order-id ORDER_ID --limit-price PRICE [--qty QUANTITY]` - Replace/modify order and exit
 
+**Mode Behavior:**
+- **mock/dry-run**: Uses MockBroker (no network, no credentials required, no safety gates)
+- **paper**: Uses Alpaca paper API (requires API keys, no safety gates)
+- **live**: Uses Alpaca live API (requires API keys + triple safety gates)
+
+**Exit Codes:**
+- `0` = Success
+- `1` = User error (missing params, safety gate failure)
+- `2` = Network/broker error
+
 **Examples:**
 ```bash
-# List open orders
+# Mock mode - no credentials needed, safe for day-to-day testing
+python -m src.app --mode dry-run --list-open-orders
+python -m src.app --mode dry-run --cancel-order-id test-123
+python -m src.app --mode dry-run --replace-order-id test-123 --limit-price 150.50
+
+# Paper mode - requires API keys, no safety gates
+python -m src.app --mode paper --list-open-orders
+python -m src.app --mode paper --cancel-order-id abc-123
+
+# Live mode - requires API keys + triple safety gates
 python -m src.app --mode live --i-understand-live-trading --list-open-orders
-
-# Cancel order by ID
 python -m src.app --mode live --i-understand-live-trading --cancel-order-id abc-123
-
-# Cancel order by client ID
-python -m src.app --mode live --i-understand-live-trading --cancel-client-order-id test-xyz
-
-# Replace order with new limit price
 python -m src.app --mode live --i-understand-live-trading \
   --replace-order-id abc-123 --limit-price 150.50
-
-# Replace order with new limit price and quantity
-python -m src.app --mode live --i-understand-live-trading \
-  --replace-order-id abc-123 --limit-price 150.50 --qty 10
 ```
 
 ### Flag Aliases
@@ -189,20 +194,31 @@ These gates apply to:
 - No partial operations - either all gates pass or operation aborts immediately
 
 ### Order Management Safety Gates
-Order management commands enforce the same triple authentication as live trading.
+Order management commands enforce mode-appropriate safety gates:
 
-**Additional Requirements:**
+**Mock/Dry-Run Mode:**
+- No safety gates required
+- Uses MockBroker (no network, no credentials)
+- Safe for day-to-day testing and development
+
+**Paper Mode:**
+- Requires API credentials (ALPACA_API_KEY, ALPACA_SECRET_KEY)
+- No triple safety gates (no --i-understand-live-trading or ENABLE_LIVE_TRADING required)
+- Uses Alpaca paper API endpoint
+
+**Live Mode:**
+- Requires triple authentication (same as trading loop):
+  1. `--mode live` (must be live Alpaca API endpoint)
+  2. `--i-understand-live-trading` flag
+  3. `ENABLE_LIVE_TRADING=true` env var
+  4. API credentials (ALPACA_API_KEY, ALPACA_SECRET_KEY)
+- Fail-fast before any I/O or API calls
+
+**Additional Requirements (all modes):**
 - `--replace-order-id`: Requires `--limit-price` parameter
 - `--replace-order-id`: Validates replacement through RiskManager (notional/exposure checks)
-- Cancel operations: Verify order status after cancellation attempt
+- Cancel operations: Verify order status after cancellation attempt (best effort)
 - Replace operations: Use Alpaca replace endpoint if available, fallback to cancel+new
-
-**Validation Order:**
-1. Check `--mode live` (must be live Alpaca API endpoint)
-2. Check `--i-understand-live-trading` flag
-3. Check `ENABLE_LIVE_TRADING=true` env var
-4. Check API credentials (ALPACA_API_KEY, ALPACA_SECRET_KEY)
-5. For replace: Validate through RiskManager before submitting
 
 ### Other Safety Gates
 - After-hours order submission blocked by default (use `--allow-after-hours-orders` in paper/dry-run only)
