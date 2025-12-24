@@ -55,3 +55,4 @@
 ## Development Setup
 
 * Run `pre-commit install` once to enable automatic linting/formatting on commit.
+* CI enforces the same ruff checks as pre-commit.
