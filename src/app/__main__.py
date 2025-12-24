@@ -12,7 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from src.app.config import Config, is_live_trading_mode, load_config
-from src.app.models import FillRecord, OrderRecord, TradeRecord
+from src.app.models import FillRecord, OrderRecord, OrderSide, TradeRecord
 from src.app.order_pipeline import submit_signal_order
 from src.app.reconciliation import reconcile_with_broker
 from src.app.state import load_state, save_state
@@ -45,6 +45,24 @@ def get_run_output_dir(run_id: str) -> Path:
     run_dir = Path("out") / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+def print_dry_run_preview(symbol: str, decision: str, qty: int | None = None, limit_price: Decimal | None = None, reason: str = ""):
+    """
+    Print a concise dry-run preview row to console.
+
+    Args:
+        symbol: Trading symbol
+        decision: BUY, SELL, or HOLD
+        qty: Order quantity (if applicable)
+        limit_price: Limit price (if applicable)
+        reason: Brief reason for decision
+    """
+    qty_str = f"{qty:>3}" if qty else "  -"
+    price_str = f"${limit_price:>7.2f}" if limit_price else "     N/A"
+    reason_truncated = reason[:50] if len(reason) <= 50 else reason[:47] + "..."
+
+    print(f"  {symbol:<6} {decision:<4} {qty_str}  {price_str}  {reason_truncated}")
 
 
 def close_logging_handlers():
@@ -142,6 +160,13 @@ Examples:
         "--preflight",
         action="store_true",
         help="Validate configuration and connectivity without running the trading loop",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run full pipeline (signals + risk checks + pricing) but never submit orders. "
+        "Works with any mode (mock/paper/live) without requiring credentials or safety gates.",
     )
 
     parser.add_argument(
@@ -1208,7 +1233,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     # Safety gate: require explicit acknowledgment for live trading
-    if args.mode == "live" and not args.i_understand_live_trading:
+    # Exception: Skip safety check when --dry-run is set (no orders will be submitted)
+    if args.mode == "live" and not args.i_understand_live_trading and not args.dry_run:
         print(
             "ERROR: Live trading mode requires explicit acknowledgment.\n"
             "Use --i-understand-live-trading to proceed with live trading.\n"
@@ -1248,7 +1274,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_preflight_check(args.mode, base_url)
 
     # Environment preflight check: paper/live modes require Alpaca API credentials
-    if args.mode in ("paper", "live"):
+    # Exception: Skip credential check when --dry-run is set (no orders will be submitted)
+    if args.mode in ("paper", "live") and not args.dry_run:
         import os
 
         if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
@@ -1277,6 +1304,7 @@ def main(argv: list[str] | None = None) -> int:
             compute_after_hours=args.compute_after_hours,
             allow_after_hours_orders=args.allow_after_hours_orders,
             reconcile_only=args.reconcile_only,
+            dry_run=args.dry_run,
             max_daily_loss=args.max_daily_loss,
             max_order_notional=args.max_order_notional,
             max_positions_notional=args.max_positions_notional,
@@ -1483,6 +1511,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
     compute_after_hours = kwargs.get("compute_after_hours", False)
     allow_after_hours_orders = kwargs.get("allow_after_hours_orders", False)
     reconcile_only = kwargs.get("reconcile_only", False)
+    dry_run_override = kwargs.get("dry_run", False)
     max_daily_loss_override = kwargs.get("max_daily_loss")
     max_order_notional_override = kwargs.get("max_order_notional")
     max_positions_notional_override = kwargs.get("max_positions_notional")
@@ -1520,6 +1549,11 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             config.mode = "alpaca"
             config.alpaca_base_url = "https://api.alpaca.markets"
             config.dry_run = False
+
+    # Apply dry-run override from CLI flag (overrides mode setting)
+    # This allows --dry-run to work with any mode (mock, paper, live)
+    if dry_run_override:
+        config.dry_run = True
 
     # Apply symbols override from CLI
     if symbols_override is not None:
@@ -1583,7 +1617,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
 
     # FAIL-FAST SAFETY GATE: Check live trading requirements before ANY operations
     # This prevents any file I/O, logging, or API calls if safety flags are missing
-    if is_live_trading_mode(config) and (
+    # EXCEPTION: Skip safety gates when dry_run is True (no orders will be submitted)
+    if not config.dry_run and is_live_trading_mode(config) and (
         not config.enable_live_trading or not config.i_understand_live_trading_risk
     ):
         error_msg = (
@@ -1601,6 +1636,10 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         logger.info("=" * 60)
         logger.info(f"Mode: {config.mode}")
         if config.dry_run:
+            # Print banner to console for visibility
+            print("\n" + "=" * 70)
+            print("DRY RUN — NO ORDERS SUBMITTED")
+            print("=" * 70 + "\n")
             logger.warning("=" * 60)
             logger.warning("DRY-RUN MODE ENABLED - NO ORDERS WILL BE SUBMITTED")
             logger.warning("=" * 60)
@@ -1646,7 +1685,25 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             logger.warning("=" * 60)
 
         # Initialize components based on mode
-        if config.mode == "mock":
+        # In dry-run mode, always use MockBroker (no credentials needed)
+        if config.dry_run:
+            logger.info("Dry-run mode: Using Mock broker (no orders will be submitted)")
+            broker = MockBroker()
+            # Still use real data provider for accurate signals
+            if config.mode == "alpaca" and config.alpaca_api_key and config.alpaca_secret_key:
+                logger.info("Using Alpaca data provider for market data")
+                try:
+                    data_provider = AlpacaDataProvider(
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
+                    )
+                except NotImplementedError:
+                    logger.warning("Alpaca implementation requires alpaca-py library")
+                    logger.info("Falling back to Mock data provider")
+                    data_provider = MockDataProvider()
+            else:
+                logger.info("Using Mock data provider")
+                data_provider = MockDataProvider()
+        elif config.mode == "mock":
             logger.info("Using Mock data provider and broker (offline mode)")
             data_provider = MockDataProvider()
             broker = MockBroker()
@@ -1724,6 +1781,13 @@ def run_trading_loop(iterations: int = 5, **kwargs):
         logger.info("Starting trading loop...")
         trades_executed = 0
 
+        # Print preview header for dry-run mode
+        if config.dry_run:
+            print("\nPREVIEW:")
+            print("  " + "-" * 80)
+            print(f"  {'Symbol':<6} {'Act':<4} {'Qty':>3}  {'Price':>9}  {'Reason':<50}")
+            print("  " + "-" * 80)
+
         for iteration in range(iterations):
             logger.info(f"\n--- Iteration {iteration + 1}/{iterations} ---")
 
@@ -1785,6 +1849,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                         )
                         if not compute_after_hours:
                             logger.info("    Signal: HOLD (market closed)")
+                            if config.dry_run:
+                                print_dry_run_preview(symbol, "HOLD", reason="Market closed")
                             continue
                         else:
                             logger.info("    Note: Computing signals after-hours for diagnostics")
@@ -1812,6 +1878,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                         logger.info("    SMA Signal: Insufficient data for indicator calculation")
                         logger.info(f"    Position Status: {'Long' if has_position else 'Flat'}")
                         logger.info("    Final Action: HOLD (insufficient data)")
+                        if config.dry_run:
+                            print_dry_run_preview(symbol, "HOLD", reason="Insufficient data")
                         continue
                     else:
                         logger.info(f"    SMA Fast ({config.sma_fast_period}): ${fast_sma:.2f}")
@@ -1843,6 +1911,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                                 "    Use --compute-after-hours --allow-after-hours-orders to submit orders after hours"
                             )
                             logger.info("    Final Action: HOLD (market hours gate)")
+                            if config.dry_run:
+                                print_dry_run_preview(symbol, "HOLD", reason="Market hours gate")
                             continue
 
                         if not in_market_hours and allow_after_hours_orders:
@@ -1876,6 +1946,28 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                                 logger.info(
                                     f"    Final Action: {signal.side.value.upper()} (dry-run)"
                                 )
+                                # Get limit price from order pipeline for preview
+                                # Try to get quote for price display
+                                try:
+                                    quote = broker.get_quote(symbol)
+                                    if config.use_limit_orders:
+                                        quarter_spread = quote.spread / Decimal("4")
+                                        if signal.side == OrderSide.BUY:
+                                            limit_price = min(quote.ask, quote.mid + quarter_spread)
+                                        else:
+                                            limit_price = max(quote.bid, quote.mid - quarter_spread)
+                                    else:
+                                        limit_price = quote.mid
+                                except Exception:
+                                    limit_price = signal.price
+
+                                print_dry_run_preview(
+                                    symbol,
+                                    signal.side.value.upper(),
+                                    qty=quantity,
+                                    limit_price=limit_price,
+                                    reason=signal.reason
+                                )
                             else:
                                 logger.info(
                                     f"    Final Action: {signal.side.value.upper()} (order submitted)"
@@ -1883,6 +1975,8 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                         else:
                             logger.warning(f"    Gate BLOCKED: {result.reason}")
                             logger.info("    Final Action: HOLD (blocked by gate)")
+                            if config.dry_run:
+                                print_dry_run_preview(symbol, "HOLD", reason=result.reason[:50])
 
                         if result.success and result.order is not None and not config.dry_run:
                             trades_executed += 1
@@ -1900,9 +1994,15 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                         )
                         logger.info(f"    Position Status: {'Long' if has_position else 'Flat'}")
                         logger.info("    Final Action: HOLD (no signal)")
+                        if config.dry_run:
+                            print_dry_run_preview(symbol, "HOLD", reason="No crossover")
 
             except Exception as e:
                 logger.error(f"Error in trading loop iteration: {e}", exc_info=True)
+
+        # Close preview table for dry-run mode
+        if config.dry_run:
+            print("  " + "-" * 80 + "\n")
 
         # Summary
         logger.info("\n" + "=" * 60)
