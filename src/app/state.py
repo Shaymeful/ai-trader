@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
@@ -22,11 +23,33 @@ class BotState(BaseModel):
         default_factory=dict,
         description="Daily realized PnL by date (YYYY-MM-DD -> decimal string)",
     )
+    daily_date: str | None = Field(
+        default=None,
+        description="Current trading day (YYYY-MM-DD in US/Eastern). "
+        "Used to detect day rollover and reset daily counters.",
+    )
+
+
+def get_today_date_eastern() -> str:
+    """
+    Get today's date in US/Eastern timezone as YYYY-MM-DD string.
+
+    Returns:
+        Date string in YYYY-MM-DD format (Eastern timezone)
+    """
+    eastern = ZoneInfo("America/New_York")
+    now_eastern = datetime.now(eastern)
+    return now_eastern.strftime("%Y-%m-%d")
 
 
 def load_state(state_file: Path = Path("out/state.json")) -> BotState:
     """
     Load state from file if it exists, otherwise return default state.
+
+    Automatically handles day rollover:
+    - If daily_date != today (US/Eastern), resets daily counters
+    - Updates daily_date to today
+    - Prevents daily loss limit bypass via restart
 
     Args:
         state_file: Path to state file
@@ -34,16 +57,31 @@ def load_state(state_file: Path = Path("out/state.json")) -> BotState:
     Returns:
         BotState (always returns a valid state object, never None)
     """
+    today_date = get_today_date_eastern()
+
     if not state_file.exists():
-        return BotState(run_id="initial")
+        state = BotState(run_id="initial")
+        state.daily_date = today_date
+        return state
 
     try:
         with open(state_file) as f:
             data = json.load(f)
-            return BotState(**data)
+            state = BotState(**data)
+
+        # Check for day rollover (new trading day in US/Eastern)
+        if state.daily_date != today_date:
+            # Reset daily counters for new trading day
+            state.daily_date = today_date
+            # Note: We keep historical daily_realized_pnl entries, but start fresh for today
+            # The get_daily_realized_pnl function will return 0 for today since it's not in the dict yet
+
+        return state
     except Exception:
         # If state is corrupted, start fresh
-        return BotState(run_id="initial")
+        state = BotState(run_id="initial")
+        state.daily_date = today_date
+        return state
 
 
 def save_state(state: BotState, state_file: Path = Path("out/state.json")):
@@ -71,15 +109,14 @@ def get_daily_realized_pnl(state: BotState, date: datetime | None = None) -> Dec
 
     Args:
         state: Bot state
-        date: Date to query (defaults to today)
+        date: Date to query (defaults to today in US/Eastern)
 
     Returns:
         Realized PnL for the date (Decimal)
     """
-    if date is None:
-        date = datetime.now()
+    # Use today's date in US/Eastern timezone
+    date_key = get_today_date_eastern() if date is None else date.strftime("%Y-%m-%d")
 
-    date_key = date.strftime("%Y-%m-%d")
     pnl_str = state.daily_realized_pnl.get(date_key, "0")
     return Decimal(pnl_str)
 
@@ -91,12 +128,11 @@ def update_daily_realized_pnl(state: BotState, pnl_delta: Decimal, date: datetim
     Args:
         state: Bot state to update
         pnl_delta: PnL change to add
-        date: Date to update (defaults to today)
+        date: Date to update (defaults to today in US/Eastern)
     """
-    if date is None:
-        date = datetime.now()
+    # Use today's date in US/Eastern timezone
+    date_key = get_today_date_eastern() if date is None else date.strftime("%Y-%m-%d")
 
-    date_key = date.strftime("%Y-%m-%d")
     current_pnl = get_daily_realized_pnl(state, date)
     new_pnl = current_pnl + pnl_delta
     state.daily_realized_pnl[date_key] = str(new_pnl)
