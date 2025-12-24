@@ -98,6 +98,7 @@ On startup, the bot reconciles its local state with the broker's actual state to
 
 ### Core Flags
 - `--mode {dry-run,paper,live}` - Trading mode
+- `--dry-run` - Run full pipeline (signals + risk checks + pricing) but never submit orders
 - `--preflight` - Validate configuration and connectivity
 - `--once` - Run exactly 1 trading loop iteration
 - `--max-iterations N` (alias: `--iterations`) - Controls trading loop iterations (default: 5)
@@ -148,6 +149,107 @@ python -m src.app --mode live --i-understand-live-trading \
 - `--iterations` works identically to `--max-iterations`
 - Both flags accept an integer value and control the number of trading loop iterations
 - Default: 5 iterations if not specified
+
+---
+
+## Dry-Run Execution Preview
+
+### Purpose
+The `--dry-run` flag enables execution preview mode where the full trading pipeline runs (signal generation, risk checks, quote fetching, pricing decisions) but no orders are ever submitted to the broker.
+
+### Key Features
+- **No Order Submission**: Broker submit/cancel/replace endpoints are never called
+- **Full Pipeline Execution**: Runs complete strategy logic including:
+  - Market data fetching (bars and quotes)
+  - Signal generation (SMA crossovers)
+  - Risk manager checks (position sizing, exposure limits)
+  - Limit price calculation (spread-aware pricing)
+- **Preview Output**: For each symbol, prints concise decision summary with:
+  - Symbol name
+  - Decision (BUY/SELL/HOLD)
+  - Quantity (if order would be placed)
+  - Limit price (if applicable)
+  - Reason (crossover detected, market closed, gate blocked, etc.)
+- **Banner**: Prints `DRY RUN — NO ORDERS SUBMITTED` at start for visibility
+
+### Mode Compatibility
+Dry-run works with any trading mode without requiring credentials or safety gates:
+
+**Mock Mode (`--mode dry-run --dry-run`):**
+- Uses MockBroker (no network calls)
+- Uses MockDataProvider (deterministic test data)
+- No credentials required
+
+**Paper Mode (`--mode paper --dry-run`):**
+- Uses MockBroker (no orders submitted)
+- Can use AlpacaDataProvider if credentials available (accurate market data)
+- Falls back to MockDataProvider if no credentials
+- **No API credentials required** (unlike normal paper mode)
+
+**Live Mode (`--mode live --dry-run`):**
+- Uses MockBroker (no orders submitted)
+- Can use AlpacaDataProvider if credentials available
+- **No safety gates required** (no `--i-understand-live-trading` or `ENABLE_LIVE_TRADING=true`)
+- Safe for testing live mode logic without risk
+
+### Safety Gates Bypass
+When `--dry-run` is set, the following safety checks are **bypassed** (since no orders will be submitted):
+1. Live trading triple authentication (--i-understand-live-trading + ENABLE_LIVE_TRADING)
+2. API credential requirements for paper/live modes
+3. After-hours order submission gates (preview still respects market hours for accuracy)
+
+### Implementation Details
+- **Broker**: Always uses MockBroker regardless of configured mode
+- **Data Provider**: Uses real provider (Alpaca) if credentials available, otherwise MockDataProvider
+- **Risk Checks**: Still executed to show what would be rejected
+- **Order Pipeline**: Runs through spread checks and limit price calculation before stopping
+- **State File**: Not modified (no orders to track)
+
+### Examples
+
+**Test strategy logic without submitting orders:**
+```bash
+python -m src.app --mode dry-run --dry-run --once --symbols AAPL,MSFT
+```
+
+**Preview with real market data (requires Alpaca credentials):**
+```bash
+python -m src.app --mode paper --dry-run --once --symbols AAPL,MSFT
+```
+
+**Test live mode logic safely (no credentials or safety gates needed):**
+```bash
+python -m src.app --mode live --dry-run --once --symbols AAPL,MSFT
+```
+
+**Run multiple iterations to see decision patterns:**
+```bash
+python -m src.app --dry-run --iterations 10 --symbols AAPL
+```
+
+### Output Format
+```
+======================================================================
+DRY RUN — NO ORDERS SUBMITTED
+======================================================================
+
+PREVIEW:
+  --------------------------------------------------------------------------------
+  Symbol Act  Qty      Price  Reason
+  --------------------------------------------------------------------------------
+  AAPL   BUY    5   $175.25  Golden cross detected (fast>slow)
+  MSFT   HOLD   -       N/A  No crossover detected
+  GOOGL  HOLD   -       N/A  Market closed (gate blocked)
+  --------------------------------------------------------------------------------
+```
+
+### Testing
+Comprehensive test coverage in `tests/test_dry_run.py`:
+- Verifies no broker calls made
+- Checks preview output format
+- Tests mode combinations (mock, paper, live)
+- Validates safety gate bypass
+- Confirms credential bypass for paper/live modes
 
 ---
 
