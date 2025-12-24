@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
     Alpaca operator console - paper-first, live-gated
@@ -107,7 +107,7 @@ if ($IsTrading -and $Type -eq 'limit' -and [string]::IsNullOrWhiteSpace($Limit))
 switch ($Action) {
     'status' {
         $Url = "$BaseUrl/v2/account"
-        $Result = curl.exe -s -f --fail-with-body -X GET $Url `
+        $Result = curl.exe -s -f --fail -X GET $Url `
             -H "APCA-API-KEY-ID: $ApiKey" `
             -H "APCA-API-SECRET-KEY: $SecretKey"
 
@@ -120,7 +120,7 @@ switch ($Action) {
 
     'positions' {
         $Url = "$BaseUrl/v2/positions"
-        $Result = curl.exe -s -f --fail-with-body -X GET $Url `
+        $Result = curl.exe -s -f --fail -X GET $Url `
             -H "APCA-API-KEY-ID: $ApiKey" `
             -H "APCA-API-SECRET-KEY: $SecretKey"
 
@@ -133,7 +133,7 @@ switch ($Action) {
 
     'orders' {
         $Url = "$BaseUrl/v2/orders?status=open&limit=50"
-        $Result = curl.exe -s -f --fail-with-body -X GET $Url `
+        $Result = curl.exe -s -f --fail -X GET $Url `
             -H "APCA-API-KEY-ID: $ApiKey" `
             -H "APCA-API-SECRET-KEY: $SecretKey"
 
@@ -146,7 +146,7 @@ switch ($Action) {
 
     'cancel-all' {
         $Url = "$BaseUrl/v2/orders"
-        $Result = curl.exe -s -f --fail-with-body -X DELETE $Url `
+        $Result = curl.exe -s -f --fail -X DELETE $Url `
             -H "APCA-API-KEY-ID: $ApiKey" `
             -H "APCA-API-SECRET-KEY: $SecretKey"
 
@@ -179,19 +179,28 @@ switch ($Action) {
 
         $JsonPayload = $OrderPayload | ConvertTo-Json -Compress
 
-        $Url = "$BaseUrl/v2/orders"
-        $Result = curl.exe -s -f --fail-with-body -X POST $Url `
-            -H "APCA-API-KEY-ID: $ApiKey" `
-            -H "APCA-API-SECRET-KEY: $SecretKey" `
-            -H "Content-Type: application/json" `
-            -d $JsonPayload
+        # Write JSON to temp file without BOM (required for Alpaca API on Windows)
+        $TempFile = New-TemporaryFile
+        try {
+            [System.IO.File]::WriteAllText($TempFile.FullName, $JsonPayload, (New-Object System.Text.UTF8Encoding($false)))
 
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "HTTP request failed"
-            exit 1
+            $Url = "$BaseUrl/v2/orders"
+            $Result = curl.exe -s --fail -X POST $Url `
+                -H "APCA-API-KEY-ID: $ApiKey" `
+                -H "APCA-API-SECRET-KEY: $SecretKey" `
+                -H "Content-Type: application/json" `
+                --data-binary "@$($TempFile.FullName)"
+
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "HTTP request failed"
+                exit 1
+            }
+            Write-Output $Result
+        } finally {
+            Remove-Item $TempFile.FullName -Force -ErrorAction SilentlyContinue
         }
-        Write-Output $Result
     }
 }
 
 exit 0
+
