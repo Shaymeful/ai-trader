@@ -38,8 +38,24 @@ param(
     [switch]$Extended,
 
     [Parameter()]
-    [string]$Confirm = ''
+    [string]$Confirm = '',
+
+    # Output mode switches
+    [Parameter()]
+    [switch]$Summary,
+
+    [Parameter()]
+    [switch]$Raw
 )
+
+# Validate output mode flags
+if ($Summary -and $Raw) {
+    Write-Error "ERROR: -Summary and -Raw are mutually exclusive. Use one or neither (defaults to summary)."
+    exit 1
+}
+
+# Default to summary mode if neither flag is specified
+$UseSummary = $Summary -or (-not $Raw)
 
 # Determine base URL and credentials based on mode
 if ($Mode -eq 'paper') {
@@ -103,6 +119,44 @@ if ($IsTrading -and $Type -eq 'limit' -and [string]::IsNullOrWhiteSpace($Limit))
     exit 1
 }
 
+# Helper function to format output
+function Format-Output {
+    param(
+        [string]$JsonResult,
+        [string]$OutputType
+    )
+
+    if (-not $UseSummary) {
+        # Raw mode: just print the JSON
+        Write-Output $JsonResult
+        return
+    }
+
+    # Summary mode: parse and format
+    $Data = $JsonResult | ConvertFrom-Json
+
+    switch ($OutputType) {
+        'account' {
+            $Data | Select-Object account_number, status, equity, cash, buying_power, portfolio_value
+        }
+        'positions' {
+            $Data | Select-Object symbol, qty, avg_entry_price, market_value, unrealized_pl, unrealized_plpc
+        }
+        'order' {
+            $Data | Select-Object id, symbol, side, qty, type, limit_price, status, filled_qty, filled_avg_price, submitted_at
+        }
+        'orders' {
+            $Data | Select-Object id, symbol, side, qty, type, limit_price, status, filled_qty, filled_avg_price, submitted_at
+        }
+        'cancel-all' {
+            $Data | Select-Object id, status
+        }
+        default {
+            Write-Output $JsonResult
+        }
+    }
+}
+
 # Execute action
 switch ($Action) {
     'status' {
@@ -115,7 +169,7 @@ switch ($Action) {
             Write-Error "HTTP request failed"
             exit 1
         }
-        Write-Output $Result
+        Format-Output -JsonResult $Result -OutputType 'account'
     }
 
     'positions' {
@@ -128,7 +182,7 @@ switch ($Action) {
             Write-Error "HTTP request failed"
             exit 1
         }
-        Write-Output $Result
+        Format-Output -JsonResult $Result -OutputType 'positions'
     }
 
     'orders' {
@@ -141,7 +195,7 @@ switch ($Action) {
             Write-Error "HTTP request failed"
             exit 1
         }
-        Write-Output $Result
+        Format-Output -JsonResult $Result -OutputType 'orders'
     }
 
     'cancel-all' {
@@ -154,7 +208,7 @@ switch ($Action) {
             Write-Error "HTTP request failed"
             exit 1
         }
-        Write-Output $Result
+        Format-Output -JsonResult $Result -OutputType 'cancel-all'
     }
 
     { $_ -in @('buy', 'sell') } {
@@ -195,7 +249,7 @@ switch ($Action) {
                 Write-Error "HTTP request failed"
                 exit 1
             }
-            Write-Output $Result
+            Format-Output -JsonResult $Result -OutputType 'order'
         } finally {
             Remove-Item $TempFile.FullName -Force -ErrorAction SilentlyContinue
         }
