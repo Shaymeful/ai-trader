@@ -1,6 +1,5 @@
 """Tests for Alpaca credential management with mode-specific env vars."""
 
-
 import pytest
 
 from src.app.config import get_alpaca_credentials, validate_alpaca_credentials

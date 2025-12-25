@@ -26,6 +26,53 @@
 
 ---
 
+# Alpaca Operator Console (PowerShell)
+
+Quick reference for the Alpaca operator console script (`tools\alpaca.ps1`).
+
+**Prerequisites:**
+- Paper requires env vars: `ALPACA_PAPER_KEY_ID` and `ALPACA_PAPER_SECRET_KEY`
+- Live requires env vars: `ALPACA_LIVE_KEY_ID` and `ALPACA_LIVE_SECRET_KEY`
+- Live buy/sell require: `ALPACA_LIVE_ARM='YES'` and `-Confirm` parameter
+
+**PAPER (default) sanity checks:**
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 status
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 orders
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 positions
+```
+
+**PAPER place a LIMIT buy (recommended after-hours):**
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 buy -Symbol SPY -Qty 1 -Type limit -Limit 400.00 -Extended
+```
+
+**PAPER cancel everything:**
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 cancel-all
+```
+
+**LIVE read-only (no arming required):**
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 status -Mode live
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 orders -Mode live
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 positions -Mode live
+```
+
+**LIVE cancel-all (arming required):**
+```powershell
+$env:ALPACA_LIVE_ARM="YES"
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 cancel-all -Mode live
+```
+
+**LIVE place order (arming + confirm required):**
+```powershell
+$env:ALPACA_LIVE_ARM="YES"
+powershell -ExecutionPolicy Bypass -File tools\alpaca.ps1 buy -Mode live -Symbol SPY -Qty 1 -Type limit -Limit 400.00 -Confirm "LIVE-SPY-1-buy"
+```
+
+---
+
 # AI Trader Repo Rules
 
 ## Safety + correctness
