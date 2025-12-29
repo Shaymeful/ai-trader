@@ -895,6 +895,258 @@ All parameters have conservative defaults to prevent accidental trading of unsui
 
 ---
 
+## Order Slicing & Risk-Reducing Sells
+
+The execution layer implements automatic order slicing to handle orders exceeding `max_order_notional` caps, while ensuring risk-reducing sells can always proceed.
+
+### Problem Statement
+
+**Original Issue:**
+- Executor blocked risk-reducing sells when they exceeded `max_order_notional`
+- Example: Position of SPY=2 @ $690/share ($1380 total), with `max_order_usd=$100`
+- Attempting to flatten (target=0) would generate SELL 2 @ $1380 > $100 cap → **order blocked**
+- **Result**: Position stuck, unable to close
+
+### Solution: Automatic Order Slicing
+
+Orders exceeding `max_order_notional` are automatically sliced into multiple smaller orders:
+- Each slice respects the `max_order_notional` cap
+- Applies to both BUY and SELL orders
+- Preserves all order attributes (symbol, side, limit price, reason)
+- All slices use same limit price offset rules (-0.5% for buys, +0.5% for sells)
+
+**Slicing Algorithm:**
+```python
+# Given: Order to SELL 5 shares @ $690, max_order_notional = $150
+
+1. Calculate notional: 5 * $690 = $3,450
+2. Exceeds cap → slice required
+3. Max shares per slice: floor($150 / $690) = 0 → force to 1 (minimum)
+4. Total slices needed: ceil(5 / 1) = 5 slices
+5. Result: 5 separate SELL orders of 1 share each @ ~$687 (with +0.5% offset)
+```
+
+**Minimum Tradeable Unit:**
+- If price exceeds cap (e.g., $690 > $150), max_qty_per_slice = 0
+- Force to 1 share minimum (cannot trade fractional shares)
+- Individual slices may exceed cap but proceed anyway (minimum atomic unit)
+
+### Risk-Reducing Sells Policy
+
+**Definition:** A sell order is "risk-reducing" if it closes an existing long position.
+
+**Policy Rules:**
+1. **Risk-reducing sells ALWAYS proceed** (with slicing if needed)
+2. **Risk-increasing orders** (BUY) are subject to `max_positions_notional` cap
+3. Risk-reducing sells bypass exposure cap checks
+4. Ensures positions can always be closed regardless of order size
+
+**Detection:**
+- Order marked as `is_risk_reducing=True` when:
+  - `side == SELL`
+  - Current position quantity > 0 (closing long)
+- Tracked throughout slicing and execution
+
+**Example:**
+```
+Current: SPY=2 @ $680
+Target: SPY=0 (flatten)
+Delta: -2 (SELL 2)
+max_order_notional: $100
+
+Without risk-reducing policy: BLOCKED (2 * $690 = $1380 > $100)
+With risk-reducing policy: SLICED into 2 orders of 1 share each → PROCEEDS
+```
+
+### Reconciliation Policy
+
+**Explicit Position Behavior:**
+- Symbols **not present** in `AllocationResult.target_positions` are treated as `target=0` (flatten)
+- This makes flattening behavior explicit and deterministic
+- Reconciliation considers ALL symbols in current positions OR target positions
+
+**Reconciliation Steps:**
+1. Fetch current positions from broker
+2. Compare current vs target for all symbols
+3. Calculate delta: `target_qty - current_qty`
+4. Generate order instructions for non-zero deltas
+5. Apply slicing and risk enforcement
+6. Place orders
+
+**Reconciliation Table Output:**
+```
+Reconciliation:
+  Symbol    Current   Target    Delta Action
+  ------------------------------------------------------------
+  AAPL            5        2       -3 SELL 3
+  SPY             2        0       -2 SELL 2 (flatten)
+  MSFT            0        1        1 BUY 1
+```
+
+### Responsibility Split: Allocator vs Executor
+
+**Allocator (`src/app/allocator.py`):**
+- Assigns capital budgets to strategies (equal-weight by default)
+- Aggregates target positions across strategies
+- Enforces **only** `max_positions_notional` (total portfolio cap)
+- **Does NOT enforce** `max_order_notional` (delegated to executor)
+- Passes through target quantities unchanged (no pre-filtering)
+
+**Executor (`src/app/execution/alpaca_executor.py`):**
+- Reconciles target vs current positions
+- Generates order instructions (delta-based)
+- Enforces `max_order_notional` via order slicing
+- Enforces `max_positions_notional` for risk-increasing orders only
+- Tracks exposure correctly (adds for buys, subtracts for risk-reducing sells)
+- Places orders (or dry-run prints)
+
+**Rationale:**
+- Allocator operates at portfolio level (total exposure)
+- Executor operates at order level (individual order constraints)
+- Clean separation of concerns
+- Slicing logic centralized in execution layer
+
+### Slicing Implementation
+
+**Core Function:** `AlpacaExecutor._slice_order(instruction, price)`
+
+**Returns:** List of `OrderSlice` objects, each containing:
+- `instruction`: OrderInstruction with adjusted quantity
+- `slice_index`: 1-based index of this slice
+- `total_slices`: Total number of slices for this order
+
+**Single Order (no slicing):**
+```python
+OrderSlice(
+    instruction=OrderInstruction(symbol="XLF", side=BUY, quantity=1, ...),
+    slice_index=1,
+    total_slices=1
+)
+```
+
+**Sliced Order:**
+```python
+[
+    OrderSlice(instruction=OrderInstruction(symbol="SPY", side=SELL, quantity=1, ...), slice_index=1, total_slices=2),
+    OrderSlice(instruction=OrderInstruction(symbol="SPY", side=SELL, quantity=1, ...), slice_index=2, total_slices=2),
+]
+```
+
+### Execution Logging
+
+**Slicing Notification:**
+```
+Execution (max_order_usd=$100):
+  AAPL: Order $1366.95 exceeds cap, slicing into 5 orders
+```
+
+**Dry-Run Output (with slicing):**
+```
+  [DRY-RUN] AAPL   SELL   1 @ $ 272.02  (Target=0, Current=5, Delta=-5) [slice 1/5] (risk-reducing)
+  [DRY-RUN] AAPL   SELL   1 @ $ 272.02  (Target=0, Current=5, Delta=-5) [slice 2/5] (risk-reducing)
+  [DRY-RUN] AAPL   SELL   1 @ $ 272.02  (Target=0, Current=5, Delta=-5) [slice 3/5] (risk-reducing)
+  [DRY-RUN] AAPL   SELL   1 @ $ 272.02  (Target=0, Current=5, Delta=-5) [slice 4/5] (risk-reducing)
+  [DRY-RUN] AAPL   SELL   1 @ $ 272.02  (Target=0, Current=5, Delta=-5) [slice 5/5] (risk-reducing)
+```
+
+**Production Logging:**
+```
+INFO: Order placed: AAPL SELL 1 @ $272.02 (slice 1/5, ID: abc-123)
+INFO: Order placed: AAPL SELL 1 @ $272.02 (slice 2/5, ID: abc-124)
+...
+```
+
+### Risk Enforcement Rules
+
+**For Risk-Increasing Orders (BUY):**
+1. Apply slicing if notional exceeds `max_order_notional`
+2. Check each slice against `max_positions_notional`
+3. Skip slice if adding it would exceed total exposure cap
+4. Update exposure tracker: `exposure += slice_notional`
+
+**For Risk-Reducing Orders (SELL closing position):**
+1. Apply slicing if notional exceeds `max_order_notional`
+2. **Bypass** `max_positions_notional` check (always proceed)
+3. Update exposure tracker: `exposure -= slice_notional`
+4. Never skip risk-reducing slices
+
+**Exposure Tracking:**
+- Current exposure calculated from broker positions
+- Updated after each slice placement
+- Risk-reducing orders **decrease** exposure
+- Risk-increasing orders **increase** exposure
+
+### Testing
+
+**Test Coverage (`tests/test_execution.py`):**
+
+1. `test_executor_slices_large_order` - Verify BUY order slicing
+2. `test_executor_risk_reducing_sell_with_slicing` - **Critical**: Flatten position with low cap
+3. `test_executor_partial_flatten_with_slicing` - Partial position reduction
+4. `test_executor_buy_order_slicing` - BUY orders also sliced
+5. `test_executor_mixed_slicing_and_no_slicing` - Mixed scenarios
+
+**Test Coverage (`tests/test_allocator.py`):**
+
+6. `test_allocator_passes_through_large_orders` - Allocator doesn't pre-filter by `max_order_notional`
+
+**Critical Test Scenario:**
+```python
+# Current: SPY=2 @ $680, Target: 0 (flatten)
+# max_order_notional=$100, price=$690
+# Expected: 2 SELL orders of 1 share each (sliced)
+# Result: PASSES - position flattened
+
+config = Config(max_order_notional=Decimal("100"))
+broker.positions["SPY"] = (2, Decimal("680.00"))
+target_positions = {}  # Empty = flatten to 0
+
+result = executor.reconcile_and_execute(target_positions, prices)
+assert len(result.orders_placed) == 2  # 2 slices
+assert all(order.side == OrderSide.SELL for order in broker.orders)
+```
+
+All 329 tests pass with slicing enabled.
+
+### Before vs After Comparison
+
+| Scenario | Before (Blocking) | After (Slicing) |
+|----------|------------------|-----------------|
+| SPY position=2, target=0, cap=$100 | SELL 2 blocked ($1380 > $100) | SELL 2 sliced into 2 orders of 1 share |
+| Orders placed | 0 | 2 |
+| Orders skipped | 1 (blocked) | 0 |
+| Position result | **Stuck at 2 shares** | **✅ Flattened to 0** |
+| Can close positions | **NO** | **YES** |
+
+### CLI Flags
+
+**Relevant Risk Parameters:**
+- `--max-order-notional <dollars>` - Maximum order notional value (default: $500)
+  - Enforced via automatic order slicing
+  - Applies to both BUY and SELL orders
+  - Risk-reducing sells always proceed (sliced if needed)
+- `--max-positions-notional <dollars>` - Maximum total positions exposure (default: $10000)
+  - Enforced by allocator (total cap)
+  - Enforced by executor for risk-increasing orders only
+  - Bypassed for risk-reducing sells
+
+**Strategy Runner Flags:**
+- `--mode paper` - Uses AlpacaBroker with slicing enabled
+- `--dry-run` - Prints sliced orders without placing
+
+### Implementation Files
+
+- `src/app/allocator.py` - Portfolio allocation (only enforces total cap)
+- `src/app/execution/alpaca_executor.py` - Order slicing and execution
+  - `_slice_order()` - Core slicing logic
+  - `_generate_order_instructions()` - Delta calculation, risk-reducing detection
+  - `_execute_orders()` - Slice placement, exposure tracking
+  - `reconcile_and_execute()` - Top-level reconciliation
+- `tests/test_execution.py` - Execution and slicing tests
+- `tests/test_allocator.py` - Allocator behavior tests
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing

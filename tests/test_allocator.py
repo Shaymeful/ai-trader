@@ -45,11 +45,11 @@ def test_allocator_equal_weight():
     assert result.target_positions["QQQ"] == 5
 
 
-def test_allocator_risk_cap_per_order():
-    """Test that allocator enforces max_order_notional cap."""
+def test_allocator_passes_through_large_orders():
+    """Test that allocator passes through orders exceeding max_order_notional."""
     config = Config(
         max_positions_notional=Decimal("10000"),
-        max_order_notional=Decimal("500"),  # Small cap
+        max_order_notional=Decimal("500"),  # Small cap (but not enforced by allocator)
         max_daily_loss=Decimal("500"),
     )
 
@@ -57,7 +57,8 @@ def test_allocator_risk_cap_per_order():
 
     strategy_intents = {
         "strategy_a": [
-            # 10 shares * $450 = $4500 > $500 cap, should be reduced
+            # 10 shares * $450 = $4500 > $500 cap
+            # Allocator should pass this through; executor will slice it
             PositionIntent(symbol="SPY", target_quantity=10, conviction=0.8, reason="test"),
         ],
     }
@@ -68,10 +69,9 @@ def test_allocator_risk_cap_per_order():
 
     result = allocator.allocate(strategy_intents, current_prices)
 
-    # Should be capped to 1 share ($450 < $500)
-    assert result.target_positions["SPY"] == 1
-    assert len(result.warnings) > 0
-    assert "Capped" in result.warnings[0]
+    # Allocator should NOT cap based on max_order_notional
+    # Executor will handle slicing
+    assert result.target_positions["SPY"] == 10
 
 
 def test_allocator_risk_cap_total_notional():

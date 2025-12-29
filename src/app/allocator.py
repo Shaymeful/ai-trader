@@ -113,9 +113,8 @@ class Allocator:
         """
         Apply risk caps to target positions.
 
-        Enforces:
-        - max_order_notional per symbol
-        - max_positions_notional total
+        Note: max_order_notional is enforced by the executor via order slicing.
+        This method only enforces max_positions_notional (total portfolio cap).
 
         Args:
             targets: Dict of symbol -> target quantity
@@ -136,16 +135,8 @@ class Allocator:
             price = prices[symbol]
             notional = abs(qty) * price
 
-            # Cap per-symbol notional
-            if notional > self.config.max_order_notional:
-                max_qty = int(self.config.max_order_notional / price)
-                original_qty = qty
-                qty = max_qty if qty > 0 else -max_qty
-                warnings.append(
-                    f"{symbol}: Capped from {original_qty} to {qty} shares "
-                    f"(${notional:.2f} > ${self.config.max_order_notional})"
-                )
-                notional = abs(qty) * price
+            # Note: max_order_notional is now enforced by executor via order slicing
+            # We only enforce max_positions_notional here (total portfolio cap)
 
             # Check if adding this position would exceed total notional
             if total_notional + notional > self.config.max_positions_notional:

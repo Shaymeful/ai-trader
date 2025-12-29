@@ -78,10 +78,10 @@ def test_executor_reconcile_no_change():
 
 
 def test_executor_enforces_max_order_notional():
-    """Test that executor enforces max_order_notional cap."""
+    """Test that executor slices orders exceeding max_order_notional cap."""
     config = Config(
         max_positions_notional=Decimal("10000"),
-        max_order_notional=Decimal("1000"),  # Small cap
+        max_order_notional=Decimal("1000"),  # Cap allows ~2 shares at $450
         max_daily_loss=Decimal("500"),
     )
 
@@ -89,15 +89,19 @@ def test_executor_enforces_max_order_notional():
     executor = AlpacaExecutor(broker, config, dry_run=False)
 
     # Order would be 10 shares * $450 = $4500, exceeds $1000 cap
+    # Should be sliced into multiple orders
     target_positions = {"SPY": 10}
     current_prices = {"SPY": Decimal("450.00")}
 
     result = executor.reconcile_and_execute(target_positions, current_prices)
 
-    # Order should be skipped due to cap
-    assert len(result.orders_placed) == 0
-    assert len(result.orders_skipped) == 1
-    assert "exceeds max" in result.orders_skipped[0][1]
+    # Order should be sliced (not skipped)
+    assert len(result.orders_placed) > 1  # Multiple slices
+    assert len(result.orders_skipped) == 0
+
+    # Verify total quantity matches target
+    total_qty = sum(order.quantity for order in broker.orders.values())
+    assert total_qty == 10
 
 
 def test_executor_enforces_max_positions_notional():
@@ -224,3 +228,138 @@ def test_executor_flatten_position():
     order = list(broker.orders.values())[0]
     assert order.side == OrderSide.SELL
     assert order.quantity == 10
+
+
+def test_executor_slices_large_order():
+    """Test that executor slices orders exceeding max_order_notional."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("100"),  # Small cap
+        max_daily_loss=Decimal("500"),
+    )
+
+    broker = MockBroker()
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    # Want to buy 5 shares at $690 = $3450, should be sliced into multiple orders
+    target_positions = {"SPY": 5}
+    current_prices = {"SPY": Decimal("690.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should place multiple orders (sliced)
+    # With $100 cap and price $690*0.995 (buy offset), can't even fit 1 share
+    # So should slice into 5 orders of 1 share each
+    assert len(result.orders_placed) >= 5
+    assert len(result.orders_skipped) == 0
+
+
+def test_executor_risk_reducing_sell_with_slicing():
+    """Test that risk-reducing sells proceed even when exceeding max_order_notional."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("100"),  # Small cap
+        max_daily_loss=Decimal("500"),
+    )
+
+    broker = MockBroker()
+    # Have 2 shares of SPY at $690 each = $1380 exposure
+    broker.positions["SPY"] = (2, Decimal("680.00"))
+
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    # Target = 0 (flatten), should SELL 2 shares
+    # Notional = 2 * $690 = $1380 > $100 cap
+    # But this is risk-reducing, so should slice and proceed
+    target_positions = {}  # Empty means flatten to 0
+    current_prices = {"SPY": Decimal("690.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should place 2 sell orders (1 share each, sliced)
+    assert len(result.orders_placed) == 2
+    assert len(result.orders_skipped) == 0
+
+    # Check that all orders are SELL orders
+    for order in broker.orders.values():
+        assert order.side == OrderSide.SELL
+
+
+def test_executor_partial_flatten_with_slicing():
+    """Test executor can partially reduce position with order slicing."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("150"),  # Can fit ~1 share at $690
+        max_daily_loss=Decimal("500"),
+    )
+
+    broker = MockBroker()
+    broker.positions["SPY"] = (5, Decimal("680.00"))
+
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    # Want to reduce from 5 to 1
+    target_positions = {"SPY": 1}
+    current_prices = {"SPY": Decimal("690.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should SELL 4 shares (delta = 1 - 5 = -4)
+    # With cap $150 and price ~$690, should slice into 4 orders of 1 share each
+    assert len(result.orders_placed) == 4
+    assert len(result.orders_skipped) == 0
+
+    # Verify final position is 1
+    final_position = broker.positions.get("SPY", (0, Decimal("0")))[0]
+    assert final_position == 1
+
+
+def test_executor_buy_order_slicing():
+    """Test that BUY orders are also sliced when exceeding cap."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("300"),  # Can fit ~1 share at $273
+        max_daily_loss=Decimal("500"),
+    )
+
+    broker = MockBroker()
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    # Want to buy 3 shares of AAPL at $273
+    target_positions = {"AAPL": 3}
+    current_prices = {"AAPL": Decimal("273.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should slice into 3 orders of 1 share each
+    assert len(result.orders_placed) == 3
+    assert len(result.orders_skipped) == 0
+
+    # Verify all are BUY orders
+    for order in broker.orders.values():
+        assert order.side == OrderSide.BUY
+
+
+def test_executor_mixed_slicing_and_no_slicing():
+    """Test executor handles mix of sliced and non-sliced orders."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("100"),
+        max_daily_loss=Decimal("500"),
+    )
+
+    broker = MockBroker()
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    # XLF: cheap stock, can fit within cap (no slicing needed)
+    # SPY: expensive stock, needs slicing
+    target_positions = {"XLF": 1, "SPY": 2}
+    current_prices = {"XLF": Decimal("55.00"), "SPY": Decimal("690.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # XLF: 1 order (no slicing)
+    # SPY: 2 orders (sliced into 1 share each)
+    # Total: 3 orders
+    assert len(result.orders_placed) == 3
+    assert len(result.orders_skipped) == 0

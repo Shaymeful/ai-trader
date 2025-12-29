@@ -19,6 +19,16 @@ class OrderInstruction:
     quantity: int
     limit_price: Decimal | None = None
     reason: str = ""
+    is_risk_reducing: bool = False  # True if this order reduces exposure
+
+
+@dataclass
+class OrderSlice:
+    """A slice of an order that fits within risk caps."""
+
+    instruction: OrderInstruction
+    slice_index: int
+    total_slices: int
 
 
 @dataclass
@@ -63,11 +73,18 @@ class AlpacaExecutor:
         """
         Reconcile target positions with current positions and execute orders.
 
+        Policy:
+        - Symbols not in target_positions are treated as target=0 (flatten)
+        - Orders that exceed max_order_notional are sliced into smaller orders
+        - Risk-reducing sells (closing positions) always proceed (with slicing)
+        - Risk-increasing orders subject to max_positions_notional cap
+
         Steps:
         1. Get current positions from broker
         2. Calculate required orders (delta between target and current)
-        3. Enforce risk caps
-        4. Place orders (or print if dry_run)
+        3. Slice orders that exceed max_order_notional
+        4. Enforce risk caps (allowing risk-reducing sells)
+        5. Place orders (or print if dry_run)
 
         Args:
             target_positions: Dict of symbol -> desired quantity
@@ -89,8 +106,26 @@ class AlpacaExecutor:
 
         self.logger.info(f"Generated {len(order_instructions)} order instructions")
 
-        # Execute orders with risk enforcement
-        return self._execute_orders(order_instructions, current_prices)
+        # Print reconciliation summary
+        print("\nReconciliation:")
+        print(f"  {'Symbol':<8} {'Current':>8} {'Target':>8} {'Delta':>8} {'Action':<20}")
+        print("  " + "-" * 60)
+        all_symbols = set(target_positions.keys()) | set(current_positions.keys())
+        for symbol in sorted(all_symbols):
+            target_qty = target_positions.get(symbol, 0)
+            current_qty = current_positions.get(symbol, (0, Decimal("0")))[0]
+            delta = target_qty - current_qty
+            if delta == 0:
+                action = "No change"
+            elif delta > 0:
+                action = f"BUY {abs(delta)}"
+            else:
+                action = f"SELL {abs(delta)}"
+            print(f"  {symbol:<8} {current_qty:>8} {target_qty:>8} {delta:>8} {action:<20}")
+        print()
+
+        # Execute orders with risk enforcement and slicing
+        return self._execute_orders(order_instructions, current_prices, current_positions)
 
     def _generate_order_instructions(
         self,
@@ -100,6 +135,8 @@ class AlpacaExecutor:
     ) -> list[OrderInstruction]:
         """
         Generate order instructions from position delta.
+
+        Policy: Symbols not in target_positions are treated as target=0 (flatten).
 
         Args:
             target_positions: Dict of symbol -> desired quantity
@@ -111,11 +148,12 @@ class AlpacaExecutor:
         """
         instructions = []
 
-        # Get all symbols we need to consider
+        # Get all symbols we need to consider (current OR target)
+        # This ensures we flatten positions not in target_positions
         all_symbols = set(target_positions.keys()) | set(current_positions.keys())
 
         for symbol in all_symbols:
-            target_qty = target_positions.get(symbol, 0)
+            target_qty = target_positions.get(symbol, 0)  # Default to 0 if not in target
             current_qty = current_positions.get(symbol, (0, Decimal("0")))[0]
             delta = target_qty - current_qty
 
@@ -130,6 +168,11 @@ class AlpacaExecutor:
             side = OrderSide.BUY if delta > 0 else OrderSide.SELL
             quantity = abs(delta)
 
+            # Determine if this order reduces risk
+            # SELL when we have a long position is risk-reducing
+            # BUY when we have a short position would be risk-reducing (but we don't support shorts)
+            is_risk_reducing = side == OrderSide.SELL and current_qty > 0
+
             # Use LIMIT order at current price (user requirement)
             # Add small offset: -0.5% for buys (more aggressive), +0.5% for sells
             offset = Decimal("-0.005") if side == OrderSide.BUY else Decimal("0.005")
@@ -142,22 +185,86 @@ class AlpacaExecutor:
                 quantity=quantity,
                 limit_price=limit_price,
                 reason=f"Target={target_qty}, Current={current_qty}, Delta={delta}",
+                is_risk_reducing=is_risk_reducing,
             )
             instructions.append(instruction)
 
         return instructions
 
+    def _slice_order(self, instruction: OrderInstruction, price: Decimal) -> list[OrderSlice]:
+        """
+        Slice an order into cap-compliant chunks.
+
+        Args:
+            instruction: OrderInstruction to slice
+            price: Current price for notional calculation
+
+        Returns:
+            List of OrderSlice objects
+        """
+        order_notional = instruction.quantity * price
+        max_notional = self.config.max_order_notional
+
+        # If order fits within cap, no slicing needed
+        if order_notional <= max_notional:
+            return [OrderSlice(instruction=instruction, slice_index=1, total_slices=1)]
+
+        # Calculate number of slices needed
+        # Use limit price if available, else use current price
+        effective_price = instruction.limit_price or price
+        max_qty_per_slice = int(max_notional / effective_price)
+
+        if max_qty_per_slice == 0:
+            # Price is too high, need at least 1 share per slice
+            max_qty_per_slice = 1
+
+        # Calculate total slices needed
+        total_qty = instruction.quantity
+        total_slices = (total_qty + max_qty_per_slice - 1) // max_qty_per_slice  # Ceiling division
+
+        # Create slices
+        slices = []
+        remaining_qty = total_qty
+
+        for i in range(total_slices):
+            slice_qty = min(max_qty_per_slice, remaining_qty)
+            slice_instruction = OrderInstruction(
+                symbol=instruction.symbol,
+                side=instruction.side,
+                quantity=slice_qty,
+                limit_price=instruction.limit_price,
+                reason=instruction.reason,
+                is_risk_reducing=instruction.is_risk_reducing,
+            )
+            slices.append(
+                OrderSlice(
+                    instruction=slice_instruction,
+                    slice_index=i + 1,
+                    total_slices=total_slices,
+                )
+            )
+            remaining_qty -= slice_qty
+
+        return slices
+
     def _execute_orders(
         self,
         instructions: list[OrderInstruction],
         current_prices: dict[str, Decimal],
+        current_positions: dict[str, tuple[int, Decimal]],
     ) -> ExecutionResult:
         """
-        Execute order instructions with risk enforcement.
+        Execute order instructions with risk enforcement and slicing.
+
+        Policy:
+        - Orders exceeding max_order_notional are sliced into smaller orders
+        - Risk-reducing sells always proceed (with slicing if needed)
+        - Risk-increasing orders subject to max_positions_notional cap
 
         Args:
             instructions: List of OrderInstruction objects
             current_prices: Dict of symbol -> current price
+            current_positions: Dict of symbol -> (current_qty, avg_price)
 
         Returns:
             ExecutionResult with placed/skipped orders
@@ -166,8 +273,7 @@ class AlpacaExecutor:
         orders_skipped = []
         total_risk_used = Decimal("0")
 
-        # Get current positions to calculate total exposure
-        current_positions = self.broker.get_positions()
+        # Calculate current exposure
         current_exposure = sum(
             abs(qty) * current_prices.get(symbol, Decimal("0"))
             for symbol, (qty, _) in current_positions.items()
@@ -175,61 +281,83 @@ class AlpacaExecutor:
         )
 
         self.logger.info(f"Current portfolio exposure: ${current_exposure:.2f}")
+        print(f"\nExecution (max_order_usd=${self.config.max_order_notional}):")
 
         for instruction in instructions:
-            # Check order notional
-            order_notional = instruction.quantity * (
-                instruction.limit_price or current_prices.get(instruction.symbol, Decimal("0"))
-            )
-
-            if order_notional > self.config.max_order_notional:
-                reason = (
-                    f"Order notional ${order_notional:.2f} exceeds "
-                    f"max ${self.config.max_order_notional}"
-                )
-                self.logger.warning(f"{instruction.symbol}: {reason}")
-                orders_skipped.append((instruction.symbol, reason))
+            price = current_prices.get(instruction.symbol, Decimal("0"))
+            if price == 0:
+                self.logger.warning(f"{instruction.symbol}: No price available, skipping")
+                orders_skipped.append((instruction.symbol, "No price available"))
                 continue
 
-            # Check total exposure
-            new_exposure = current_exposure + order_notional
-            if new_exposure > self.config.max_positions_notional:
-                reason = (
-                    f"Total exposure ${new_exposure:.2f} would exceed "
-                    f"max ${self.config.max_positions_notional}"
+            order_notional = instruction.quantity * (instruction.limit_price or price)
+
+            # Slice order if it exceeds cap
+            order_slices = self._slice_order(instruction, price)
+
+            # Log if order was sliced
+            if len(order_slices) > 1:
+                print(
+                    f"  {instruction.symbol}: Order ${order_notional:.2f} exceeds cap, "
+                    f"slicing into {len(order_slices)} orders"
                 )
-                self.logger.warning(f"{instruction.symbol}: {reason}")
-                orders_skipped.append((instruction.symbol, reason))
-                continue
 
-            # Place order (or dry-run)
-            if self.dry_run:
-                self._print_dry_run_order(instruction)
-                orders_placed.append(f"DRY-RUN-{instruction.symbol}")
-            else:
-                client_order_id = f"{instruction.symbol}-{uuid.uuid4()}"
-                try:
-                    order = self.broker.submit_order(
-                        symbol=instruction.symbol,
-                        side=instruction.side,
-                        quantity=instruction.quantity,
-                        client_order_id=client_order_id,
-                        order_type=OrderType.LIMIT,
-                        limit_price=instruction.limit_price,
-                    )
-                    self.logger.info(
-                        f"Order placed: {instruction.symbol} {instruction.side.name} "
-                        f"{instruction.quantity} @ ${instruction.limit_price} (ID: {order.id})"
-                    )
-                    orders_placed.append(client_order_id)
-                except Exception as e:
-                    reason = f"Order submission failed: {e}"
-                    self.logger.error(f"{instruction.symbol}: {reason}")
-                    orders_skipped.append((instruction.symbol, reason))
-                    continue
+            # Place each slice
+            for order_slice in order_slices:
+                slice_instruction = order_slice.instruction
+                slice_notional = slice_instruction.quantity * (
+                    slice_instruction.limit_price or price
+                )
 
-            total_risk_used += order_notional
-            current_exposure += order_notional
+                # For risk-increasing orders, check total exposure cap
+                # Risk-reducing orders always proceed
+                if not slice_instruction.is_risk_reducing:
+                    new_exposure = current_exposure + slice_notional
+                    if new_exposure > self.config.max_positions_notional:
+                        reason = (
+                            f"Total exposure ${new_exposure:.2f} would exceed "
+                            f"max ${self.config.max_positions_notional}"
+                        )
+                        self.logger.warning(f"{slice_instruction.symbol}: {reason}")
+                        orders_skipped.append((slice_instruction.symbol, reason))
+                        continue
+
+                # Place order (or dry-run)
+                if self.dry_run:
+                    self._print_dry_run_order(slice_instruction, order_slice)
+                    orders_placed.append(
+                        f"DRY-RUN-{slice_instruction.symbol}-{order_slice.slice_index}"
+                    )
+                else:
+                    client_order_id = f"{slice_instruction.symbol}-{uuid.uuid4()}"
+                    try:
+                        order = self.broker.submit_order(
+                            symbol=slice_instruction.symbol,
+                            side=slice_instruction.side,
+                            quantity=slice_instruction.quantity,
+                            client_order_id=client_order_id,
+                            order_type=OrderType.LIMIT,
+                            limit_price=slice_instruction.limit_price,
+                        )
+                        self.logger.info(
+                            f"Order placed: {slice_instruction.symbol} "
+                            f"{slice_instruction.side.name} {slice_instruction.quantity} "
+                            f"@ ${slice_instruction.limit_price} "
+                            f"(slice {order_slice.slice_index}/{order_slice.total_slices}, ID: {order.id})"
+                        )
+                        orders_placed.append(client_order_id)
+                    except Exception as e:
+                        reason = f"Order submission failed: {e}"
+                        self.logger.error(f"{slice_instruction.symbol}: {reason}")
+                        orders_skipped.append((slice_instruction.symbol, reason))
+                        continue
+
+                # Update tracking
+                total_risk_used += slice_notional
+                if not slice_instruction.is_risk_reducing:
+                    current_exposure += slice_notional
+                else:
+                    current_exposure -= slice_notional
 
         return ExecutionResult(
             orders_placed=orders_placed,
@@ -238,15 +366,24 @@ class AlpacaExecutor:
             total_risk_used=total_risk_used,
         )
 
-    def _print_dry_run_order(self, instruction: OrderInstruction):
+    def _print_dry_run_order(
+        self, instruction: OrderInstruction, order_slice: OrderSlice | None = None
+    ):
         """
         Print order in dry-run format.
 
         Args:
             instruction: OrderInstruction to print
+            order_slice: Optional OrderSlice info for sliced orders
         """
+        slice_info = ""
+        if order_slice and order_slice.total_slices > 1:
+            slice_info = f" [slice {order_slice.slice_index}/{order_slice.total_slices}]"
+
+        risk_tag = " (risk-reducing)" if instruction.is_risk_reducing else ""
+
         print(
             f"  [DRY-RUN] {instruction.symbol:<6} {instruction.side.name:<4} "
             f"{instruction.quantity:>3} @ ${instruction.limit_price:>7.2f}  "
-            f"({instruction.reason})"
+            f"({instruction.reason}){slice_info}{risk_tag}"
         )
