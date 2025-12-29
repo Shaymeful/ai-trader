@@ -200,7 +200,7 @@ class AlpacaExecutor:
             price: Current price for notional calculation
 
         Returns:
-            List of OrderSlice objects
+            List of OrderSlice objects, empty if order cannot fit within cap
         """
         order_notional = instruction.quantity * price
         max_notional = self.config.max_order_notional
@@ -215,8 +215,14 @@ class AlpacaExecutor:
         max_qty_per_slice = int(max_notional / effective_price)
 
         if max_qty_per_slice == 0:
-            # Price is too high, need at least 1 share per slice
-            max_qty_per_slice = 1
+            # Price is too high for even 1 share to fit within cap
+            # For risk-reducing orders (closing positions), allow 1 share minimum to enable exits
+            # For risk-increasing orders (opening/adding), cannot proceed
+            if instruction.is_risk_reducing:
+                max_qty_per_slice = 1
+            else:
+                # Cannot fit within cap, return empty to signal skip
+                return []
 
         # Calculate total slices needed
         total_qty = instruction.quantity
@@ -294,6 +300,18 @@ class AlpacaExecutor:
 
             # Slice order if it exceeds cap
             order_slices = self._slice_order(instruction, price)
+
+            # Check if order cannot fit within cap (empty slices)
+            if not order_slices:
+                reason = (
+                    f"Order notional ${order_notional:.2f} exceeds max_order_usd "
+                    f"${self.config.max_order_notional} and cannot be sliced "
+                    f"(single share notional: ${price * 1:.2f})"
+                )
+                self.logger.warning(f"{instruction.symbol}: {reason}")
+                orders_skipped.append((instruction.symbol, reason))
+                print(f"  {instruction.symbol}: SKIPPED - {reason}")
+                continue
 
             # Log if order was sliced
             if len(order_slices) > 1:
