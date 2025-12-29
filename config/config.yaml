@@ -1,0 +1,28 @@
+# Trading Bot Configuration
+# This file defines strategy parameters, risk limits, and universe settings
+
+# Strategy timeframe
+timeframe: "1h"
+
+# Risk management caps
+risk:
+  max_order_usd: 100
+  max_daily_loss_usd: 250
+  max_gross_exposure_usd: 10000
+
+# Trading universe
+universe:
+  core:
+    symbols:
+      - SPY
+      - QQQ
+      - AAPL
+      - MSFT
+      - NVDA
+      - AMD
+      - META
+      - GOOGL
+      - TSLA
+      - XLF
+      - XLE
+      - XLV

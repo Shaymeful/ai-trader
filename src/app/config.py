@@ -3,7 +3,9 @@
 import os
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
+import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
@@ -88,6 +90,12 @@ class Config(BaseModel):
     # Dry-run mode
     dry_run: bool = Field(
         default=False, description="Dry-run mode: simulate trading without submitting orders"
+    )
+
+    # Strategy configuration (from YAML)
+    timeframe: str = Field(default="1h", description="Strategy timeframe (e.g., 1h, 15m)")
+    universe_symbols: list[str] = Field(
+        default=[], description="Trading universe symbols from config"
     )
 
 
@@ -285,3 +293,67 @@ def validate_alpaca_credentials(mode: str, require_credentials: bool = True) -> 
         return False, msg
 
     return True, ""
+
+
+def load_yaml_config(config_path: Path | None = None) -> dict[str, Any]:
+    """
+    Load configuration from YAML file.
+
+    Args:
+        config_path: Path to config file (defaults to config/config.yaml in repo root)
+
+    Returns:
+        Dictionary with configuration values
+    """
+    if config_path is None:
+        repo_root = Path(__file__).resolve().parents[2]
+        config_path = repo_root / "config" / "config.yaml"
+
+    if not config_path.exists():
+        return {}
+
+    with open(config_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
+    """
+    Load configuration from both .env and YAML files.
+
+    YAML config values are merged with environment variable config.
+    Environment variables take precedence over YAML values.
+
+    Args:
+        yaml_path: Optional path to YAML config file
+
+    Returns:
+        Config object with merged configuration
+    """
+    # First load the standard env-based config
+    config = load_config()
+
+    # Load YAML config if available
+    yaml_config = load_yaml_config(yaml_path)
+
+    if yaml_config:
+        # Apply timeframe from YAML
+        if "timeframe" in yaml_config:
+            config.timeframe = yaml_config["timeframe"]
+
+        # Apply universe symbols from YAML
+        if "universe" in yaml_config and "core" in yaml_config["universe"]:
+            core_symbols = yaml_config["universe"]["core"].get("symbols", [])
+            if core_symbols:
+                config.universe_symbols = core_symbols
+
+        # Apply risk parameters from YAML (override existing if present)
+        if "risk" in yaml_config:
+            risk = yaml_config["risk"]
+            if "max_order_usd" in risk:
+                config.max_order_notional = Decimal(str(risk["max_order_usd"]))
+            if "max_daily_loss_usd" in risk:
+                config.max_daily_loss = Decimal(str(risk["max_daily_loss_usd"]))
+            if "max_gross_exposure_usd" in risk:
+                config.max_positions_notional = Decimal(str(risk["max_gross_exposure_usd"]))
+
+    return config
