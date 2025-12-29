@@ -6,14 +6,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.app.runner import _create_mock_market_data, run_shadow_mode
+from src.app.data_providers.hourly_provider import MockMarketDataProvider
+from src.app.runner import run_shadow_mode
 
 
-def test_create_mock_market_data():
-    """Test mock market data generation."""
+def test_mock_market_data_provider():
+    """Test mock market data provider generates correct structure."""
+    provider = MockMarketDataProvider(seed=42)
     universe = ["SPY", "QQQ", "AAPL"]
 
-    market_data = _create_mock_market_data(universe)
+    market_data = provider.get_market_data(universe)
 
     assert len(market_data) == 3
     assert "SPY" in market_data
@@ -30,7 +32,7 @@ def test_create_mock_market_data():
 
 
 def test_run_shadow_mode_with_mock_data(monkeypatch, tmp_path):
-    """Test running shadow mode with mocked config and data."""
+    """Test running shadow mode with injected mock provider."""
     # Mock config
     mock_config = MagicMock()
     mock_config.timeframe = "1h"
@@ -43,21 +45,16 @@ def test_run_shadow_mode_with_mock_data(monkeypatch, tmp_path):
     # Use tmp_path for logs
     monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
 
+    # Create mock provider
+    mock_provider = MockMarketDataProvider(seed=42)
+
     with (
         patch("src.app.runner.load_config_with_yaml", return_value=mock_config),
-        patch("src.app.runner._create_mock_market_data") as mock_market_data,
+        contextlib.suppress(SystemExit),
     ):
-        # Set up mock market data
-        mock_market_data.return_value = {
-            "SPY": {"price": 450.0, "ma": 440.0, "zscore": -0.5},
-            "QQQ": {"price": 380.0, "ma": 385.0, "zscore": 1.2},
-        }
-
-        # Run shadow mode (should not raise)
+        # Run shadow mode with injected provider (should not raise or hit network)
         # Note: This will print to stdout, but that's expected
-        # Suppress SystemExit if the run completes successfully
-        with contextlib.suppress(SystemExit):
-            run_shadow_mode()
+        run_shadow_mode(provider=mock_provider)
 
 
 def test_run_shadow_mode_exits_with_no_universe(monkeypatch):

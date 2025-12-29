@@ -6,15 +6,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import load_config_with_yaml
+from .data_providers import MarketDataProvider
+from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .strategies import MeanReversionStrategy, TrendStrategy
 
 
-def run_shadow_mode():
+def run_shadow_mode(provider: MarketDataProvider | None = None):
     """
     Run strategies in shadow mode (no actual orders).
 
     Loads config, runs strategies, prints summary table,
     and writes JSONL logs.
+
+    Args:
+        provider: Optional market data provider. If None, creates an Alpaca
+                  provider using credentials from config/environment.
     """
     # Load configuration from YAML + env
     config = load_config_with_yaml()
@@ -36,9 +42,35 @@ def run_shadow_mode():
         print("ERROR: No symbols in universe. Check config/config.yaml or ALLOWED_SYMBOLS env var.")
         sys.exit(1)
 
-    # Create mock market data (in production, this would come from live data)
-    # For shadow mode, we'll use dummy data
-    market_data = _create_mock_market_data(universe)
+    # Create market data provider if not injected
+    if provider is None:
+        # Check if credentials are available
+        if config.alpaca_api_key and config.alpaca_secret_key:
+            print(f"Using Alpaca hourly data provider (base_url: {config.alpaca_base_url})")
+            provider = HourlyMarketDataProvider(
+                api_key=config.alpaca_api_key,
+                secret_key=config.alpaca_secret_key,
+                lookback_bars=50,
+                ma_period=20,
+            )
+        else:
+            print("WARNING: No Alpaca credentials found. Using mock data provider.")
+            print("Set ALPACA_PAPER_KEY_ID and ALPACA_PAPER_SECRET_KEY to use real data.")
+            provider = MockMarketDataProvider()
+    print()
+
+    # Fetch market data
+    print("Fetching market data...")
+    market_data = provider.get_market_data(universe)
+
+    # Check for symbols with insufficient data
+    missing_symbols = [s for s in universe if s not in market_data]
+    if missing_symbols:
+        print(
+            f"WARNING: No data available for {len(missing_symbols)} symbols: {', '.join(missing_symbols)}"
+        )
+        print("These symbols will be skipped in strategy generation.")
+        print()
 
     # Initialize strategies
     strategies = [
