@@ -14,6 +14,7 @@ class AllocationResult:
 
     target_positions: dict[str, int]  # symbol -> target quantity (aggregated across strategies)
     strategy_budgets: dict[str, Decimal]  # strategy_name -> allocated budget
+    strategy_allocations: dict[str, dict[str, float]]  # strategy -> {symbol -> notional}
     warnings: list[str]  # Any warnings during allocation
 
 
@@ -21,7 +22,7 @@ class Allocator:
     """
     Portfolio allocator that distributes capital across strategies.
 
-    Uses equal-weight allocation: each strategy gets an equal share of total capital.
+    Supports both equal-weight and dynamic weight allocation.
     Aggregates target positions across strategies by summing target quantities per symbol.
     """
 
@@ -39,19 +40,21 @@ class Allocator:
         self,
         strategy_intents: dict[str, list[PositionIntent]],
         current_prices: dict[str, Decimal],
+        strategy_weights: dict[str, float] | None = None,
     ) -> AllocationResult:
         """
         Allocate capital across strategies and compute target positions.
 
         Strategy:
-        1. Divide total capital (max_positions_notional) equally among strategies
+        1. Divide total capital using strategy weights (equal if not provided)
         2. For each strategy's intents, scale to fit within strategy budget
         3. Aggregate target quantities across strategies per symbol
-        4. Apply risk caps (max_order_notional, max_positions_notional)
+        4. Track per-strategy allocations for performance attribution
 
         Args:
             strategy_intents: Dict mapping strategy_name -> list of PositionIntent
             current_prices: Dict mapping symbol -> current price
+            strategy_weights: Optional dict of strategy weights (defaults to equal weight)
 
         Returns:
             AllocationResult with target positions and metadata
@@ -64,21 +67,33 @@ class Allocator:
             return AllocationResult(
                 target_positions={},
                 strategy_budgets={},
+                strategy_allocations={},
                 warnings=["No strategies provided"],
             )
 
-        # Equal-weight allocation: divide total capital by number of strategies
-        budget_per_strategy = self.config.max_positions_notional / num_strategies
-        strategy_budgets = {name: budget_per_strategy for name in strategy_intents}
+        # Use provided weights or equal weights
+        if strategy_weights is None:
+            equal_weight = 1.0 / num_strategies
+            strategy_weights = {name: equal_weight for name in strategy_intents}
+
+        # Normalize weights to sum to 1.0
+        total_weight = sum(strategy_weights.values())
+        if total_weight > 0:
+            strategy_weights = {k: v / total_weight for k, v in strategy_weights.items()}
+
+        # Calculate budgets from weights
+        strategy_budgets = {
+            name: self.config.max_positions_notional * Decimal(str(strategy_weights.get(name, 0)))
+            for name in strategy_intents
+        }
 
         self.logger.info(
             f"Allocating ${self.config.max_positions_notional} across {num_strategies} strategies"
         )
-        self.logger.info(f"Per-strategy budget: ${budget_per_strategy}")
 
-        # Aggregate target positions per symbol
-        # Simple approach: sum target quantities across strategies
+        # Aggregate target positions per symbol and track per-strategy allocations
         aggregated_targets: dict[str, int] = {}
+        strategy_allocations: dict[str, dict[str, float]] = {name: {} for name in strategy_intents}
 
         for strategy_name, intents in strategy_intents.items():
             self.logger.info(f"Processing {len(intents)} intents from {strategy_name}")
@@ -87,13 +102,17 @@ class Allocator:
                 symbol = intent.symbol
                 qty = intent.target_quantity
 
-                # Simple approach: start with min(1 share) unless intent says 0
-                # For now, use the strategy's target quantity directly
-                # (More sophisticated sizing would consider conviction, risk, etc.)
                 if symbol not in aggregated_targets:
                     aggregated_targets[symbol] = 0
 
                 aggregated_targets[symbol] += qty
+
+                # Track notional allocation per strategy-symbol
+                if symbol in current_prices:
+                    notional = float(abs(qty) * current_prices[symbol])
+                    if symbol not in strategy_allocations[strategy_name]:
+                        strategy_allocations[strategy_name][symbol] = 0.0
+                    strategy_allocations[strategy_name][symbol] += notional
 
         # Apply risk caps
         final_targets = self._apply_risk_caps(aggregated_targets, current_prices, warnings)
@@ -101,6 +120,7 @@ class Allocator:
         return AllocationResult(
             target_positions=final_targets,
             strategy_budgets=strategy_budgets,
+            strategy_allocations=strategy_allocations,
             warnings=warnings,
         )
 

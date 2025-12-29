@@ -1147,6 +1147,177 @@ All 329 tests pass with slicing enabled.
 
 ---
 
+## Strategy Performance Tracking & Dynamic Allocation
+
+### Purpose
+The system tracks per-strategy performance and dynamically adjusts capital allocation over time to reduce capital allocated to underperforming strategies and increase capital to outperforming strategies.
+
+### Architecture Overview
+
+**Performance Tracking:**
+- **Module**: `src/app/performance.py`
+- **State Persistence**: `state/strategy_state.json` (persisted across runs)
+- **Tracking Mechanism**: Mark-to-market returns using 1-step price changes
+- **Attribution**: Per-strategy notional allocations tracked by allocator
+
+**Allocator v2:**
+- **Module**: `src/app/allocator.py` (enhanced to use dynamic weights)
+- **Weight System**: Softmax-based weight distribution from performance scores
+- **Conservative Rules**: Minimum samples, smoothing, bounds enforcement, drawdown clamping
+
+### State Persistence
+
+**StrategyState Fields** (per strategy):
+- `name`: Strategy identifier (e.g., "TrendStrategy")
+- `weight`: Current capital allocation weight (0.0 to 1.0, sum to 1.0 across all strategies)
+- `cumulative_pnl`: Total profit/loss attributed to strategy
+- `rolling_returns`: Last 200 return samples (limited circular buffer)
+- `drawdown`: Current maximum drawdown from peak equity
+- `trade_count`: Number of trades attributed
+- `last_updated`: ISO timestamp of last update
+
+**File Location**:
+- Default: `state/strategy_state.json`
+- Override: `AI_TRADER_STRATEGY_STATE_DIR` environment variable
+- Format: JSON with atomic writes (temp file + rename pattern)
+
+**Initialization**:
+- First run: All strategies get equal weights (1/N)
+- Subsequent runs: Load persisted weights from state
+
+### Performance Attribution
+
+**Return Calculation** (Mark-to-Market):
+```python
+# 1-step return for each symbol
+return = (price_t - price_t-1) / price_t-1
+
+# Weighted return per strategy
+strategy_return = sum(symbol_return * weight for each symbol)
+  where weight = notional_allocated_to_symbol / total_strategy_notional
+```
+
+**Attribution Flow**:
+1. Allocator tracks per-strategy notional allocations: `dict[strategy, dict[symbol, notional]]`
+2. After execution, `PerformanceTracker.update_strategy_performance()` computes returns
+3. Returns attributed to strategies based on allocated notional
+4. Strategy state updated: `add_return()`, `update_drawdown()`, cumulative PnL
+
+**Example**:
+- TrendStrategy allocates $1000 to AAPL (10 shares @ $100)
+- AAPL moves to $102 (+2% return)
+- TrendStrategy credited with +2% return and $20 PnL
+
+### Weight Update Algorithm
+
+**Conservative Rules**:
+1. **Minimum Samples**: Require 20 return samples before adjusting weights
+2. **Performance Score**: `score = mean(returns) - 0.5*stdev(returns) - drawdown_penalty`
+3. **Drawdown Clamping**: If drawdown < -2%, force low score (cap at -1.0)
+4. **Softmax Normalization**: Convert scores to target weights (numerically stable)
+5. **Smoothing**: `new_weight = 0.9*old_weight + 0.1*target_weight` (gradual adjustment)
+6. **Bounds**: Min weight = 0.05 (5%), max weight = 0.80 (80%)
+7. **Normalization**: Final weights sum to 1.0 (renormalized after bounds)
+
+**Parameters** (configurable in `update_strategy_weights()`):
+- `min_samples`: 20 (require 20 samples before adjusting)
+- `drawdown_threshold`: -0.02 (-2% drawdown triggers clamping)
+- `smoothing`: 0.9 (90% old weight, 10% new weight per update)
+- `min_weight`: 0.05 (minimum 5% allocation)
+- `max_weight`: 0.80 (maximum 80% allocation)
+
+**Example**:
+```python
+# Initial state (equal weights)
+TrendStrategy: weight=0.50, mean_return=+0.02, std=0.01, drawdown=-0.01
+MeanReversionStrategy: weight=0.50, mean_return=-0.01, std=0.02, drawdown=-0.03
+
+# After weight update
+TrendStrategy: weight=0.60 (increased, positive returns)
+MeanReversionStrategy: weight=0.40 (decreased, negative returns + high drawdown)
+```
+
+### Integration Points
+
+**Runner Integration** (`src/app/runner.py`):
+```python
+# Load strategy states
+strategy_states = load_strategy_state()
+
+# Initialize new strategies
+strategy_states = initialize_strategy_states(strategy_states, strategy_names)
+
+# Allocate with dynamic weights
+strategy_weights = {name: state.weight for name, state in strategy_states.items()}
+allocation_result = allocator.allocate(strategy_intents, current_prices, strategy_weights)
+
+# After execution: update performance
+tracker = PerformanceTracker()
+tracker.update_strategy_performance(strategy_states, allocation_result.strategy_allocations, current_prices)
+
+# Update weights based on performance
+strategy_states = update_strategy_weights(strategy_states)
+
+# Save updated state
+save_strategy_state(strategy_states)
+
+# Print summary
+print_strategy_state_summary(strategy_states)
+```
+
+**Output Example**:
+```
+================================================================================
+Strategy Performance Summary
+================================================================================
+Strategy             Weight      PnL  Samples   Mean%    Std%     DD%
+--------------------------------------------------------------------------------
+TrendStrategy         0.600   120.50       45    1.20    0.80   -2.50
+MeanReversionStrategy 0.400   -80.00       45   -0.90    1.50   -5.20
+================================================================================
+```
+
+### Testing
+
+**Test Coverage** (`tests/test_strategy_state.py`):
+- State persistence (save/load)
+- Return addition and rolling window limiting
+- Drawdown calculation
+- Weight initialization (equal weights)
+- Weight updates with sufficient samples
+- Minimum sample gating
+- Bounds enforcement (min/max)
+- Drawdown threshold clamping
+- Performance attribution
+- Normalization (weights sum to 1.0)
+
+**All Tests Offline**:
+- Uses temp directories for state files
+- No network calls (mock prices, mock data)
+- Environment variable overrides (`AI_TRADER_STRATEGY_STATE_DIR`)
+
+### Safety Guarantees
+
+1. **Backward Compatible**: Allocator accepts optional weights, defaults to equal weights
+2. **Fail-Safe**: State load failures return empty dict (equal weights applied)
+3. **Conservative Updates**: Smoothing prevents sudden weight shifts
+4. **Bounds Enforcement**: No strategy gets <5% or >80% allocation
+5. **Drawdown Protection**: High drawdown (-2%+) aggressively reduces allocation
+6. **Offline Testing**: All logic testable without network or credentials
+
+### Files Modified/Created
+
+**Created**:
+- `src/app/performance.py` - PerformanceTracker, update_strategy_weights()
+- `tests/test_strategy_state.py` - 10 comprehensive tests
+
+**Modified**:
+- `src/app/state.py` - Added StrategyState, load/save/initialize functions
+- `src/app/allocator.py` - Added strategy_weights parameter, strategy_allocations tracking
+- `src/app/runner.py` - Integrated performance tracking and weight updates
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing

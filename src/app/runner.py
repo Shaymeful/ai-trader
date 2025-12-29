@@ -14,6 +14,13 @@ from .config import load_config_with_yaml, validate_alpaca_credentials
 from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .execution import AlpacaExecutor
+from .performance import PerformanceTracker, update_strategy_weights
+from .state import (
+    initialize_strategy_states,
+    load_strategy_state,
+    print_strategy_state_summary,
+    save_strategy_state,
+)
 from .strategies import MeanReversionStrategy, TrendStrategy
 
 
@@ -259,11 +266,18 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
     # Extract prices for allocator
     current_prices = {symbol: Decimal(str(data["price"])) for symbol, data in market_data.items()}
 
+    # Load strategy states for performance tracking
+    strategy_states = load_strategy_state()
+
     # Initialize strategies
     strategies = [
         TrendStrategy(ma_period=20),
         MeanReversionStrategy(zscore_threshold=1.0),
     ]
+
+    # Initialize states for any new strategies
+    strategy_names = [s.name for s in strategies]
+    strategy_states = initialize_strategy_states(strategy_states, strategy_names)
 
     # Run each strategy and collect intents
     strategy_intents = {}
@@ -292,10 +306,14 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
         print()
         strategy_intents[strategy.name] = intents
 
-    # Allocate capital across strategies
+    # Allocate capital across strategies using dynamic weights
     print("Allocating capital across strategies...")
     allocator = Allocator(config)
-    allocation_result = allocator.allocate(strategy_intents, current_prices)
+
+    # Extract weights from strategy states
+    strategy_weights = {name: state.weight for name, state in strategy_states.items()}
+
+    allocation_result = allocator.allocate(strategy_intents, current_prices, strategy_weights)
 
     print(f"Target positions: {allocation_result.target_positions}")
     print(f"Strategy budgets: {allocation_result.strategy_budgets}")
@@ -312,6 +330,22 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
         allocation_result.target_positions,
         current_prices,
     )
+
+    # Update performance tracking (simple mark-to-market based on price changes)
+    # Note: This is a simplified version - in production you'd use actual fills
+    tracker = PerformanceTracker()
+    tracker.update_strategy_performance(
+        strategy_states, allocation_result.strategy_allocations, current_prices
+    )
+
+    # Update strategy weights based on performance
+    strategy_states = update_strategy_weights(strategy_states)
+
+    # Save updated strategy states
+    save_strategy_state(strategy_states)
+
+    # Print strategy performance summary
+    print_strategy_state_summary(strategy_states)
 
     # Print summary
     print()

@@ -183,3 +183,201 @@ def build_client_order_id(
 
     # Build deterministic key from stable inputs only
     return f"{strategy_name}_{symbol}_{side}_{ts_str}"
+
+
+# ============================================================================
+# Strategy Performance State
+# ============================================================================
+
+
+class StrategyState(BaseModel):
+    """State for a single strategy's performance tracking."""
+
+    name: str
+    weight: float = Field(default=1.0, ge=0.0, le=1.0)  # Strategy weight (0-1)
+    cumulative_pnl: float = Field(default=0.0)  # Cumulative P&L
+    rolling_returns: list[float] = Field(default_factory=list)  # Limited to max_samples
+    drawdown: float = Field(default=0.0)  # Current drawdown from peak
+    trade_count: int = Field(default=0)  # Number of trades attributed
+    last_updated: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+    def add_return(self, return_value: float, max_samples: int = 200):
+        """
+        Add a return sample and update rolling window.
+
+        Args:
+            return_value: Return to add
+            max_samples: Maximum samples to keep (default 200)
+        """
+        self.rolling_returns.append(return_value)
+        if len(self.rolling_returns) > max_samples:
+            self.rolling_returns = self.rolling_returns[-max_samples:]
+        self.last_updated = datetime.now().isoformat()
+
+    def update_drawdown(self):
+        """Update drawdown from peak equity."""
+        if not self.rolling_returns:
+            self.drawdown = 0.0
+            return
+
+        # Calculate equity curve
+        equity = 1.0
+        peak = 1.0
+        max_drawdown = 0.0
+
+        for ret in self.rolling_returns:
+            equity *= 1.0 + ret
+            peak = max(peak, equity)
+            drawdown = (equity - peak) / peak
+            max_drawdown = min(max_drawdown, drawdown)
+
+        self.drawdown = max_drawdown
+
+
+def load_strategy_state(state_dir: Path | None = None) -> dict[str, StrategyState]:
+    """
+    Load strategy state from disk.
+
+    Args:
+        state_dir: Directory for state files (defaults to repo_root/state)
+
+    Returns:
+        Dictionary mapping strategy name to StrategyState
+    """
+    if state_dir is None:
+        # Default to repo_root/state
+        import os
+
+        env_path = os.getenv("AI_TRADER_STRATEGY_STATE_DIR")
+        if env_path:
+            state_dir = Path(env_path)
+        else:
+            repo_root = Path(__file__).resolve().parents[2]
+            state_dir = repo_root / "state"
+
+    state_dir = Path(state_dir)
+    state_file = state_dir / "strategy_state.json"
+
+    if not state_file.exists():
+        return {}
+
+    try:
+        with open(state_file) as f:
+            data = json.load(f)
+
+        states = {}
+        for name, state_dict in data.items():
+            states[name] = StrategyState(**state_dict)
+
+        return states
+
+    except Exception:
+        return {}
+
+
+def save_strategy_state(states: dict[str, StrategyState], state_dir: Path | None = None):
+    """
+    Save strategy state to disk.
+
+    Args:
+        states: Dictionary mapping strategy name to StrategyState
+        state_dir: Directory for state files (defaults to repo_root/state)
+    """
+    if state_dir is None:
+        # Default to repo_root/state
+        import os
+
+        env_path = os.getenv("AI_TRADER_STRATEGY_STATE_DIR")
+        if env_path:
+            state_dir = Path(env_path)
+        else:
+            repo_root = Path(__file__).resolve().parents[2]
+            state_dir = repo_root / "state"
+
+    state_dir = Path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    state_file = state_dir / "strategy_state.json"
+
+    try:
+        # Convert to JSON-serializable format
+        data = {}
+        for name, state in states.items():
+            data[name] = state.model_dump()
+
+        # Write atomically via temp file
+        temp_file = state_file.with_suffix(".tmp")
+        with open(temp_file, "w") as f:
+            json.dump(data, f, indent=2)
+
+        # Atomic rename
+        temp_file.replace(state_file)
+
+    except Exception:
+        pass  # Fail silently to avoid breaking runs
+
+
+def initialize_strategy_states(
+    states: dict[str, StrategyState], strategy_names: list[str]
+) -> dict[str, StrategyState]:
+    """
+    Initialize strategies with equal weights if they don't exist.
+
+    Args:
+        states: Existing states dictionary
+        strategy_names: List of strategy names
+
+    Returns:
+        Updated states dictionary
+    """
+    if not strategy_names:
+        return states
+
+    equal_weight = 1.0 / len(strategy_names)
+
+    for name in strategy_names:
+        if name not in states:
+            states[name] = StrategyState(name=name, weight=equal_weight)
+
+    return states
+
+
+def print_strategy_state_summary(states: dict[str, StrategyState]):
+    """
+    Print summary of strategy states.
+
+    Args:
+        states: Dictionary of strategy states
+    """
+    if not states:
+        print("\nNo strategy state available")
+        return
+
+    print("\n" + "=" * 80)
+    print("Strategy Performance Summary")
+    print("=" * 80)
+    print(
+        f"{'Strategy':<20} {'Weight':>8} {'PnL':>10} {'Samples':>8} "
+        f"{'Mean%':>8} {'Std%':>8} {'DD%':>8}"
+    )
+    print("-" * 80)
+
+    for name, state in sorted(states.items()):
+        mean_ret = 0.0
+        std_ret = 0.0
+
+        if state.rolling_returns:
+            mean_ret = sum(state.rolling_returns) / len(state.rolling_returns) * 100
+            if len(state.rolling_returns) > 1:
+                variance = sum((r - mean_ret / 100) ** 2 for r in state.rolling_returns) / (
+                    len(state.rolling_returns) - 1
+                )
+                std_ret = variance**0.5 * 100
+
+        print(
+            f"{name:<20} {state.weight:>8.3f} {state.cumulative_pnl:>10.2f} "
+            f"{len(state.rolling_returns):>8} {mean_ret:>8.2f} {std_ret:>8.2f} "
+            f"{state.drawdown * 100:>8.2f}"
+        )
+
+    print("=" * 80)
