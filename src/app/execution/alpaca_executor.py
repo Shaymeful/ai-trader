@@ -16,10 +16,11 @@ class OrderInstruction:
 
     symbol: str
     side: OrderSide
-    quantity: int
+    quantity: int | float  # Support both whole and fractional shares
     limit_price: Decimal | None = None
     reason: str = ""
     is_risk_reducing: bool = False  # True if this order reduces exposure
+    is_fractional: bool = False  # True if this is a fractional share order
 
 
 @dataclass
@@ -202,7 +203,7 @@ class AlpacaExecutor:
         Returns:
             List of OrderSlice objects, empty if order cannot fit within cap
         """
-        order_notional = instruction.quantity * price
+        order_notional = Decimal(str(instruction.quantity)) * price
         max_notional = self.config.max_order_notional
 
         # If order fits within cap, no slicing needed
@@ -217,11 +218,37 @@ class AlpacaExecutor:
         if max_qty_per_slice == 0:
             # Price is too high for even 1 share to fit within cap
             # For risk-reducing orders (closing positions), allow 1 share minimum to enable exits
-            # For risk-increasing orders (opening/adding), cannot proceed
+            # For risk-increasing orders (opening/adding), check if fractional is allowed
             if instruction.is_risk_reducing:
                 max_qty_per_slice = 1
+            elif self.config.allow_fractional and instruction.side == OrderSide.BUY:
+                # Calculate fractional quantity that fits within cap
+                fractional_qty = float(max_notional / effective_price)
+                # Round to 3 decimals for safety (0.001 precision)
+                fractional_qty = round(fractional_qty, 3)
+
+                # Check minimum threshold (0.001)
+                if fractional_qty >= 0.001:
+                    # Create a single fractional order
+                    fractional_instruction = OrderInstruction(
+                        symbol=instruction.symbol,
+                        side=instruction.side,
+                        quantity=fractional_qty,
+                        limit_price=instruction.limit_price,
+                        reason=instruction.reason,
+                        is_risk_reducing=instruction.is_risk_reducing,
+                        is_fractional=True,
+                    )
+                    return [
+                        OrderSlice(
+                            instruction=fractional_instruction, slice_index=1, total_slices=1
+                        )
+                    ]
+                else:
+                    # Below minimum threshold, cannot proceed
+                    return []
             else:
-                # Cannot fit within cap, return empty to signal skip
+                # Fractional not allowed, cannot fit within cap, return empty to signal skip
                 return []
 
         # Calculate total slices needed
@@ -303,10 +330,13 @@ class AlpacaExecutor:
 
             # Check if order cannot fit within cap (empty slices)
             if not order_slices:
+                fractional_note = ""
+                if not self.config.allow_fractional:
+                    fractional_note = " (enable allow_fractional for fractional shares)"
                 reason = (
                     f"Order notional ${order_notional:.2f} exceeds max_order_usd "
                     f"${self.config.max_order_notional} and cannot be sliced "
-                    f"(single share notional: ${price * 1:.2f})"
+                    f"(single share notional: ${price * 1:.2f}){fractional_note}"
                 )
                 self.logger.warning(f"{instruction.symbol}: {reason}")
                 orders_skipped.append((instruction.symbol, reason))
@@ -323,7 +353,7 @@ class AlpacaExecutor:
             # Place each slice
             for order_slice in order_slices:
                 slice_instruction = order_slice.instruction
-                slice_notional = slice_instruction.quantity * (
+                slice_notional = Decimal(str(slice_instruction.quantity)) * (
                     slice_instruction.limit_price or price
                 )
 
@@ -399,9 +429,16 @@ class AlpacaExecutor:
             slice_info = f" [slice {order_slice.slice_index}/{order_slice.total_slices}]"
 
         risk_tag = " (risk-reducing)" if instruction.is_risk_reducing else ""
+        fractional_tag = " [fractional]" if instruction.is_fractional else ""
+
+        # Format quantity with proper precision
+        if instruction.is_fractional:
+            qty_str = f"{instruction.quantity:.3f}"
+        else:
+            qty_str = f"{int(instruction.quantity)}"
 
         print(
             f"  [DRY-RUN] {instruction.symbol:<6} {instruction.side.name:<4} "
-            f"{instruction.quantity:>3} @ ${instruction.limit_price:>7.2f}  "
-            f"({instruction.reason}){slice_info}{risk_tag}"
+            f"{qty_str:>7} @ ${instruction.limit_price:>7.2f}  "
+            f"({instruction.reason}){slice_info}{risk_tag}{fractional_tag}"
         )

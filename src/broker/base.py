@@ -16,7 +16,7 @@ class Broker(ABC):
         self,
         symbol: str,
         side: OrderSide,
-        quantity: int,
+        quantity: int | float,
         client_order_id: str,
         order_type: OrderType = OrderType.MARKET,
         limit_price: Decimal | None = None,
@@ -27,7 +27,7 @@ class Broker(ABC):
         Args:
             symbol: Trading symbol
             side: Buy or sell
-            quantity: Number of shares
+            quantity: Number of shares (int for whole shares, float for fractional)
             client_order_id: Client-generated order ID for idempotency
             order_type: Market or limit
             limit_price: Limit price (required for limit orders)
@@ -163,7 +163,7 @@ class MockBroker(Broker):
         self,
         symbol: str,
         side: OrderSide,
-        quantity: int,
+        quantity: int | float,
         client_order_id: str,
         order_type: OrderType = OrderType.MARKET,
         limit_price: Decimal | None = None,
@@ -174,7 +174,7 @@ class MockBroker(Broker):
         Args:
             symbol: Trading symbol
             side: Buy or sell
-            quantity: Number of shares
+            quantity: Number of shares (int for whole shares, float for fractional)
             client_order_id: Client-generated order ID for idempotency
             order_type: Market or limit
             limit_price: Limit price (required for limit orders)
@@ -427,7 +427,7 @@ class AlpacaBroker(Broker):
         self,
         symbol: str,
         side: OrderSide,
-        quantity: int,
+        quantity: int | float,
         client_order_id: str,
         order_type: OrderType = OrderType.MARKET,
         limit_price: Decimal | None = None,
@@ -438,7 +438,7 @@ class AlpacaBroker(Broker):
         Args:
             symbol: Trading symbol
             side: Buy or sell
-            quantity: Number of shares
+            quantity: Number of shares (int for whole shares, float for fractional)
             client_order_id: Client-generated order ID for idempotency
             order_type: Market or limit
             limit_price: Limit price (required for limit orders)
