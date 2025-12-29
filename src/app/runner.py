@@ -2,7 +2,7 @@
 
 import json
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import load_config_with_yaml
@@ -76,7 +76,7 @@ def run_shadow_mode():
         for intent in intents:
             all_results.append(
                 {
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "strategy": strategy.name,
                     "symbol": intent.symbol,
                     "target_quantity": intent.target_quantity,
@@ -90,7 +90,7 @@ def run_shadow_mode():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"shadow_run_{timestamp}.jsonl"
 
     with open(log_file, "w") as f:
