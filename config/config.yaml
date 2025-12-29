@@ -10,6 +10,10 @@ risk:
   max_daily_loss_usd: 250
   max_gross_exposure_usd: 10000
 
+# Execution settings
+execution:
+  allow_fractional: true  # Enable fractional share orders (paper mode only)
+
 # Trading universe
 universe:
   core:

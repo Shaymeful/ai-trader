@@ -105,7 +105,7 @@ class Order(BaseModel):
     symbol: str
     side: OrderSide
     type: OrderType
-    quantity: int
+    quantity: int | float  # Support fractional shares
     price: Decimal | None = None
     status: OrderStatus = OrderStatus.PENDING
     submitted_at: datetime

@@ -449,3 +449,109 @@ def test_executor_allows_risk_reducing_sell_even_if_single_share_exceeds_cap():
     order = list(broker.orders.values())[0]
     assert order.side == OrderSide.SELL
     assert order.quantity == 1
+
+
+def test_executor_fractional_shares_when_enabled():
+    """Test that fractional shares are used when allow_fractional=True."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("100"),  # Cap is $100
+        max_daily_loss=Decimal("500"),
+        allow_fractional=True,  # Enable fractional shares
+    )
+
+    broker = MockBroker()
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    # Want to buy 1 share of SPY at $690 = $690 > $100 cap
+    # With fractional enabled, should place fractional order
+    target_positions = {"SPY": 1}
+    current_prices = {"SPY": Decimal("690.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should place 1 fractional order
+    assert len(result.orders_placed) == 1
+    assert len(result.orders_skipped) == 0
+
+    # Verify fractional quantity
+    order = list(broker.orders.values())[0]
+    assert order.side == OrderSide.BUY
+    assert isinstance(order.quantity, float)
+    # With limit price offset (-0.5%), effective price is ~$686.55
+    # Max qty = 100 / 686.55 ≈ 0.145, rounded to 0.145
+    assert 0.140 < order.quantity < 0.150
+
+
+def test_executor_fractional_shares_dry_run():
+    """Test that fractional shares work correctly in dry-run mode."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("100"),
+        max_daily_loss=Decimal("500"),
+        allow_fractional=True,
+    )
+
+    broker = MockBroker()
+    executor = AlpacaExecutor(broker, config, dry_run=True)  # DRY-RUN
+
+    target_positions = {"SPY": 1}
+    current_prices = {"SPY": Decimal("690.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should show fractional order in dry-run
+    assert len(result.orders_placed) == 1
+    assert len(result.orders_skipped) == 0
+    assert result.dry_run is True
+
+
+def test_executor_fractional_shares_multiple_symbols():
+    """Test fractional shares with multiple expensive symbols."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("100"),
+        max_daily_loss=Decimal("500"),
+        allow_fractional=True,
+    )
+
+    broker = MockBroker()
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    # Both symbols exceed cap, should get fractional orders for both
+    target_positions = {"SPY": 1, "QQQ": 1}
+    current_prices = {"SPY": Decimal("690.00"), "QQQ": Decimal("500.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should place 2 fractional orders
+    assert len(result.orders_placed) == 2
+    assert len(result.orders_skipped) == 0
+
+    # Both should be fractional
+    for order in broker.orders.values():
+        assert isinstance(order.quantity, float)
+        assert order.quantity < 1.0
+
+
+def test_executor_fractional_disabled_shows_helpful_message():
+    """Test that skip message suggests enabling fractional when disabled."""
+    config = Config(
+        max_positions_notional=Decimal("10000"),
+        max_order_notional=Decimal("100"),
+        max_daily_loss=Decimal("500"),
+        allow_fractional=False,  # Disabled
+    )
+
+    broker = MockBroker()
+    executor = AlpacaExecutor(broker, config, dry_run=False)
+
+    target_positions = {"SPY": 1}
+    current_prices = {"SPY": Decimal("690.00")}
+
+    result = executor.reconcile_and_execute(target_positions, current_prices)
+
+    # Should skip with helpful message
+    assert len(result.orders_placed) == 0
+    assert len(result.orders_skipped) == 1
+    assert "allow_fractional" in result.orders_skipped[0][1]

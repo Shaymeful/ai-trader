@@ -98,6 +98,11 @@ class Config(BaseModel):
         default=[], description="Trading universe symbols from config"
     )
 
+    # Execution settings
+    allow_fractional: bool = Field(
+        default=False, description="Allow fractional share orders (paper mode only)"
+    )
+
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str]:
     """
@@ -355,5 +360,11 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 config.max_daily_loss = Decimal(str(risk["max_daily_loss_usd"]))
             if "max_gross_exposure_usd" in risk:
                 config.max_positions_notional = Decimal(str(risk["max_gross_exposure_usd"]))
+
+        # Apply execution parameters from YAML
+        if "execution" in yaml_config:
+            execution = yaml_config["execution"]
+            if "allow_fractional" in execution:
+                config.allow_fractional = execution["allow_fractional"]
 
     return config
