@@ -42,9 +42,9 @@ if ($Remove) {
 
     try {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
-        Write-Host "✓ Task removed successfully" -ForegroundColor Green
+        Write-Host "[OK] Task removed successfully" -ForegroundColor Green
     } catch {
-        Write-Host "✗ Failed to remove task: $_" -ForegroundColor Red
+        Write-Host "[ERROR] Failed to remove task: $_" -ForegroundColor Red
         exit 1
     }
 
@@ -109,11 +109,11 @@ try {
                           -Trigger $Trigger `
                           -Settings $Settings `
                           -Principal $Principal `
-                          -Description "AI Trader hourly loop runner ($Mode mode)" `
+                          -Description "AI Trader hourly loop runner - $Mode mode" `
                           -Force
 
     Write-Host ""
-    Write-Host "✓ Scheduled task created successfully!" -ForegroundColor Green
+    Write-Host "[OK] Scheduled task created successfully!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Task Details:" -ForegroundColor Yellow
     Write-Host "  Name:        $TaskName"
@@ -143,7 +143,7 @@ try {
 
 } catch {
     Write-Host ""
-    Write-Host "✗ Failed to create scheduled task" -ForegroundColor Red
+    Write-Host "[ERROR] Failed to create scheduled task" -ForegroundColor Red
     Write-Host ""
     Write-Host "Error: $_" -ForegroundColor Red
     Write-Host ""
