@@ -1,0 +1,98 @@
+================================================================================
+  AI TRADER - TASK SCHEDULER SETUP (ADMIN REQUIRED)
+================================================================================
+
+STEP 1: Open PowerShell as Administrator
+────────────────────────────────────────────────────────────────────────────
+
+1. Press Windows Key
+2. Type "PowerShell"
+3. Right-click "Windows PowerShell"
+4. Click "Run as administrator"
+
+
+STEP 2: Copy and Run This Command
+────────────────────────────────────────────────────────────────────────────
+
+cd C:\dev\ai-trader
+.\tools\setup_task_scheduler.ps1
+
+
+STEP 3: Confirm Setup
+────────────────────────────────────────────────────────────────────────────
+
+When prompted:
+  - Review the configuration shown
+  - Type Y and press Enter to confirm
+
+
+STEP 4: Test the Task
+────────────────────────────────────────────────────────────────────────────
+
+After setup completes, test immediately:
+
+# Start the task
+Start-ScheduledTask -TaskName "AI-Trader-Hourly"
+
+# Watch logs in real-time (Ctrl+C to stop)
+Get-Content logs\loop_status.log -Tail 10 -Wait
+
+# Stop the task
+Stop-ScheduledTask -TaskName "AI-Trader-Hourly"
+
+
+ALTERNATIVE OPTIONS
+────────────────────────────────────────────────────────────────────────────
+
+Paper mode with dry-run (print orders only):
+  .\tools\setup_task_scheduler.ps1 -Mode paper -DryRun
+
+Paper mode (place orders on paper account):
+  .\tools\setup_task_scheduler.ps1 -Mode paper
+
+Custom task name:
+  .\tools\setup_task_scheduler.ps1 -TaskName "My-Custom-Name"
+
+Custom start time:
+  .\tools\setup_task_scheduler.ps1 -StartTime "10:00"
+
+
+MANAGEMENT COMMANDS (After Setup)
+────────────────────────────────────────────────────────────────────────────
+
+View task status:
+  Get-ScheduledTask -TaskName "AI-Trader-Hourly"
+  Get-ScheduledTask -TaskName "AI-Trader-Hourly" | Get-ScheduledTaskInfo
+
+Start/Stop task:
+  Start-ScheduledTask -TaskName "AI-Trader-Hourly"
+  Stop-ScheduledTask -TaskName "AI-Trader-Hourly"
+
+Enable/Disable task:
+  Enable-ScheduledTask -TaskName "AI-Trader-Hourly"
+  Disable-ScheduledTask -TaskName "AI-Trader-Hourly"
+
+Remove task:
+  .\tools\setup_task_scheduler.ps1 -Remove
+
+
+LOG FILES TO MONITOR
+────────────────────────────────────────────────────────────────────────────
+
+logs\task_scheduler.log   - Task startup/shutdown
+logs\loop_status.log       - Per-iteration status
+logs\loop_errors.log       - Error stack traces
+logs\loop_stdout.log       - Python output
+logs\loop_stderr.log       - Python errors
+
+
+WHAT HAPPENS AFTER SETUP
+────────────────────────────────────────────────────────────────────────────
+
+✓ Task runs automatically every hour starting at 09:30 AM
+✓ Runs for 23.5 hours daily (resets at next 09:30 AM)
+✓ Shadow mode: No orders placed (safe monitoring)
+✓ Strategy weights update dynamically
+✓ All activity logged to files
+
+================================================================================
