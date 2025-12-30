@@ -1393,6 +1393,251 @@ cat state/strategy_state.json
 
 ---
 
+## Hourly Loop Runner for Automated Execution
+
+The strategy runner supports an optional **loop mode** for running repeatedly at scheduled intervals, designed for automated Windows scheduling without manual intervention.
+
+### Purpose
+
+Enable hands-off automated trading:
+- Run strategies hourly (or custom interval) without manual execution
+- Robust error handling: exceptions logged but execution continues
+- Comprehensive logging for monitoring and debugging
+- Safe Windows Task Scheduler integration
+
+### CLI Flags
+
+**Loop Control:**
+- `--loop`: Run in loop mode (repeats every --sleep-seconds)
+- `--once`: Run once and exit (default behavior, mutually exclusive with --loop)
+- `--sleep-seconds <int>`: Seconds to sleep between iterations (default: 3600 = 1 hour)
+
+**Mode Selection:**
+- `--mode shadow`: Shadow mode (no orders)
+- `--mode paper`: Paper trading mode
+- `--dry-run`: Paper dry-run (only with --mode paper)
+
+### Usage Examples
+
+**Run shadow mode once (default behavior):**
+```bash
+python -m src.app.runner --mode shadow
+```
+
+**Run shadow mode hourly (loop):**
+```bash
+python -m src.app.runner --mode shadow --loop
+```
+
+**Run paper dry-run every 30 minutes:**
+```bash
+python -m src.app.runner --mode paper --dry-run --loop --sleep-seconds 1800
+```
+
+**Run paper mode hourly:**
+```bash
+python -m src.app.runner --mode paper --loop
+```
+
+### Loop Behavior
+
+**Execution Flow:**
+1. Print loop mode banner with configuration
+2. Execute strategy runner (shadow or paper mode)
+3. Log result to `logs/loop_status.log`
+4. Sleep for --sleep-seconds
+5. Repeat from step 2
+
+**Exception Handling:**
+- All exceptions caught and logged to `logs/loop_errors.log`
+- Execution continues to next iteration (no crashes)
+- Both success and error logged to `logs/loop_status.log`
+
+**Stopping the Loop:**
+- Press `Ctrl+C` to gracefully shut down
+- Displays total iterations completed
+- Exits with code 0 (clean shutdown)
+
+### Log Files
+
+**`logs/loop_status.log`** (status summary per iteration):
+```
+[2025-12-30T10:00:00+00:00] SUCCESS | mode=shadow | dry_run=False | orders_placed=0 | orders_skipped=0 | weights=[Trend_MA20=55.00%, MeanRev_Z1.0=45.00%]
+[2025-12-30T11:00:00+00:00] SUCCESS | mode=shadow | dry_run=False | orders_placed=0 | orders_skipped=0 | weights=[Trend_MA20=56.00%, MeanRev_Z1.0=44.00%]
+[2025-12-30T12:00:00+00:00] ERROR | mode=shadow | dry_run=False | exception=ConnectionError: Failed to fetch market data
+[2025-12-30T13:00:00+00:00] SUCCESS | mode=shadow | dry_run=False | orders_placed=0 | orders_skipped=0 | weights=[Trend_MA20=55.50%, MeanRev_Z1.0=44.50%]
+```
+
+**Format:**
+- Timestamp: ISO 8601 format (UTC)
+- Status: SUCCESS or ERROR
+- Mode: shadow or paper
+- Dry-run flag: True or False
+- Orders placed: Count of orders submitted
+- Orders skipped: Count of orders blocked
+- Weights: Strategy allocation weights (if tracked)
+- Exception: Error type and message (ERROR only)
+
+**`logs/loop_errors.log`** (full stack traces):
+```
+================================================================================
+ERROR at 2025-12-30T12:00:00+00:00 (iteration 3)
+================================================================================
+Traceback (most recent call last):
+  File "src/app/runner.py", line 607, in run_loop
+    result = run_shadow_mode()
+  File "src/app/runner.py", line 150, in run_shadow_mode
+    market_data = provider.get_market_data(universe)
+ConnectionError: Failed to fetch market data
+```
+
+### Windows Task Scheduler Setup
+
+**Option 1: PowerShell Script (Recommended)**
+
+Create `run_hourly_shadow.ps1`:
+```powershell
+# Navigate to repo directory
+Set-Location "C:\dev\ai-trader"
+
+# Activate Python environment (if using venv)
+# & "C:\dev\ai-trader\venv\Scripts\Activate.ps1"
+
+# Run in loop mode
+python -m src.app.runner --mode shadow --loop --sleep-seconds 3600
+
+# Log will capture Ctrl+C exits
+```
+
+**Task Scheduler Configuration:**
+1. Open Task Scheduler
+2. Create Basic Task:
+   - Name: "AI Trader Hourly Shadow Mode"
+   - Trigger: At system startup (or specific time)
+   - Action: Start a program
+   - Program: `powershell.exe`
+   - Arguments: `-ExecutionPolicy Bypass -File "C:\dev\ai-trader\run_hourly_shadow.ps1"`
+   - Start in: `C:\dev\ai-trader`
+3. Settings:
+   - ✅ Run whether user is logged on or not
+   - ✅ Run with highest privileges (if needed for credentials)
+   - ✅ Stop task if runs longer than 3 days (safety)
+   - ❌ Stop if runs longer than X hours (we want continuous)
+
+**Option 2: Direct Python Execution**
+
+Task Scheduler Action:
+- Program: `python.exe`
+- Arguments: `-m src.app.runner --mode shadow --loop`
+- Start in: `C:\dev\ai-trader`
+
+### Monitoring Loop Execution
+
+**Check if loop is running:**
+```powershell
+# Windows: Find Python process running loop
+Get-Process python | Where-Object { $_.CommandLine -like "*--loop*" }
+```
+
+**View recent status:**
+```bash
+# Tail last 10 entries from status log
+tail -10 logs/loop_status.log
+
+# Windows PowerShell:
+Get-Content logs\loop_status.log -Tail 10
+```
+
+**Check for errors:**
+```bash
+# View error log
+cat logs/loop_errors.log
+
+# Windows PowerShell:
+Get-Content logs\loop_errors.log
+```
+
+**Count success/error ratio:**
+```bash
+# Linux/Mac:
+grep -c SUCCESS logs/loop_status.log
+grep -c ERROR logs/loop_status.log
+
+# Windows PowerShell:
+(Select-String -Path logs\loop_status.log -Pattern "SUCCESS").Count
+(Select-String -Path logs\loop_status.log -Pattern "ERROR").Count
+```
+
+### Safety Features
+
+**Exception Resilience:**
+- Network errors: Logged, execution continues
+- API failures: Logged, execution continues
+- Market data issues: Logged, execution continues
+- Any unhandled exception: Logged, execution continues
+
+**No Silent Failures:**
+- All exceptions written to `logs/loop_errors.log`
+- All status updates written to `logs/loop_status.log`
+- Both stdout and log files capture execution state
+
+**Keyboard Interrupt Handling:**
+- Graceful shutdown on Ctrl+C
+- Displays iteration count
+- Exits cleanly (code 0)
+
+### Testing
+
+**Unit tests** (`tests/test_loop_runner.py`):
+- Uses `monkeypatch` to mock `time.sleep` (no real sleeping)
+- Uses `tmp_path` for isolated log files
+- Tests exception handling and recovery
+- Tests status/error logging
+- Tests keyboard interrupt handling
+- All tests run offline (no network calls)
+
+**Run tests:**
+```bash
+python -m pytest tests/test_loop_runner.py -v
+```
+
+### Implementation Files
+
+- `src/app/runner.py`:
+  - `RunResult` dataclass: Execution result container
+  - `run_loop()`: Main loop with exception handling and logging
+  - `run_shadow_mode()`: Returns RunResult
+  - `run_paper_mode()`: Returns RunResult
+  - `main()`: CLI argument parsing with --loop/--once/--sleep-seconds
+- `tests/test_loop_runner.py`: Comprehensive loop tests (7 test cases)
+
+### CLI Reference
+
+```bash
+# Show help
+python -m src.app.runner --help
+
+# Run once (default)
+python -m src.app.runner --mode shadow
+
+# Explicit once mode
+python -m src.app.runner --mode shadow --once
+
+# Run in loop (hourly by default)
+python -m src.app.runner --mode shadow --loop
+
+# Custom sleep interval
+python -m src.app.runner --mode shadow --loop --sleep-seconds 1800  # 30 min
+
+# Paper dry-run loop
+python -m src.app.runner --mode paper --dry-run --loop
+
+# Paper live loop (requires credentials)
+python -m src.app.runner --mode paper --loop
+```
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing
