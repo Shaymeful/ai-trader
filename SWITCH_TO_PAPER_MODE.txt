@@ -1,0 +1,101 @@
+================================================================================
+  SWITCH TO PAPER MODE WITH DRY-RUN
+================================================================================
+
+STATUS: Task stopped, ready to reconfigure
+
+QUICK STEPS (Run in PowerShell as Administrator)
+================================================================================
+
+1. Open PowerShell as Administrator:
+   • Press Windows Key
+   • Type "PowerShell"
+   • Right-click "Windows PowerShell"
+   • Click "Run as administrator"
+
+2. Navigate to project:
+   cd C:\dev\ai-trader
+
+3. Remove old task:
+   .\tools\setup_task_scheduler.ps1 -Remove
+
+4. Create new task with paper mode + dry-run:
+   .\tools\setup_task_scheduler.ps1 -Mode paper -DryRun
+
+5. Verify and start:
+   Get-ScheduledTask -TaskName "AI-Trader-Hourly"
+   Start-ScheduledTask -TaskName "AI-Trader-Hourly"
+
+6. Monitor logs:
+   Get-Content logs\loop_status.log -Tail 10 -Wait
+
+
+ALTERNATIVE: MODIFY EXISTING TASK
+================================================================================
+
+If you prefer to modify the existing task instead of recreating:
+
+$action = New-ScheduledTaskAction `
+  -Execute "PowerShell.exe" `
+  -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\dev\ai-trader\tools\run_loop.ps1" -Mode paper -DryRun -SleepSeconds 3600' `
+  -WorkingDirectory "C:\dev\ai-trader"
+
+Set-ScheduledTask -TaskName "AI-Trader-Hourly" -Action $action
+
+Start-ScheduledTask -TaskName "AI-Trader-Hourly"
+
+
+WHAT CHANGES
+================================================================================
+
+From: Shadow mode (no orders, monitoring only)
+  • Mode: shadow
+  • Orders: None placed
+  • Purpose: Strategy performance tracking
+
+To: Paper mode with dry-run (orders printed, not placed)
+  • Mode: paper
+  • Dry-run: True
+  • Orders: Printed to stdout but NOT placed
+  • Purpose: Verify order generation without actual execution
+
+
+VERIFICATION AFTER SWITCH
+================================================================================
+
+Check task is running:
+  Get-ScheduledTask -TaskName "AI-Trader-Hourly" | Get-ScheduledTaskInfo
+
+Check logs show paper mode with dry-run:
+  tail logs\loop_status.log
+
+Expected log format:
+  [timestamp] SUCCESS | mode=paper | dry_run=True | orders_placed=X | ...
+
+Check Python processes:
+  tasklist | findstr python
+
+
+MONITORING
+================================================================================
+
+Watch logs in real-time:
+  Get-Content logs\loop_status.log -Tail 10 -Wait
+
+View recent iterations:
+  tail -20 logs\loop_status.log
+
+Check task scheduler log:
+  Get-Content logs\task_scheduler.log -Tail 20
+
+
+NOTES
+================================================================================
+
+• Paper mode with --dry-run will generate orders but NOT place them
+• Orders will be printed to logs for verification
+• Shadow PnL tracking continues (strategy weight updates)
+• All safety checks remain active
+• Next step after verification: Paper mode WITHOUT --dry-run (real orders on paper account)
+
+================================================================================
