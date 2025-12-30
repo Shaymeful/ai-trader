@@ -125,6 +125,7 @@ class HourlyMarketDataProvider(MarketDataProvider):
                 "ma": round(ma, 2),
                 "zscore": round(zscore, 2),
                 "bars_count": len(recent_bars),
+                "closes": closes,  # For Shadow PnL return calculation
             }
 
             self.logger.info(
@@ -162,7 +163,7 @@ class MockMarketDataProvider(MarketDataProvider):
             symbols: List of symbols
 
         Returns:
-            Dictionary with mock price, ma, and zscore
+            Dictionary with mock price, ma, zscore, and closes array
         """
         import random
 
@@ -174,11 +175,19 @@ class MockMarketDataProvider(MarketDataProvider):
             ma = base_price * random.uniform(0.95, 1.05)
             zscore = random.uniform(-2.0, 2.0)
 
+            # Generate mock closes array (50 bars with small random changes)
+            closes = []
+            price = base_price * 0.95  # Start lower
+            for _ in range(50):
+                price *= 1.0 + random.uniform(-0.01, 0.01)  # +/- 1% per bar
+                closes.append(price)
+
             result[symbol] = {
-                "price": round(base_price, 2),
+                "price": round(closes[-1], 2),  # Latest close
                 "ma": round(ma, 2),
                 "zscore": round(zscore, 2),
                 "bars_count": 50,  # Fake sufficient bars
+                "closes": closes,  # For Shadow PnL
             }
 
         return result

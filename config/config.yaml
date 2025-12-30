@@ -14,6 +14,11 @@ risk:
 execution:
   allow_fractional: true  # Enable fractional share orders (paper mode only)
 
+# Performance tracking (Shadow PnL)
+performance:
+  min_samples: 20   # Minimum samples required before strategy weight updates
+  max_samples: 200  # Maximum rolling return samples to keep per strategy
+
 # Trading universe
 universe:
   core:

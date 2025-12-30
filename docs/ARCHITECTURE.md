@@ -1147,6 +1147,252 @@ All 329 tests pass with slicing enabled.
 
 ---
 
+## Shadow PnL Performance Tracking
+
+The system implements Shadow PnL to enable strategy performance tracking and dynamic weight updates without requiring actual fills. This allows performance monitoring in shadow mode and paper --dry-run mode by computing mark-to-market returns from hourly price changes.
+
+### Purpose
+
+Enable performance tracking for multi-strategy portfolios when fills are not available:
+- Shadow mode: No orders placed, only intents generated
+- Paper --dry-run mode: Orders previewed but not submitted
+- Track strategy performance using market returns
+- Dynamically adjust strategy capital allocation weights based on performance
+
+### Core Components
+
+**Shadow PnL Calculator** (`src/app/shadow_pnl.py`):
+- Computes 1-period returns: `r = (close_t - close_t-1) / close_t-1`
+- Stores previous prices internally for cross-run return calculation
+- Allocates per-strategy notional based on intents and budgets
+- Attributes returns: `strategy_return = sum(notional_weight * symbol_return)`
+
+**Strategy State** (`src/app/state.py:StrategyState`):
+- `weight`: Capital allocation (0.0-1.0, sum=1.0)
+- `cumulative_pnl`: Total profit/loss from attributed returns
+- `rolling_returns`: Last N return samples (default: 200)
+- `drawdown`: Maximum decline from peak equity (negative value)
+- `trade_count`: Number of attributed samples
+
+### Return Calculation Algorithm
+
+**Market Returns:**
+```python
+# First run: store current prices
+prev_prices["SPY"] = 400.0
+
+# Second run: compute returns
+current_price = 404.0
+return_pct = (404.0 - 400.0) / 400.0  # = 0.01 (1% gain)
+```
+
+**Notional Allocation (Simple Equal Allocation):**
+```python
+# Strategy has budget=$5000 with intents=[SPY, QQQ] (both target_qty > 0)
+num_intents = 2
+notional_per_symbol = $5000 / 2 = $2500
+
+# Result:
+strategy_notionals["Trend_MA20"]["SPY"] = $2500
+strategy_notionals["Trend_MA20"]["QQQ"] = $2500
+```
+
+**Strategy Return Attribution:**
+```python
+# Given:
+# - Trend_MA20 allocated: SPY=$2500, QQQ=$2500
+# - Returns: SPY=+1%, QQQ=-1%
+
+total_notional = $2500 + $2500 = $5000
+weighted_return = (2500/5000 * 0.01) + (2500/5000 * -0.01) = 0.0
+
+# Update state:
+state.rolling_returns.append(0.0)
+state.cumulative_pnl += 0.0 * 5000 = $0
+state.trade_count += 1
+```
+
+### Weight Update Algorithm
+
+**Conservative Dynamic Reweighting:**
+
+1. **Gating**: Require ALL strategies have >= `min_samples` (default: 20) before adjusting weights
+   - Until threshold met: maintain equal weights (e.g., 0.5 each for 2 strategies)
+   - Prevents premature weight shifts from insufficient data
+
+2. **Performance Score**:
+   ```python
+   score = mean(returns) - 0.5 * stdev(returns) - abs(drawdown)
+   ```
+   - Rewards consistent positive returns
+   - Penalizes volatility and drawdowns
+   - Balances risk-adjusted performance
+
+3. **Softmax Normalization**:
+   ```python
+   target_weights = softmax(scores)  # Convert scores to probability distribution
+   ```
+   - Ensures weights sum to 1.0
+   - Amplifies performance differences while maintaining proportionality
+
+4. **Smoothing** (90% persistence):
+   ```python
+   new_weight = 0.9 * old_weight + 0.1 * target_weight
+   ```
+   - Prevents sudden strategy shifts
+   - Gradual weight transitions
+   - Reduces noise sensitivity
+
+5. **Bounds Enforcement**:
+   ```python
+   clamped_weight = max(0.05, min(0.80, smoothed_weight))
+   ```
+   - Min: 5% per strategy (prevents complete elimination)
+   - Max: 80% per strategy (prevents over-concentration)
+
+6. **Final Normalization**: Ensure weights sum to 1.0 after clamping
+
+### Integration Points
+
+**Shadow Mode** (`python -m src.app.runner --mode shadow`):
+- Runs at end of each shadow run
+- Computes capital allocation via Allocator (gets strategy budgets)
+- Updates strategy states with mark-to-market returns
+- Persists to `state/strategy_state.json`
+- Prints performance summary table
+
+**Paper Dry-Run Mode** (`python -m src.app.runner --mode paper --dry-run`):
+- Same as shadow mode
+- Useful for testing weight dynamics without order submission
+- Adds note: "No fills occurred. Performance tracking uses mark-to-market returns."
+
+### Configuration
+
+**`config/config.yaml`:**
+```yaml
+performance:
+  min_samples: 20   # Samples required before weight updates
+  max_samples: 200  # Rolling window size
+```
+
+**Config Fields** (`src/app/config.py`):
+- `performance_min_samples`: Minimum samples before weight updates (default: 20)
+- `performance_max_samples`: Maximum rolling return samples per strategy (default: 200)
+
+### State Persistence
+
+**File**: `state/strategy_state.json`
+
+**Format**:
+```json
+{
+  "Trend_MA20": {
+    "name": "Trend_MA20",
+    "weight": 0.55,
+    "cumulative_pnl": 42.15,
+    "rolling_returns": [0.001, 0.002, ...],
+    "drawdown": -0.015,
+    "trade_count": 25,
+    "last_updated": "2025-12-29T12:00:00"
+  },
+  "MeanRev_Z1.0": {
+    "name": "MeanRev_Z1.0",
+    "weight": 0.45,
+    "cumulative_pnl": 18.32,
+    "rolling_returns": [0.0005, 0.001, ...],
+    "drawdown": -0.008,
+    "trade_count": 25,
+    "last_updated": "2025-12-29T12:00:00"
+  }
+}
+```
+
+### Output
+
+**Strategy Performance Summary** (printed at end of runs):
+```
+================================================================================
+Strategy Performance Summary (min_samples=20)
+================================================================================
+Strategy          Weight    Cumul PnL    Drawdown    Samples
+--------------------------------------------------------------------------------
+Trend_MA20         55.0%       $42.15      -1.5%         25
+MeanRev_Z1.0       45.0%       $18.32      -0.8%         25
+================================================================================
+```
+
+**First Run Behavior:**
+```
+================================================================================
+Shadow PnL: First run (no previous prices)
+Performance tracking will begin on next run.
+================================================================================
+```
+
+**Samples** initially at 0, increments starting from second run.
+
+### Expected Behavior Over Time
+
+**Run 1 (First run):**
+- No previous prices → no returns computed
+- Samples stay at 0
+- Weights stay equal (0.5 each)
+- State file updated with timestamps
+
+**Run 2 (Second run):**
+- Returns computed (have previous prices)
+- Samples increment to 1
+- cumulative_pnl may be non-zero
+- Weights still equal (need 20 samples)
+
+**Run 20+ (Sufficient samples):**
+- Samples >= 20 for all strategies
+- Weights start updating based on performance
+- Better-performing strategy gets higher weight (gradual shift via 90% smoothing)
+- Weights bounded to [5%, 80%] per strategy
+
+### Safety & Limitations
+
+**Mark-to-Market Assumptions:**
+- Assumes instant execution at hourly close prices
+- Does not account for slippage, spreads, or execution costs
+- Useful for relative strategy comparison, not absolute performance
+
+**Conservative Approach:**
+- 20 sample minimum prevents premature adjustments
+- 90% smoothing prevents sudden strategy shifts
+- [5%, 80%] bounds protect against over-concentration
+- Drawdown penalties discourage losing strategies
+
+**Use Cases:**
+- Shadow mode: Strategy research and validation
+- Dry-run mode: Testing portfolio dynamics before live execution
+- Performance comparison: Identify better-performing strategies
+- Dynamic allocation: Gradually shift capital to winners
+
+### Implementation Files
+
+- `src/app/shadow_pnl.py` - Shadow PnL calculator (return calculation, notional allocation, performance attribution)
+- `src/app/state.py` - StrategyState class and weight update algorithm
+- `src/app/runner.py` - Integration in shadow mode and paper dry-run
+- `config/config.yaml` - Performance tracking configuration
+- `tests/test_shadow_pnl.py` - Comprehensive offline tests (10 test cases covering returns, allocation, weights, drawdown, persistence)
+
+### CLI Usage
+
+```bash
+# Run shadow mode with performance tracking
+python -m src.app.runner --mode shadow
+
+# Run paper dry-run with performance tracking
+python -m src.app.runner --mode paper --dry-run
+
+# Check strategy state
+cat state/strategy_state.json
+```
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing
