@@ -3,6 +3,9 @@
 import argparse
 import json
 import sys
+import time
+import traceback
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +18,18 @@ from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .execution import AlpacaExecutor
 from .strategies import MeanReversionStrategy, TrendStrategy
+
+
+@dataclass
+class RunResult:
+    """Result of a single run (shadow or paper mode)."""
+
+    mode: str  # "shadow" or "paper"
+    dry_run: bool
+    orders_placed: int
+    orders_skipped: int
+    strategy_weights: dict[str, float]  # strategy_name -> weight
+    timestamp: str  # ISO format
 
 
 def run_shadow_mode(provider: MarketDataProvider | None = None):
@@ -218,6 +233,16 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     print("=" * 80)
     print("Shadow mode run complete. No orders were placed.")
     print("=" * 80)
+
+    # Return execution result
+    return RunResult(
+        mode="shadow",
+        dry_run=False,
+        orders_placed=0,
+        orders_skipped=0,
+        strategy_weights={name: state.weight for name, state in strategy_states.items()},
+        timestamp=datetime.now(UTC).isoformat(),
+    )
 
 
 def _create_mock_market_data(universe: list[str]) -> dict:
@@ -518,6 +543,137 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
     print(f"Results logged to: {log_file}")
     print("=" * 80)
 
+    # Return execution result
+    if dry_run:
+        # Dry-run mode: get strategy weights
+        strategy_weights = {name: state.weight for name, state in strategy_states.items()}
+    else:
+        # Paper mode: no strategy weights tracked without dry-run
+        strategy_weights = {}
+
+    return RunResult(
+        mode="paper",
+        dry_run=dry_run,
+        orders_placed=len(execution_result.orders_placed),
+        orders_skipped=len(execution_result.orders_skipped),
+        strategy_weights=strategy_weights,
+        timestamp=datetime.now(UTC).isoformat(),
+    )
+
+
+def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
+    """
+    Run in loop mode: execute strategy runner repeatedly with sleep intervals.
+
+    Catches exceptions and logs errors to logs/loop_errors.log.
+    Writes status summaries to logs/loop_status.log.
+
+    Args:
+        mode: "shadow" or "paper"
+        dry_run: Whether to run paper mode in dry-run
+        sleep_seconds: Seconds to sleep between iterations
+    """
+    # Ensure logs directory exists
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    status_log = log_dir / "loop_status.log"
+    error_log = log_dir / "loop_errors.log"
+
+    print("=" * 80)
+    print("LOOP MODE ENABLED")
+    print("=" * 80)
+    print(f"Mode: {mode}")
+    print(f"Dry-run: {dry_run}")
+    print(f"Sleep interval: {sleep_seconds} seconds ({sleep_seconds / 3600:.1f} hours)")
+    print(f"Status log: {status_log}")
+    print(f"Error log: {error_log}")
+    print("Press Ctrl+C to stop")
+    print("=" * 80)
+    print()
+
+    iteration = 0
+    while True:
+        iteration += 1
+        run_timestamp = datetime.now(UTC).isoformat()
+
+        print(f"\n{'='*80}")
+        print(f"LOOP ITERATION {iteration} - {run_timestamp}")
+        print(f"{'='*80}\n")
+
+        try:
+            # Run the appropriate mode
+            if mode == "shadow":
+                result = run_shadow_mode()
+            elif mode == "paper":
+                result = run_paper_mode(dry_run=dry_run)
+            else:
+                raise ValueError(f"Invalid mode: {mode}")
+
+            # Log successful run to status log
+            weights_str = ", ".join(
+                f"{name}={weight:.2%}" for name, weight in result.strategy_weights.items()
+            )
+            status_line = (
+                f"[{run_timestamp}] SUCCESS | "
+                f"mode={result.mode} | "
+                f"dry_run={result.dry_run} | "
+                f"orders_placed={result.orders_placed} | "
+                f"orders_skipped={result.orders_skipped} | "
+                f"weights=[{weights_str}]\n"
+            )
+
+            with open(status_log, "a") as f:
+                f.write(status_line)
+
+            print(f"\n{'='*80}")
+            print(f"ITERATION {iteration} COMPLETE")
+            print(f"Status logged to: {status_log}")
+            print(f"{'='*80}\n")
+
+        except Exception as e:
+            # Log error to error log
+            error_timestamp = datetime.now(UTC).isoformat()
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"ERROR at {error_timestamp} (iteration {iteration})\n"
+                f"{'='*80}\n"
+                f"{traceback.format_exc()}\n"
+            )
+
+            with open(error_log, "a") as f:
+                f.write(error_msg)
+
+            # Also log to status log
+            status_line = (
+                f"[{run_timestamp}] ERROR | "
+                f"mode={mode} | "
+                f"dry_run={dry_run} | "
+                f"exception={type(e).__name__}: {str(e)}\n"
+            )
+
+            with open(status_log, "a") as f:
+                f.write(status_line)
+
+            print(f"\n{'='*80}")
+            print(f"ERROR IN ITERATION {iteration}")
+            print(f"Exception: {type(e).__name__}: {str(e)}")
+            print(f"Error logged to: {error_log}")
+            print(f"Continuing to next iteration...")
+            print(f"{'='*80}\n")
+
+        # Sleep before next iteration
+        print(f"Sleeping for {sleep_seconds} seconds ({sleep_seconds / 3600:.1f} hours)...")
+        print(f"Next run at: {datetime.now(UTC).replace(microsecond=0) + __import__('datetime').timedelta(seconds=sleep_seconds)}")
+        print()
+
+        try:
+            time.sleep(sleep_seconds)
+        except KeyboardInterrupt:
+            print("\n\nKeyboard interrupt received. Shutting down loop mode...")
+            print(f"Total iterations completed: {iteration}")
+            sys.exit(0)
+
 
 def main():
     """Main entry point with argument parsing."""
@@ -534,6 +690,26 @@ def main():
         help="Dry-run mode: print orders without placing them (only for paper mode)",
     )
 
+    # Loop control flags
+    loop_group = parser.add_mutually_exclusive_group()
+    loop_group.add_argument(
+        "--once",
+        action="store_true",
+        default=False,
+        help="Run once and exit (default behavior)",
+    )
+    loop_group.add_argument(
+        "--loop",
+        action="store_true",
+        help="Run in loop mode (repeats every --sleep-seconds)",
+    )
+    parser.add_argument(
+        "--sleep-seconds",
+        type=int,
+        default=3600,
+        help="Seconds to sleep between loop iterations (default: 3600 = 1 hour)",
+    )
+
     args = parser.parse_args()
 
     if args.mode == "shadow":
@@ -542,9 +718,16 @@ def main():
                 "WARNING: --dry-run flag has no effect in shadow mode (shadow mode never places orders)"
             )
             print()
-        run_shadow_mode()
-    elif args.mode == "paper":
-        run_paper_mode(dry_run=args.dry_run)
+
+    # Run in loop or once
+    if args.loop:
+        run_loop(mode=args.mode, dry_run=args.dry_run, sleep_seconds=args.sleep_seconds)
+    else:
+        # Default: run once
+        if args.mode == "shadow":
+            run_shadow_mode()
+        elif args.mode == "paper":
+            run_paper_mode(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
