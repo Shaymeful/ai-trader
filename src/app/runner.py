@@ -86,6 +86,7 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
 
     # Run each strategy and collect intents
     all_results = []
+    strategy_intents = {}
 
     print("Running strategies...")
     print()
@@ -110,6 +111,9 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
 
         print()
 
+        # Store intents for allocator and shadow PnL
+        strategy_intents[strategy.name] = intents
+
         # Collect results for JSONL logging
         for intent in intents:
             all_results.append(
@@ -123,6 +127,80 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
                     "market_price": market_data.get(intent.symbol, {}).get("price"),
                 }
             )
+
+    # ============================================================================
+    # Shadow PnL Performance Tracking
+    # ============================================================================
+
+    from .allocator import Allocator
+    from .shadow_pnl import ShadowPnLCalculator
+    from .state import (
+        initialize_strategy_states,
+        load_strategy_state,
+        print_strategy_state_summary,
+        save_strategy_state,
+        update_strategy_weights,
+    )
+
+    # Extract current prices for allocator
+    current_prices = {symbol: Decimal(str(data["price"])) for symbol, data in market_data.items()}
+
+    # Run allocator to get strategy budgets
+    allocator = Allocator(config)
+    allocation_result = allocator.allocate(strategy_intents, current_prices)
+
+    print("Capital Allocation")
+    print("-" * 80)
+    print(f"Total capital: ${config.max_positions_notional}")
+    for strategy_name, budget in allocation_result.strategy_budgets.items():
+        print(f"  {strategy_name}: ${budget:.2f}")
+    print()
+
+    # Load strategy states
+    strategy_states = load_strategy_state()
+    strategy_states = initialize_strategy_states(
+        strategy_states, [s.name for s in strategies]
+    )
+
+    # Create shadow PnL calculator
+    calculator = ShadowPnLCalculator(min_samples=config.performance_min_samples)
+
+    # Compute notional exposures
+    strategy_notionals = calculator.compute_strategy_notional_exposure(
+        strategy_intents, allocation_result.strategy_budgets, current_prices
+    )
+
+    # Compute returns
+    symbol_returns = calculator.compute_symbol_returns(market_data, universe)
+
+    # Update performance (only if returns available)
+    if symbol_returns:
+        calculator.update_strategy_performance(
+            strategy_states, strategy_notionals, symbol_returns
+        )
+
+        # Update weights (only if all strategies have >= min_samples)
+        strategy_states = update_strategy_weights(
+            strategy_states, min_samples=config.performance_min_samples
+        )
+
+        # Save state
+        save_strategy_state(strategy_states)
+
+        # Print summary
+        print_strategy_state_summary(strategy_states, config.performance_min_samples)
+    else:
+        # First run: no previous prices, just save initialized state
+        save_strategy_state(strategy_states)
+        print()
+        print("=" * 80)
+        print("Shadow PnL: First run (no previous prices)")
+        print("Performance tracking will begin on next run.")
+        print("=" * 80)
+
+    # ============================================================================
+    # End Shadow PnL Performance Tracking
+    # ============================================================================
 
     # Write JSONL log
     log_dir = Path("logs")
@@ -312,6 +390,71 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
         allocation_result.target_positions,
         current_prices,
     )
+
+    # ============================================================================
+    # Shadow PnL Performance Tracking (for dry-run mode)
+    # ============================================================================
+
+    if dry_run:
+        from .shadow_pnl import ShadowPnLCalculator
+        from .state import (
+            initialize_strategy_states,
+            load_strategy_state,
+            print_strategy_state_summary,
+            save_strategy_state,
+            update_strategy_weights,
+        )
+
+        # Load strategy states
+        strategy_states = load_strategy_state()
+        strategy_states = initialize_strategy_states(
+            strategy_states, [s.name for s in strategies]
+        )
+
+        # Create shadow PnL calculator
+        calculator = ShadowPnLCalculator(min_samples=config.performance_min_samples)
+
+        # Compute notional exposures
+        strategy_notionals = calculator.compute_strategy_notional_exposure(
+            strategy_intents, allocation_result.strategy_budgets, current_prices
+        )
+
+        # Compute returns
+        symbol_returns = calculator.compute_symbol_returns(market_data, universe)
+
+        # Update performance (only if returns available)
+        if symbol_returns:
+            calculator.update_strategy_performance(
+                strategy_states, strategy_notionals, symbol_returns
+            )
+
+            # Update weights (only if all strategies have >= min_samples)
+            strategy_states = update_strategy_weights(
+                strategy_states, min_samples=config.performance_min_samples
+            )
+
+            # Save state
+            save_strategy_state(strategy_states)
+
+            # Print summary
+            print()
+            print_strategy_state_summary(strategy_states, config.performance_min_samples)
+            print()
+            print("Note: No fills occurred. Performance tracking uses mark-to-market returns.")
+            print()
+        else:
+            # First run: no previous prices, just save initialized state
+            save_strategy_state(strategy_states)
+            print()
+            print("=" * 80)
+            print("Shadow PnL: First run (no previous prices)")
+            print("Performance tracking will begin on next run.")
+            print("=" * 80)
+            print()
+
+    # ============================================================================
+    # End Shadow PnL Performance Tracking
+    # ============================================================================
 
     # Print summary
     print()

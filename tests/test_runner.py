@@ -41,6 +41,8 @@ def test_run_shadow_mode_with_mock_data(monkeypatch, tmp_path):
     mock_config.max_order_notional = 100
     mock_config.max_daily_loss = 250
     mock_config.max_positions_notional = 10000
+    mock_config.performance_min_samples = 20
+    mock_config.performance_max_samples = 200
 
     # Use tmp_path for logs
     monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))

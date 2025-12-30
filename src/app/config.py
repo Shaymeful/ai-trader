@@ -103,6 +103,14 @@ class Config(BaseModel):
         default=False, description="Allow fractional share orders (paper mode only)"
     )
 
+    # Performance tracking (Shadow PnL)
+    performance_min_samples: int = Field(
+        default=20, description="Minimum samples before strategy weight updates"
+    )
+    performance_max_samples: int = Field(
+        default=200, description="Maximum rolling return samples to keep per strategy"
+    )
+
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str]:
     """
@@ -366,5 +374,13 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
             execution = yaml_config["execution"]
             if "allow_fractional" in execution:
                 config.allow_fractional = execution["allow_fractional"]
+
+        # Apply performance tracking parameters from YAML
+        if "performance" in yaml_config:
+            performance = yaml_config["performance"]
+            if "min_samples" in performance:
+                config.performance_min_samples = int(performance["min_samples"])
+            if "max_samples" in performance:
+                config.performance_max_samples = int(performance["max_samples"])
 
     return config
