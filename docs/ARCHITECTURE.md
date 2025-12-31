@@ -506,6 +506,68 @@ python -m src.app --max-session-loss 100
 
 ---
 
+## Process Control
+
+### Single Instance Guard
+
+**Purpose**: Prevent duplicate concurrent executions of the runner when started by Task Scheduler or other automation.
+
+**Problem**: Windows Task Scheduler can sometimes trigger overlapping task instances, leading to:
+- Two python processes running `src.app.runner` simultaneously
+- Race conditions in state file access
+- Duplicate order submissions
+- Inconsistent PnL tracking
+
+**Solution**: Defense-in-depth with three layers:
+
+1. **Task Scheduler**: `IfAlreadyRunning: IgnoreNew` setting
+2. **PowerShell Lock**: Exclusive file lock in `tools/run_paper_dryrun.ps1`
+3. **Python Mutex**: Windows named mutex in `runner.py` main()
+
+### Implementation
+
+**Windows Mutex Guard** (`src/app/runner.py`):
+- Function: `_single_instance_guard(name: str) -> bool`
+- Mutex name: `Global\AI_TRADER__PAPER_DRYRUN_LOOP`
+- Location: Called at the **beginning of `main()`** BEFORE argument parsing
+- Platform: Windows-only (`os.name == "nt"`), no-op on other platforms
+- Fail-safe: If mutex creation fails, execution continues (logs warning)
+- Behavior:
+  - Uses Win32 `CreateMutexW` API via ctypes
+  - Checks `ERROR_ALREADY_EXISTS` (183) to detect existing instance
+  - If another instance exists: prints message and exits with code 0
+  - If first instance: holds mutex for life of process (OS releases on exit)
+
+**PowerShell File Lock** (`tools/run_paper_dryrun.ps1`):
+- Lock file: `logs/paper_dryrun.lock`
+- Method: `[System.IO.File]::Open(..., "ReadWrite", "None")` (exclusive access)
+- Behavior:
+  - If lock held by another script: logs to `task_scheduler.log` and exits 0
+  - If lock acquired: holds lock for entire runner lifetime
+  - Lock auto-released when script exits (finally block disposes file handle)
+
+**Verification**:
+```powershell
+# Terminal 1: Start runner
+python -m src.app.runner --mode paper --loop --sleep-seconds 3600 --dry-run
+
+# Terminal 2: Try to start again (should be blocked)
+python -m src.app.runner --mode paper --loop --sleep-seconds 3600 --dry-run
+# Expected output:
+# ================================================================================
+# SINGLE INSTANCE GUARD: Another instance is already running
+# ================================================================================
+```
+
+**Logging**:
+- PowerShell lock events logged to `logs/task_scheduler.log`
+- Python mutex blocks print to stdout (visible in console/logs)
+
+**Why Three Layers**:
+Even if one layer fails (e.g., Task Scheduler misconfigured), the other two provide backup protection. This is critical for automated deployments where manual monitoring may be limited.
+
+---
+
 ## State Persistence & Daily Loss Tracking
 
 ### Purpose

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -675,8 +676,84 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
             sys.exit(0)
 
 
+def _single_instance_guard(name: str) -> bool:
+    """
+    Enforce single instance using Windows named mutex.
+
+    This prevents duplicate concurrent executions when started by Task Scheduler.
+    Windows-only (os.name == "nt"), fail-safe (returns True if mutex fails).
+
+    Args:
+        name: Mutex name (e.g., "Global\\AI_TRADER__PAPER_DRYRUN_LOOP")
+
+    Returns:
+        True if this is the only instance, False if another instance exists
+    """
+    if os.name != "nt":
+        # Not Windows - skip mutex guard
+        return True
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        # Windows API constants
+        ERROR_ALREADY_EXISTS = 183
+
+        # CreateMutexW signature: HANDLE CreateMutexW(
+        #   LPSECURITY_ATTRIBUTES lpMutexAttributes,
+        #   BOOL                  bInitialOwner,
+        #   LPCWSTR               lpName
+        # )
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.argtypes = [
+            wintypes.LPVOID,  # lpMutexAttributes
+            wintypes.BOOL,  # bInitialOwner
+            wintypes.LPCWSTR,  # lpName
+        ]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+
+        # Create or open mutex
+        mutex_handle = kernel32.CreateMutexW(None, True, name)
+
+        if not mutex_handle:
+            # Mutex creation failed - fail-safe: allow execution
+            print(f"WARNING: Failed to create mutex '{name}'. Continuing anyway.")
+            return True
+
+        # Check if mutex already existed
+        last_error = kernel32.GetLastError()
+        if last_error == ERROR_ALREADY_EXISTS:
+            # Another instance is running
+            return False
+
+        # Successfully acquired mutex - hold it for life of process
+        # (Windows will release on process exit)
+        return True
+
+    except Exception as e:
+        # Fail-safe: if mutex logic fails, allow execution
+        print(f"WARNING: Exception in single-instance guard: {e}. Continuing anyway.")
+        return True
+
+
 def main():
     """Main entry point with argument parsing."""
+    # CRITICAL: Single-instance guard BEFORE argument parsing
+    # Prevents duplicate concurrent executions (e.g., from Task Scheduler)
+    mutex_name = "Global\\AI_TRADER__PAPER_DRYRUN_LOOP"
+    if not _single_instance_guard(mutex_name):
+        print("=" * 80)
+        print("SINGLE INSTANCE GUARD: Another instance is already running")
+        print("=" * 80)
+        print(f"Mutex name: {mutex_name}")
+        print("Exiting to prevent duplicate execution.")
+        print()
+        print("If you believe this is an error, check for other python processes")
+        print("running 'src.app.runner' and terminate them before retrying.")
+        print("=" * 80)
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(description="AI Trader Strategy Runner")
     parser.add_argument(
         "--mode",
