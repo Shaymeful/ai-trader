@@ -58,6 +58,7 @@ def test_run_loop_executes_multiple_iterations(monkeypatch, tmp_path):
 
 def test_run_loop_logs_success_to_status_log(monkeypatch, tmp_path):
     """Test that successful runs are logged to loop_status.log."""
+
     # Mock time.sleep to stop after 1 iteration
     def mock_sleep(seconds):
         raise KeyboardInterrupt()
@@ -170,6 +171,7 @@ def test_run_loop_catches_exceptions_and_continues(monkeypatch, tmp_path):
 
 def test_run_loop_paper_mode_with_dry_run(monkeypatch, tmp_path):
     """Test that run_loop works with paper mode and dry-run."""
+
     # Mock time.sleep to stop after 1 iteration
     def mock_sleep(seconds):
         raise KeyboardInterrupt()
@@ -230,6 +232,7 @@ def test_run_result_dataclass():
 
 def test_run_loop_handles_empty_strategy_weights(monkeypatch, tmp_path):
     """Test that run_loop handles empty strategy weights gracefully."""
+
     # Mock time.sleep to stop after 1 iteration
     def mock_sleep(seconds):
         raise KeyboardInterrupt()
@@ -266,6 +269,7 @@ def test_run_loop_handles_empty_strategy_weights(monkeypatch, tmp_path):
 
 def test_run_loop_keyboard_interrupt_exits_cleanly(monkeypatch, tmp_path, capsys):
     """Test that KeyboardInterrupt during sleep exits cleanly."""
+
     # Mock time.sleep to raise KeyboardInterrupt immediately
     def mock_sleep(seconds):
         raise KeyboardInterrupt()

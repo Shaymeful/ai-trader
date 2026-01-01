@@ -207,9 +207,7 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
 
     # Load strategy states
     strategy_states = load_strategy_state()
-    strategy_states = initialize_strategy_states(
-        strategy_states, [s.name for s in strategies]
-    )
+    strategy_states = initialize_strategy_states(strategy_states, [s.name for s in strategies])
 
     # Create shadow PnL calculator
     calculator = ShadowPnLCalculator(min_samples=config.performance_min_samples)
@@ -224,9 +222,7 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
 
     # Update performance (only if returns available)
     if symbol_returns:
-        calculator.update_strategy_performance(
-            strategy_states, strategy_notionals, symbol_returns
-        )
+        calculator.update_strategy_performance(strategy_states, strategy_notionals, symbol_returns)
 
         # Update weights (only if all strategies have >= min_samples)
         strategy_states = update_strategy_weights(
@@ -469,9 +465,7 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
 
         # Load strategy states
         strategy_states = load_strategy_state()
-        strategy_states = initialize_strategy_states(
-            strategy_states, [s.name for s in strategies]
-        )
+        strategy_states = initialize_strategy_states(strategy_states, [s.name for s in strategies])
 
         # Create shadow PnL calculator
         calculator = ShadowPnLCalculator(min_samples=config.performance_min_samples)
@@ -639,9 +633,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
         market_time = get_market_time_now()
         run_timestamp = market_time.isoformat()
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"LOOP ITERATION {iteration} - {run_timestamp}")
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
         try:
             # Run the appropriate mode
@@ -668,19 +662,19 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
             with open(status_log, "a") as f:
                 f.write(status_line)
 
-            print(f"\n{'='*80}")
+            print(f"\n{'=' * 80}")
             print(f"ITERATION {iteration} COMPLETE")
             print(f"Status logged to: {status_log}")
-            print(f"{'='*80}\n")
+            print(f"{'=' * 80}\n")
 
         except Exception as e:
             # Log error to error log
             # Use market time for consistency with log filenames
             error_timestamp = get_market_time_now().isoformat()
             error_msg = (
-                f"\n{'='*80}\n"
+                f"\n{'=' * 80}\n"
                 f"ERROR at {error_timestamp} (iteration {iteration})\n"
-                f"{'='*80}\n"
+                f"{'=' * 80}\n"
                 f"{traceback.format_exc()}\n"
             )
 
@@ -698,17 +692,18 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
             with open(status_log, "a") as f:
                 f.write(status_line)
 
-            print(f"\n{'='*80}")
+            print(f"\n{'=' * 80}")
             print(f"ERROR IN ITERATION {iteration}")
             print(f"Exception: {type(e).__name__}: {str(e)}")
             print(f"Error logged to: {error_log}")
             print(f"Continuing to next iteration...")
-            print(f"{'='*80}\n")
+            print(f"{'=' * 80}\n")
 
         # Sleep before next iteration
         print(f"Sleeping for {sleep_seconds} seconds ({sleep_seconds / 3600:.1f} hours)...")
         # Calculate next run time in market time
         from datetime import timedelta
+
         next_run = get_market_time_now() + timedelta(seconds=sleep_seconds)
         print(f"Next run at: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print()
@@ -747,9 +742,7 @@ def _check_parent_is_runner() -> tuple[bool, dict]:
 
         try:
             parent_handle = win32api.OpenProcess(
-                win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ,
-                False,
-                ppid
+                win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, ppid
             )
         except pywintypes.error:
             # Can't open parent process (might have exited, or permission denied)
@@ -766,11 +759,20 @@ def _check_parent_is_runner() -> tuple[bool, dict]:
                 try:
                     # Use WMI to get command line (more reliable)
                     import subprocess
+
                     result = subprocess.run(
-                        ["wmic", "process", "where", f"ProcessId={ppid}", "get", "CommandLine", "/format:list"],
+                        [
+                            "wmic",
+                            "process",
+                            "where",
+                            f"ProcessId={ppid}",
+                            "get",
+                            "CommandLine",
+                            "/format:list",
+                        ],
                         capture_output=True,
                         text=True,
-                        timeout=2
+                        timeout=2,
                     )
                     cmdline = result.stdout.strip()
 
@@ -781,7 +783,11 @@ def _check_parent_is_runner() -> tuple[bool, dict]:
                     return False, {"pid": ppid, "name": parent_name, "cmdline": cmdline}
                 except Exception:
                     # If we can't get cmdline, but parent is python.exe, flag it as suspicious
-                    return True, {"pid": ppid, "name": parent_name, "cmdline": "cmdline_unavailable"}
+                    return True, {
+                        "pid": ppid,
+                        "name": parent_name,
+                        "cmdline": "cmdline_unavailable",
+                    }
 
             return False, {"pid": ppid, "name": parent_name, "cmdline": "not_python"}
         finally:
@@ -871,7 +877,7 @@ def _acquire_file_lock(lock_file: Path) -> bool:
             None,
             OPEN_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
-            None
+            None,
         )
 
         if handle == -1:  # INVALID_HANDLE_VALUE
@@ -885,8 +891,6 @@ def _acquire_file_lock(lock_file: Path) -> bool:
     except Exception as e:
         print(f"ERROR: Failed to acquire file lock '{lock_file}': {e}")
         return False
-
-
 
 
 def main():
@@ -959,9 +963,9 @@ if __name__ == "__main__":
     # Helps diagnose venv mismatch, multiple instances, and spawn issues
     # ========================================================================
     pid = os.getpid()
-    ppid = os.getppid() if hasattr(os, 'getppid') else 'N/A'
+    ppid = os.getppid() if hasattr(os, "getppid") else "N/A"
     interpreter = sys.executable
-    argv_str = ' '.join(sys.argv)
+    argv_str = " ".join(sys.argv)
 
     # Check for python->python re-exec (diagnostic only, don't exit early)
     parent_is_runner, parent_info = _check_parent_is_runner()
@@ -981,7 +985,8 @@ if __name__ == "__main__":
         print(f"  Parent PID: {parent_info.get('pid', 'unknown')}", flush=True)
         print(f"  Parent Cmd: {parent_info.get('cmdline', 'unknown')[:80]}...", flush=True)
         print("  This indicates Windows python->python re-exec", flush=True)
-        print("  Guard will block this child process", flush=True)
+        print("  This may be normal Windows python->python re-exec behavior", flush=True)
+        print("  Continuing normally; single-instance guard will block true duplicates", flush=True)
 
     print("=" * 80, flush=True)
     print("", flush=True)
@@ -1010,7 +1015,10 @@ if __name__ == "__main__":
 
         if parent_is_runner:
             print("", flush=True)
-            print(f"  Re-exec child: Parent PID {parent_info.get('pid')} is python.exe running runner", flush=True)
+            print(
+                f"  Re-exec child: Parent PID {parent_info.get('pid')} is python.exe running runner",
+                flush=True,
+            )
             print("  This is expected Windows python->python re-exec behavior", flush=True)
 
         print("", flush=True)

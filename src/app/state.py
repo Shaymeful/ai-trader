@@ -200,15 +200,15 @@ class StrategyState(BaseModel):
 
     name: str = Field(description="Strategy identifier (e.g., 'Trend_MA20')")
     weight: float = Field(default=1.0, description="Capital allocation weight (0.0-1.0)")
-    cumulative_pnl: float = Field(default=0.0, description="Total profit/loss from attributed returns")
+    cumulative_pnl: float = Field(
+        default=0.0, description="Total profit/loss from attributed returns"
+    )
     rolling_returns: list[float] = Field(
         default_factory=list, description="Rolling window of return samples (max 200)"
     )
     drawdown: float = Field(default=0.0, description="Maximum decline from peak equity (negative)")
     trade_count: int = Field(default=0, description="Number of attributed samples")
-    last_updated: str = Field(
-        default="", description="ISO timestamp of last performance update"
-    )
+    last_updated: str = Field(default="", description="ISO timestamp of last performance update")
 
 
 def load_strategy_state(state_dir: str = "state") -> dict[str, StrategyState]:
@@ -402,9 +402,7 @@ def print_strategy_state_summary(states: dict[str, StrategyState], min_samples: 
     print("=" * 80)
     print(f"Strategy Performance Summary (min_samples={min_samples})")
     print("=" * 80)
-    print(
-        f"{'Strategy':<20} {'Weight':>10} {'Cumul PnL':>12} {'Drawdown':>10} {'Samples':>10}"
-    )
+    print(f"{'Strategy':<20} {'Weight':>10} {'Cumul PnL':>12} {'Drawdown':>10} {'Samples':>10}")
     print("-" * 80)
 
     for state in states.values():

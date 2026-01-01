@@ -52,7 +52,9 @@ class ShadowPnLCalculator:
 
         for symbol in symbols:
             if symbol not in market_data:
-                self.logger.warning(f"{symbol}: No market data available, skipping return calculation")
+                self.logger.warning(
+                    f"{symbol}: No market data available, skipping return calculation"
+                )
                 continue
 
             # Get closes array if available
@@ -75,12 +77,12 @@ class ShadowPnLCalculator:
                     f"{symbol}: return={ret:.4f} (close[-2]={close_prev:.2f}, close[-1]={close_curr:.2f})"
                 )
             else:
-                self.logger.warning(f"{symbol}: Previous close is zero, skipping return calculation")
+                self.logger.warning(
+                    f"{symbol}: Previous close is zero, skipping return calculation"
+                )
 
         if not symbol_returns:
-            self.logger.info(
-                "No returns computed this run (insufficient bar data)"
-            )
+            self.logger.info("No returns computed this run (insufficient bar data)")
 
         return symbol_returns
 
