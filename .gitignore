@@ -30,3 +30,7 @@ Thumbs.db
 # Tooling artifacts
 tall*
 
+
+# Local runtime state
+state/
+
