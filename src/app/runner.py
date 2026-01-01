@@ -955,35 +955,6 @@ def main():
 
 if __name__ == "__main__":
     # ========================================================================
-    # EARLY EXIT: Detect python->python re-exec and exit immediately
-    # ========================================================================
-    # Check if parent process is another python.exe running the runner.
-    # This catches Windows re-exec scenarios BEFORE any guard acquisition.
-    # Exit code 99 indicates re-exec child process.
-    parent_is_runner, parent_info = _check_parent_is_runner()
-
-    if parent_is_runner:
-        pid = os.getpid()
-        ppid = parent_info.get("pid", "unknown")
-        print("=" * 80, flush=True)
-        print("DETECTED RUNNER CHILD PROCESS - EXITING IMMEDIATELY", flush=True)
-        print("=" * 80, flush=True)
-        print(f"This process (child):", flush=True)
-        print(f"  PID:         {pid}", flush=True)
-        print(f"  Interpreter: {sys.executable}", flush=True)
-        print(f"  Arguments:   {' '.join(sys.argv)}", flush=True)
-        print("", flush=True)
-        print(f"Parent process (runner):", flush=True)
-        print(f"  PID:         {ppid}", flush=True)
-        print(f"  Name:        {parent_info.get('name', 'unknown')}", flush=True)
-        print(f"  CommandLine: {parent_info.get('cmdline', 'unknown')[:100]}...", flush=True)
-        print("", flush=True)
-        print("Windows python->python re-exec detected. Child process exiting.", flush=True)
-        print("Only the parent runner process should continue running.", flush=True)
-        print("=" * 80, flush=True)
-        sys.exit(99)  # Exit code 99 = re-exec child
-
-    # ========================================================================
     # Interpreter diagnostics: Log runner startup details
     # Helps diagnose venv mismatch, multiple instances, and spawn issues
     # ========================================================================
@@ -991,6 +962,9 @@ if __name__ == "__main__":
     ppid = os.getppid() if hasattr(os, 'getppid') else 'N/A'
     interpreter = sys.executable
     argv_str = ' '.join(sys.argv)
+
+    # Check for python->python re-exec (diagnostic only, don't exit early)
+    parent_is_runner, parent_info = _check_parent_is_runner()
 
     print("=" * 80, flush=True)
     print("RUNNER STARTUP DIAGNOSTICS", flush=True)
@@ -1000,6 +974,15 @@ if __name__ == "__main__":
     print(f"Interpreter: {interpreter}", flush=True)
     print(f"Arguments:   {argv_str}", flush=True)
     print(f"Market time: {get_market_time_now().strftime('%Y-%m-%d %H:%M:%S %Z')}", flush=True)
+
+    if parent_is_runner:
+        print("", flush=True)
+        print("WARNING: Parent process is python.exe running runner", flush=True)
+        print(f"  Parent PID: {parent_info.get('pid', 'unknown')}", flush=True)
+        print(f"  Parent Cmd: {parent_info.get('cmdline', 'unknown')[:80]}...", flush=True)
+        print("  This indicates Windows python->python re-exec", flush=True)
+        print("  Guard will block this child process", flush=True)
+
     print("=" * 80, flush=True)
     print("", flush=True)
 
@@ -1024,6 +1007,12 @@ if __name__ == "__main__":
         print("This instance (blocked):", flush=True)
         print(f"  PID:         {pid}", flush=True)
         print(f"  Interpreter: {interpreter}", flush=True)
+
+        if parent_is_runner:
+            print("", flush=True)
+            print(f"  Re-exec child: Parent PID {parent_info.get('pid')} is python.exe running runner", flush=True)
+            print("  This is expected Windows python->python re-exec behavior", flush=True)
+
         print("", flush=True)
         print("Another runner is already active. This instance will exit.", flush=True)
         print("To force-stop all runners, kill the existing process first.", flush=True)

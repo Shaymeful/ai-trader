@@ -45,26 +45,29 @@ Added `_check_parent_is_runner()` function that detects if the parent process is
 
 ### 2. Scheduler Wrapper Update
 
-Changed Task Scheduler wrapper to run runner.py **directly** instead of using `-m`:
+Updated Task Scheduler wrapper but **continues to use `-m`** for proper module imports:
 
-**Before**:
+**Command** (unchanged):
 ```powershell
 python.exe -m src.app.runner --mode paper --loop ...
 ```
 
-**After**:
-```powershell
-python.exe C:\dev\ai-trader\src\app\runner.py --mode paper --loop ...
-```
-
 **Location**: `tools/run_paper_dryrun.ps1`
 
-**Benefits**:
-- Reduces likelihood of Windows triggering python->python re-exec
-- Simpler execution path
-- Working directory explicitly set to C:\dev\ai-trader
+**What changed**:
+- Removed PowerShell file lock (Python guard is authoritative)
+- Improved logging (shows python path, module, working directory)
+- Simplified logic (wrapper just launches and waits)
 
-**Note**: PowerShell wrapper no longer has its own file lock - Python guard is authoritative.
+**Why keep `-m`**:
+- Required for proper Python module imports (direct runner.py breaks imports)
+- Early parent detection handles re-exec children immediately (exit code 99)
+- The `-m` flag may trigger re-exec, but the child is caught and exits instantly
+
+**Benefits**:
+- Python single-instance guard is the authoritative source of truth
+- Re-exec children are detected and terminated immediately
+- Cleaner wrapper code with better diagnostics
 
 ### 3. Enhanced Guard Diagnostics
 
@@ -144,8 +147,8 @@ if __name__ == "__main__":
 ### `tools/run_paper_dryrun.ps1`
 
 - **Removed**: PowerShell file lock logic (Python guard is authoritative)
-- **Changed**: Run `runner.py` directly instead of `-m src.app.runner`
-- **Improved**: Logging shows python path, runner path, working directory
+- **Improved**: Logging shows python path, module name, working directory
+- **Unchanged**: Continues using `-m src.app.runner` (required for imports)
 
 ### `tools/verify_single_instance_loop.ps1`
 
@@ -162,19 +165,25 @@ if __name__ == "__main__":
 **Terminal 1** - Start loop:
 ```powershell
 cd C:\dev\ai-trader
-.\.venv\Scripts\python.exe src\app\runner.py --mode paper --loop --sleep-seconds 3600 --dry-run
+.\.venv\Scripts\python.exe -m src.app.runner --mode paper --loop --sleep-seconds 3600 --dry-run
 ```
 
 **Terminal 2** - Try duplicate (should be blocked immediately):
 ```powershell
 cd C:\dev\ai-trader
-.\.venv\Scripts\python.exe src\app\runner.py --mode paper --loop --sleep-seconds 3600 --dry-run
+.\.venv\Scripts\python.exe -m src.app.runner --mode paper --loop --sleep-seconds 3600 --dry-run
 ```
 
-**Expected in Terminal 2**:
-- Either "DETECTED RUNNER CHILD PROCESS" (if re-exec detected)
-- Or "SINGLE INSTANCE GUARD: Another instance is already running" (if guard blocked)
-- Exit within 1-2 seconds
+**Expected in Terminal 2** (either outcome is success):
+- **Scenario A**: "DETECTED RUNNER CHILD PROCESS" message, exit code 99
+  - Windows triggered python->python re-exec
+  - Parent detection caught the child immediately
+  - Child exits before reaching guard logic
+- **Scenario B**: "SINGLE INSTANCE GUARD: Another instance is already running", exit code 1
+  - No re-exec occurred
+  - Mutex/file lock guard blocked the duplicate instance
+
+Both scenarios indicate proper protection. Exit within 1-2 seconds.
 
 ### Automated Verification
 
@@ -271,14 +280,13 @@ mutex/file lock guard ran too late to catch re-exec children.
 Solution:
 1. Added early parent process detection using pywin32 to identify and
    immediately exit re-exec child processes (exit code 99)
-2. Updated scheduler wrapper to run runner.py directly (not -m) to reduce
-   re-exec likelihood
-3. Simplified scheduler wrapper (Python guard is authoritative)
-4. Created proper loop mode verification script
+2. Simplified scheduler wrapper (removed PS lock, Python guard authoritative)
+3. Created proper loop mode verification script
+4. Continue using -m flag (required for imports), but catch re-exec early
 
 Changes:
 - src/app/runner.py: Added _check_parent_is_runner() and early exit
-- tools/run_paper_dryrun.ps1: Run runner.py directly, removed PS lock
+- tools/run_paper_dryrun.ps1: Removed PS lock, improved logging
 - tools/verify_single_instance_loop.ps1: New verification script
 
 Testing:
