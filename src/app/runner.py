@@ -726,6 +726,72 @@ _MUTEX_HANDLE = None
 _LOCK_FILE_HANDLE = None
 
 
+def _check_parent_is_runner() -> tuple[bool, dict]:
+    """
+    Check if parent process is another python.exe potentially running the same runner.
+
+    This helps detect Windows python->python re-exec scenarios where a parent
+    python process spawns a child python process with the same command line.
+
+    Returns:
+        Tuple of (is_runner, info_dict) where:
+        - is_runner: True if parent is python.exe with runner-like command line
+        - info_dict: Parent process info (pid, name, cmdline)
+    """
+    try:
+        ppid = os.getppid()
+
+        # Try to open parent process handle for query
+        import win32process
+        import win32con
+
+        try:
+            parent_handle = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ,
+                False,
+                ppid
+            )
+        except pywintypes.error:
+            # Can't open parent process (might have exited, or permission denied)
+            return False, {"pid": ppid, "name": "unknown", "cmdline": "unknown"}
+
+        try:
+            # Get parent executable path
+            parent_exe = win32process.GetModuleFileNameEx(parent_handle, 0)
+            parent_name = os.path.basename(parent_exe).lower()
+
+            # Check if parent is python.exe
+            if parent_name == "python.exe":
+                # Try to get command line (this is best-effort, may fail)
+                try:
+                    # Use WMI to get command line (more reliable)
+                    import subprocess
+                    result = subprocess.run(
+                        ["wmic", "process", "where", f"ProcessId={ppid}", "get", "CommandLine", "/format:list"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    cmdline = result.stdout.strip()
+
+                    # Check if command line contains runner.py or src.app.runner
+                    if "runner.py" in cmdline or "src.app.runner" in cmdline:
+                        return True, {"pid": ppid, "name": parent_name, "cmdline": cmdline}
+
+                    return False, {"pid": ppid, "name": parent_name, "cmdline": cmdline}
+                except Exception:
+                    # If we can't get cmdline, but parent is python.exe, flag it as suspicious
+                    return True, {"pid": ppid, "name": parent_name, "cmdline": "cmdline_unavailable"}
+
+            return False, {"pid": ppid, "name": parent_name, "cmdline": "not_python"}
+        finally:
+            win32api.CloseHandle(parent_handle)
+
+    except Exception as e:
+        # Best effort - if anything fails, return False
+        return False, {"error": str(e)}
+
+
 def _acquire_mutex(mutex_name: str) -> bool:
     """
     Acquire Windows named mutex using pywin32.
@@ -759,11 +825,11 @@ def _acquire_mutex(mutex_name: str) -> bool:
 
     except pywintypes.error as e:
         # Mutex creation/opening failed
-        print(f"ERROR: Failed to create mutex '{mutex_name}': {e}")
+        print(f"ERROR: Failed to create mutex '{mutex_name}': {e}", flush=True)
         return False
     except Exception as e:
         # Unexpected error
-        print(f"ERROR: Unexpected error creating mutex: {e}")
+        print(f"ERROR: Unexpected error creating mutex: {e}", flush=True)
         return False
 
 
@@ -889,6 +955,35 @@ def main():
 
 if __name__ == "__main__":
     # ========================================================================
+    # EARLY EXIT: Detect python->python re-exec and exit immediately
+    # ========================================================================
+    # Check if parent process is another python.exe running the runner.
+    # This catches Windows re-exec scenarios BEFORE any guard acquisition.
+    # Exit code 99 indicates re-exec child process.
+    parent_is_runner, parent_info = _check_parent_is_runner()
+
+    if parent_is_runner:
+        pid = os.getpid()
+        ppid = parent_info.get("pid", "unknown")
+        print("=" * 80, flush=True)
+        print("DETECTED RUNNER CHILD PROCESS - EXITING IMMEDIATELY", flush=True)
+        print("=" * 80, flush=True)
+        print(f"This process (child):", flush=True)
+        print(f"  PID:         {pid}", flush=True)
+        print(f"  Interpreter: {sys.executable}", flush=True)
+        print(f"  Arguments:   {' '.join(sys.argv)}", flush=True)
+        print("", flush=True)
+        print(f"Parent process (runner):", flush=True)
+        print(f"  PID:         {ppid}", flush=True)
+        print(f"  Name:        {parent_info.get('name', 'unknown')}", flush=True)
+        print(f"  CommandLine: {parent_info.get('cmdline', 'unknown')[:100]}...", flush=True)
+        print("", flush=True)
+        print("Windows python->python re-exec detected. Child process exiting.", flush=True)
+        print("Only the parent runner process should continue running.", flush=True)
+        print("=" * 80, flush=True)
+        sys.exit(99)  # Exit code 99 = re-exec child
+
+    # ========================================================================
     # Interpreter diagnostics: Log runner startup details
     # Helps diagnose venv mismatch, multiple instances, and spawn issues
     # ========================================================================
@@ -933,7 +1028,7 @@ if __name__ == "__main__":
         print("Another runner is already active. This instance will exit.", flush=True)
         print("To force-stop all runners, kill the existing process first.", flush=True)
         print("=" * 80, flush=True)
-        sys.exit(0)
+        sys.exit(1)  # Exit code 1 = guard blocked
 
     # ========================================================================
     # Guard passed - we are the only instance. Proceed to main().
