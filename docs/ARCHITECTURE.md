@@ -526,17 +526,45 @@ python -m src.app --max-session-loss 100
 
 ### Implementation
 
-**Windows Mutex Guard** (`src/app/runner.py`):
-- Function: `_single_instance_guard(name: str) -> bool`
-- Mutex name: `Global\AI_TRADER__PAPER_DRYRUN_LOOP`
-- Location: Called at the **beginning of `main()`** BEFORE argument parsing
-- Platform: Windows-only (`os.name == "nt"`), no-op on other platforms
-- Fail-safe: If mutex creation fails, execution continues (logs warning)
-- Behavior:
-  - Uses Win32 `CreateMutexW` API via ctypes
-  - Checks `ERROR_ALREADY_EXISTS` (183) to detect existing instance
-  - If another instance exists: prints message and exits with code 0
-  - If first instance: holds mutex for life of process (OS releases on exit)
+**Python Single Instance Guard** (`src/app/runner.py`):
+- **Execution Timing**: Runs at **module import time** in `if __name__ == "__main__"` block
+  - Executes BEFORE `main()` is called
+  - Executes BEFORE argument parsing
+  - Executes BEFORE any code that could trigger Python re-exec with `-m`
+- **Guard Functions**:
+  - `_acquire_mutex(mutex_name: str) -> bool` - Acquires Windows named mutex
+  - `_acquire_file_lock(lock_file: Path) -> bool` - Acquires exclusive file lock
+- **Guard Execution**: Inlined at module level (no wrapper function)
+  ```python
+  if __name__ == "__main__":
+      mutex_acquired = _acquire_mutex(...)
+      lock_acquired = _acquire_file_lock(...)
+      if not mutex_acquired or not lock_acquired:
+          sys.exit(0)
+      main()  # Only reached if both guards succeed
+  ```
+- **TWO Mechanisms** (BOTH required):
+  1. **Windows Named Mutex**: `Local\AI_TRADER__PAPER_DRYRUN_LOOP`
+     - Uses `pywin32` library (`win32event.CreateMutex`) - **MANDATORY**
+     - Session-local namespace for reliability
+     - Checks `ERROR_ALREADY_EXISTS` (183) to detect duplicates
+     - Held for process lifetime (auto-released by OS on exit)
+  2. **Exclusive File Lock**: `logs/paper_dryrun.lock`
+     - OS-level exclusive lock via `CreateFileW` with `dwShareMode=0`
+     - No file sharing - true exclusive access
+     - Handle held open for process lifetime (auto-released on exit)
+- **FAIL-CLOSED Policy** (production-critical):
+  - **BOTH** guards must succeed or execution stops immediately
+  - If mutex fails (exists or error) → EXIT immediately
+  - If file lock fails (held or error) → EXIT immediately
+  - If pywin32 not installed → `ImportError` at module import (immediate failure)
+  - **NO** fallback logic, **NO** "continue anyway", **NO** try/except around imports
+  - **NO** code path allows execution if guard fails
+- **Behavior**:
+  - First instance: Acquires both mutex + lock → `main()` runs normally
+  - Duplicate instance: Fails to acquire → prints message → `sys.exit(0)`
+  - Error case: Cannot verify single instance → prints error → `sys.exit(0)`
+  - Missing pywin32: `ImportError` before any code executes
 
 **PowerShell File Lock** (`tools/run_paper_dryrun.ps1`):
 - Lock file: `logs/paper_dryrun.lock`
@@ -545,23 +573,59 @@ python -m src.app --max-session-loss 100
   - If lock held by another script: logs to `task_scheduler.log` and exits 0
   - If lock acquired: holds lock for entire runner lifetime
   - Lock auto-released when script exits (finally block disposes file handle)
+- **Note**: Separate from runner.py's `logs/runner.lock` - both provide independent protection
+
+**Debug Logging**:
+- Every runner start logs comprehensive diagnostics:
+  - PID, parent PID, interpreter path, arguments
+  - Current market time (America/New_York)
+- If blocked by guard: logs PID and interpreter of blocked instance
+- This helps identify:
+  - Virtual environment mismatches (wrong Python interpreter)
+  - Multiple instances or spawn issues
+  - Parent-child process relationships
+- Logged to stdout at module import time (before any other operations)
+
+**Market-Time Logging**:
+- All log filenames use `America/New_York` timezone (market time)
+- Format: `YYYYMMDD_HHMMSS_ET` (e.g., `20250131_143025_ET`)
+- Prevents UTC date rollover bug: logs with "tomorrow's date" while market is still today
+- Daily loss accounting already uses market time via `get_today_date_eastern()`
+- Internal timestamps may still use UTC for data consistency
+
+**Dependencies**:
+- `pywin32>=311` is **MANDATORY** for Windows
+- Import statement has clear error if pywin32 missing (explains venv requirement)
+- This is intentional: fail-closed policy requires hard dependency
+- Non-Windows platforms: runner.py will not work (Windows-only by design)
 
 **Verification**:
 ```powershell
-# Terminal 1: Start runner
-python -m src.app.runner --mode paper --loop --sleep-seconds 3600 --dry-run
+# Manual test - Terminal 1: Start runner
+python -m src.app.runner --mode paper --once --dry-run
 
-# Terminal 2: Try to start again (should be blocked)
-python -m src.app.runner --mode paper --loop --sleep-seconds 3600 --dry-run
+# Terminal 2: Try to start again (should be blocked in < 5 seconds)
+python -m src.app.runner --mode paper --once --dry-run
 # Expected output:
+# [runner] pid=<PID2> ppid=<PPID2> argv=[...]
 # ================================================================================
 # SINGLE INSTANCE GUARD: Another instance is already running
 # ================================================================================
+# Mutex: Local\AI_TRADER__PAPER_DRYRUN_LOOP
+# Lock file: logs\paper_dryrun.lock
+# Exiting.
+# ================================================================================
+
+# Verify process count (should be 1)
+Get-Process python | Where-Object {
+    (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine -like "*src.app.runner*"
+}
 ```
 
 **Logging**:
 - PowerShell lock events logged to `logs/task_scheduler.log`
-- Python mutex blocks print to stdout (visible in console/logs)
+- Python guard blocks print to stdout (visible in console/logs)
+- Debug PID/PPID logged at every start
 
 **Why Three Layers**:
 Even if one layer fails (e.g., Task Scheduler misconfigured), the other two provide backup protection. This is critical for automated deployments where manual monitoring may be limited.

@@ -10,6 +10,26 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# CRITICAL: pywin32 is REQUIRED for Windows single-instance guard on Windows
+# No try/except - if not available, import fails immediately (FAIL-CLOSED)
+try:
+    import win32event
+    import win32api
+    import pywintypes
+except ImportError as e:
+    if os.name == "nt":
+        # Windows requires pywin32 for single-instance guard
+        raise ImportError(
+            "pywin32 is required on Windows for single-instance protection.\n"
+            "Install with: pip install pywin32\n"
+            "IMPORTANT: Use the virtual environment Python interpreter:\n"
+            f"  Current interpreter: {sys.executable}\n"
+            "  Expected: .venv\\Scripts\\python.exe"
+        ) from e
+    # Non-Windows: let it fail naturally (runner is Windows-only by design)
+    raise
 
 from src.broker import AlpacaBroker, MockBroker
 
@@ -19,6 +39,19 @@ from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .execution import AlpacaExecutor
 from .strategies import MeanReversionStrategy, TrendStrategy
+
+
+def get_market_time_now() -> datetime:
+    """
+    Get current time in America/New_York (market time).
+
+    Used for log filenames and daily accounting to avoid UTC date rollover issues.
+    Market day aligns with US/Eastern trading day, not UTC day.
+
+    Returns:
+        datetime object with America/New_York timezone
+    """
+    return datetime.now(ZoneInfo("America/New_York"))
 
 
 @dataclass
@@ -222,7 +255,10 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    # Use market time (America/New_York) for log filenames to align with trading day
+    # Prevents UTC date rollover causing log files with tomorrow's date
+    market_time = get_market_time_now()
+    timestamp = market_time.strftime("%Y%m%d_%H%M%S_ET")
     log_file = log_dir / f"shadow_run_{timestamp}.jsonl"
 
     with open(log_file, "w") as f:
@@ -502,7 +538,10 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    # Use market time (America/New_York) for log filenames to align with trading day
+    # Prevents UTC date rollover causing log files with tomorrow's date
+    market_time = get_market_time_now()
+    timestamp = market_time.strftime("%Y%m%d_%H%M%S_ET")
     mode_str = "paper_dryrun" if dry_run else "paper"
     log_file = log_dir / f"{mode_str}_run_{timestamp}.jsonl"
 
@@ -596,7 +635,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
     iteration = 0
     while True:
         iteration += 1
-        run_timestamp = datetime.now(UTC).isoformat()
+        # Use market time for loop timestamps to align with log filenames
+        market_time = get_market_time_now()
+        run_timestamp = market_time.isoformat()
 
         print(f"\n{'='*80}")
         print(f"LOOP ITERATION {iteration} - {run_timestamp}")
@@ -634,7 +675,8 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
 
         except Exception as e:
             # Log error to error log
-            error_timestamp = datetime.now(UTC).isoformat()
+            # Use market time for consistency with log filenames
+            error_timestamp = get_market_time_now().isoformat()
             error_msg = (
                 f"\n{'='*80}\n"
                 f"ERROR at {error_timestamp} (iteration {iteration})\n"
@@ -665,7 +707,10 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
 
         # Sleep before next iteration
         print(f"Sleeping for {sleep_seconds} seconds ({sleep_seconds / 3600:.1f} hours)...")
-        print(f"Next run at: {datetime.now(UTC).replace(microsecond=0) + __import__('datetime').timedelta(seconds=sleep_seconds)}")
+        # Calculate next run time in market time
+        from datetime import timedelta
+        next_run = get_market_time_now() + timedelta(seconds=sleep_seconds)
+        print(f"Next run at: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print()
 
         try:
@@ -676,84 +721,110 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
             sys.exit(0)
 
 
-def _single_instance_guard(name: str) -> bool:
-    """
-    Enforce single instance using Windows named mutex.
+# Global handles to keep mutex and file lock alive for process lifetime
+_MUTEX_HANDLE = None
+_LOCK_FILE_HANDLE = None
 
-    This prevents duplicate concurrent executions when started by Task Scheduler.
-    Windows-only (os.name == "nt"), fail-safe (returns True if mutex fails).
+
+def _acquire_mutex(mutex_name: str) -> bool:
+    """
+    Acquire Windows named mutex using pywin32.
+
+    FAIL-CLOSED: If acquisition fails for any reason, returns False.
+    No fallback, no "continue anyway" logic.
 
     Args:
-        name: Mutex name (e.g., "Global\\AI_TRADER__PAPER_DRYRUN_LOOP")
+        mutex_name: Mutex name (e.g., "Local\\AI_TRADER__PAPER_DRYRUN_LOOP")
 
     Returns:
-        True if this is the only instance, False if another instance exists
+        True if mutex acquired (we are the only instance)
+        False if mutex already exists OR acquisition failed
     """
-    if os.name != "nt":
-        # Not Windows - skip mutex guard
-        return True
+    global _MUTEX_HANDLE
 
     try:
-        import ctypes
-        from ctypes import wintypes
-
-        # Windows API constants
-        ERROR_ALREADY_EXISTS = 183
-
-        # CreateMutexW signature: HANDLE CreateMutexW(
-        #   LPSECURITY_ATTRIBUTES lpMutexAttributes,
-        #   BOOL                  bInitialOwner,
-        #   LPCWSTR               lpName
-        # )
-        kernel32 = ctypes.windll.kernel32
-        kernel32.CreateMutexW.argtypes = [
-            wintypes.LPVOID,  # lpMutexAttributes
-            wintypes.BOOL,  # bInitialOwner
-            wintypes.LPCWSTR,  # lpName
-        ]
-        kernel32.CreateMutexW.restype = wintypes.HANDLE
-
-        # Create or open mutex
-        mutex_handle = kernel32.CreateMutexW(None, True, name)
-
-        if not mutex_handle:
-            # Mutex creation failed - fail-safe: allow execution
-            print(f"WARNING: Failed to create mutex '{name}'. Continuing anyway.")
-            return True
+        # Create or open named mutex
+        # If mutex exists, ERROR_ALREADY_EXISTS will be set
+        _MUTEX_HANDLE = win32event.CreateMutex(None, True, mutex_name)
 
         # Check if mutex already existed
-        last_error = kernel32.GetLastError()
-        if last_error == ERROR_ALREADY_EXISTS:
+        last_error = win32api.GetLastError()
+        if last_error == 183:  # ERROR_ALREADY_EXISTS
             # Another instance is running
             return False
 
-        # Successfully acquired mutex - hold it for life of process
-        # (Windows will release on process exit)
+        # Successfully created new mutex - we are the only instance
+        # Mutex will be held until process exits (auto-released by OS)
+        return True
+
+    except pywintypes.error as e:
+        # Mutex creation/opening failed
+        print(f"ERROR: Failed to create mutex '{mutex_name}': {e}")
+        return False
+    except Exception as e:
+        # Unexpected error
+        print(f"ERROR: Unexpected error creating mutex: {e}")
+        return False
+
+
+def _acquire_file_lock(lock_file: Path) -> bool:
+    """
+    Acquire exclusive OS-level file lock using Windows CreateFileW.
+
+    FAIL-CLOSED: If acquisition fails for any reason, returns False.
+    The file handle remains open for the lifetime of the process.
+
+    Args:
+        lock_file: Path to lock file (e.g., Path("logs/paper_dryrun.lock"))
+
+    Returns:
+        True if lock acquired (we are the only instance)
+        False if lock already held OR acquisition failed
+    """
+    global _LOCK_FILE_HANDLE
+
+    try:
+        # Ensure directory exists
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Open file with exclusive access using Windows CreateFileW
+        # This is an OS-level exclusive lock - no other process can open this file
+        from ctypes import windll
+
+        # Constants
+        GENERIC_READ = 0x80000000
+        GENERIC_WRITE = 0x40000000
+        OPEN_ALWAYS = 4
+        FILE_ATTRIBUTE_NORMAL = 0x80
+
+        # Create file with exclusive access (dwShareMode = 0 means no sharing)
+        handle = windll.kernel32.CreateFileW(
+            str(lock_file),
+            GENERIC_READ | GENERIC_WRITE,
+            0,  # dwShareMode = 0 (NO SHARING - exclusive)
+            None,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            None
+        )
+
+        if handle == -1:  # INVALID_HANDLE_VALUE
+            # Lock is held by another process
+            return False
+
+        # Store handle to keep lock alive
+        _LOCK_FILE_HANDLE = handle
         return True
 
     except Exception as e:
-        # Fail-safe: if mutex logic fails, allow execution
-        print(f"WARNING: Exception in single-instance guard: {e}. Continuing anyway.")
-        return True
+        print(f"ERROR: Failed to acquire file lock '{lock_file}': {e}")
+        return False
+
+
 
 
 def main():
     """Main entry point with argument parsing."""
-    # CRITICAL: Single-instance guard BEFORE argument parsing
-    # Prevents duplicate concurrent executions (e.g., from Task Scheduler)
-    mutex_name = "Global\\AI_TRADER__PAPER_DRYRUN_LOOP"
-    if not _single_instance_guard(mutex_name):
-        print("=" * 80)
-        print("SINGLE INSTANCE GUARD: Another instance is already running")
-        print("=" * 80)
-        print(f"Mutex name: {mutex_name}")
-        print("Exiting to prevent duplicate execution.")
-        print()
-        print("If you believe this is an error, check for other python processes")
-        print("running 'src.app.runner' and terminate them before retrying.")
-        print("=" * 80)
-        sys.exit(0)
-
     parser = argparse.ArgumentParser(description="AI Trader Strategy Runner")
     parser.add_argument(
         "--mode",
@@ -807,5 +878,64 @@ def main():
             run_paper_mode(dry_run=args.dry_run)
 
 
+# ============================================================================
+# SINGLE-INSTANCE GUARD: Executes at module import time (when run as __main__)
+# ============================================================================
+# This code runs BEFORE main() is called, BEFORE argument parsing, BEFORE any
+# code that could cause Python to re-exec itself with -m.
+#
+# FAIL-CLOSED: If guard fails, process exits immediately. No execution continues.
+# ============================================================================
+
 if __name__ == "__main__":
+    # ========================================================================
+    # Interpreter diagnostics: Log runner startup details
+    # Helps diagnose venv mismatch, multiple instances, and spawn issues
+    # ========================================================================
+    pid = os.getpid()
+    ppid = os.getppid() if hasattr(os, 'getppid') else 'N/A'
+    interpreter = sys.executable
+    argv_str = ' '.join(sys.argv)
+
+    print("=" * 80, flush=True)
+    print("RUNNER STARTUP DIAGNOSTICS", flush=True)
+    print("=" * 80, flush=True)
+    print(f"PID:         {pid}", flush=True)
+    print(f"Parent PID:  {ppid}", flush=True)
+    print(f"Interpreter: {interpreter}", flush=True)
+    print(f"Arguments:   {argv_str}", flush=True)
+    print(f"Market time: {get_market_time_now().strftime('%Y-%m-%d %H:%M:%S %Z')}", flush=True)
+    print("=" * 80, flush=True)
+    print("", flush=True)
+
+    # Guard configuration
+    mutex_name = "Local\\AI_TRADER__PAPER_DRYRUN_LOOP"
+    lock_file = Path("logs") / "paper_dryrun.lock"
+
+    # Guard 1: Acquire Windows Named Mutex
+    mutex_acquired = _acquire_mutex(mutex_name)
+
+    # Guard 2: Acquire Exclusive File Lock
+    lock_acquired = _acquire_file_lock(lock_file) if mutex_acquired else False
+
+    # FAIL-CLOSED: If EITHER guard failed, exit immediately
+    if not mutex_acquired or not lock_acquired:
+        print("=" * 80, flush=True)
+        print("SINGLE INSTANCE GUARD: Another instance is already running", flush=True)
+        print("=" * 80, flush=True)
+        print(f"Mutex: {mutex_name}", flush=True)
+        print(f"Lock file: {lock_file}", flush=True)
+        print("", flush=True)
+        print("This instance (blocked):", flush=True)
+        print(f"  PID:         {pid}", flush=True)
+        print(f"  Interpreter: {interpreter}", flush=True)
+        print("", flush=True)
+        print("Another runner is already active. This instance will exit.", flush=True)
+        print("To force-stop all runners, kill the existing process first.", flush=True)
+        print("=" * 80, flush=True)
+        sys.exit(0)
+
+    # ========================================================================
+    # Guard passed - we are the only instance. Proceed to main().
+    # ========================================================================
     main()
