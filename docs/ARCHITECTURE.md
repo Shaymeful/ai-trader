@@ -55,6 +55,12 @@ established behavior.
 - Supports paper and live modes
 - client_order_id used for idempotency
 - Normalized order status mapping
+- **Fractional order support**:
+  - For fractional BUY market orders (qty < 1 or has decimal places): uses `notional` parameter
+  - For fractional LIMIT orders: uses `float(qty)` parameter (Alpaca accepts fractional qty for limits)
+  - For whole share orders: uses `int(qty)` parameter
+  - Detection: Uses `Decimal` arithmetic to check if `qty % 1 != 0` or `qty < 1`
+  - Prevents "invalid literal for int()" errors when submitting fractional quantities
 
 ---
 
@@ -124,6 +130,11 @@ Order management commands support all trading modes (mock, paper, live) with mod
 - `--cancel-order-id ORDER_ID` - Cancel order by broker order ID and exit
 - `--cancel-client-order-id CLIENT_ORDER_ID` - Cancel order by client order ID and exit
 - `--replace-order-id ORDER_ID --limit-price PRICE [--qty QUANTITY]` - Replace/modify order and exit
+- `--cancel-open-orders` - Cancel all open orders before running (paper mode only, requires non-dry-run)
+  - Prevents "insufficient qty available" errors caused by stale open orders
+  - Runs automatically at start of each trading loop iteration when enabled
+  - Returns count of orders canceled and logs to stdout
+  - Integrated into `run_paper_mode()` after broker initialization
 
 **Mode Behavior:**
 - **mock/dry-run**: Uses MockBroker (no network, no credentials required, no safety gates)

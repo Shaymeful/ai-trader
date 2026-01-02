@@ -113,3 +113,91 @@ def test_broker_get_open_orders(broker):
     # Mock broker fills immediately, so no open orders
     open_orders = broker.get_open_orders()
     assert len(open_orders) == 0
+
+
+def test_fractional_buy_market_order(broker):
+    """Test submitting fractional buy market order."""
+    order = broker.submit_order(
+        symbol="SPY",
+        side=OrderSide.BUY,
+        quantity=0.164,  # Fractional quantity
+        client_order_id="test-fractional-buy",
+        order_type=OrderType.MARKET,
+    )
+
+    assert order.symbol == "SPY"
+    assert order.side == OrderSide.BUY
+    assert order.quantity == 0.164
+    assert order.type == OrderType.MARKET
+    assert order.status == OrderStatus.FILLED
+    assert order.filled_price is not None
+
+
+def test_fractional_sell_market_order(broker):
+    """Test submitting fractional sell market order."""
+    order = broker.submit_order(
+        symbol="SPY",
+        side=OrderSide.SELL,
+        quantity=0.223,  # Fractional quantity
+        client_order_id="test-fractional-sell",
+        order_type=OrderType.MARKET,
+    )
+
+    assert order.symbol == "SPY"
+    assert order.side == OrderSide.SELL
+    assert order.quantity == 0.223
+    assert order.type == OrderType.MARKET
+    assert order.status == OrderStatus.FILLED
+    assert order.filled_price is not None
+
+
+def test_fractional_limit_order(broker):
+    """Test submitting fractional limit order."""
+    limit_price = Decimal("450.00")
+
+    order = broker.submit_order(
+        symbol="SPY",
+        side=OrderSide.BUY,
+        quantity=0.5,  # Fractional quantity
+        client_order_id="test-fractional-limit",
+        order_type=OrderType.LIMIT,
+        limit_price=limit_price,
+    )
+
+    assert order.symbol == "SPY"
+    assert order.side == OrderSide.BUY
+    assert order.quantity == 0.5
+    assert order.type == OrderType.LIMIT
+    assert order.price == limit_price
+
+
+def test_whole_share_order_uses_int(broker):
+    """Test that whole share orders maintain integer quantities."""
+    order = broker.submit_order(
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        quantity=10,  # Whole number
+        client_order_id="test-whole-shares",
+        order_type=OrderType.MARKET,
+    )
+
+    assert order.symbol == "AAPL"
+    assert order.quantity == 10
+    assert isinstance(order.quantity, int)
+
+
+def test_cancel_all_open_orders_empty(broker):
+    """Test cancel_all_open_orders when no orders exist."""
+    canceled_count = broker.cancel_all_open_orders()
+    assert canceled_count == 0
+
+
+def test_cancel_all_open_orders_filled(broker):
+    """Test cancel_all_open_orders when all orders are filled."""
+    # MockBroker fills orders immediately
+    broker.submit_order("AAPL", OrderSide.BUY, 10, "test-filled-1")
+    broker.submit_order("MSFT", OrderSide.BUY, 5, "test-filled-2")
+
+    # No pending orders to cancel
+    canceled_count = broker.cancel_all_open_orders()
+    assert canceled_count == 0
