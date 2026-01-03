@@ -427,25 +427,34 @@ class MockBroker(Broker):
 class AlpacaBroker(Broker):
     """Alpaca paper trading broker."""
 
-    def __init__(self, api_key: str, secret_key: str, base_url: str):
+    def __init__(self, api_key: str, secret_key: str, trading_base_url: str):
         """
         Initialize Alpaca broker.
 
         Args:
             api_key: Alpaca API key
             secret_key: Alpaca secret key
-            base_url: Alpaca API base URL
+            trading_base_url: Alpaca Trading API base URL (alpaca-py will append /v2)
+                             e.g., https://paper-api.alpaca.markets or https://api.alpaca.markets
         """
         self.api_key = api_key
         self.secret_key = secret_key
-        self.base_url = base_url
+        self.trading_base_url = trading_base_url
 
         # Initialize Alpaca trading client
         from alpaca.trading import TradingClient
 
-        # Determine if paper trading based on base_url
-        is_paper = "paper" in base_url.lower()
-        self.client = TradingClient(api_key, secret_key, paper=is_paper)
+        # Determine if paper trading based on trading_base_url
+        is_paper = "paper" in trading_base_url.lower()
+
+        # Use url_override if an explicit base URL is provided
+        # TradingClient will append /v2 automatically
+        self.client = TradingClient(
+            api_key,
+            secret_key,
+            paper=is_paper,
+            url_override=trading_base_url
+        )
 
     def submit_order(
         self,

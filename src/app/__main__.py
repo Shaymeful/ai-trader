@@ -422,7 +422,7 @@ def run_paper_test_order(symbol: str, quantity: int) -> int:
 
     # Initialize Alpaca broker for paper trading
     try:
-        broker = AlpacaBroker(api_key, secret_key, "https://paper-api.alpaca.markets")
+        broker = AlpacaBroker(api_key, secret_key, "https://paper-api.alpaca.markets")  # trading_base_url
         print("  [OK] Alpaca broker initialized (paper mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -538,7 +538,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
 
     # Initialize Alpaca broker for LIVE trading
     try:
-        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
+        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")  # trading_base_url
         print("  [OK] Alpaca broker initialized (LIVE mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -721,7 +721,7 @@ def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int
                 )
                 return 1
 
-            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_trading_base_url)
             print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -834,7 +834,7 @@ def run_cancel_order(
                 )
                 return 1
 
-            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_trading_base_url)
             print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -945,7 +945,7 @@ def run_replace_order(
                 )
                 return 1
 
-            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_trading_base_url)
             print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -1140,7 +1140,7 @@ def run_status(mode: str) -> int:
             broker = AlpacaBroker(
                 api_key=config.alpaca_api_key,
                 secret_key=config.alpaca_secret_key,
-                base_url=config.alpaca_base_url,
+                trading_base_url=config.alpaca_trading_base_url,
             )
 
         # Initialize risk manager
@@ -2007,7 +2007,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                 logger.info("Using Alpaca data provider for market data")
                 try:
                     data_provider = AlpacaDataProvider(
-                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_data_base_url
                     )
                 except NotImplementedError:
                     logger.warning("Alpaca implementation requires alpaca-py library")
@@ -2036,10 +2036,10 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                 logger.info("Using Alpaca data provider and broker")
                 try:
                     data_provider = AlpacaDataProvider(
-                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_data_base_url
                     )
                     broker = AlpacaBroker(
-                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_trading_base_url
                     )
                 except NotImplementedError:
                     # If user explicitly requested paper/live mode, fail instead of fallback

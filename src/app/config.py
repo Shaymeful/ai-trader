@@ -19,8 +19,13 @@ class Config(BaseModel):
     # Alpaca credentials (optional)
     alpaca_api_key: str = Field(default="", description="Alpaca API key")
     alpaca_secret_key: str = Field(default="", description="Alpaca secret key")
-    alpaca_base_url: str = Field(
-        default="https://paper-api.alpaca.markets", description="Alpaca base URL"
+    alpaca_trading_base_url: str = Field(
+        default="https://paper-api.alpaca.markets",
+        description="Alpaca Trading API base URL (alpaca-py TradingClient will append /v2)",
+    )
+    alpaca_data_base_url: str = Field(
+        default="https://data.alpaca.markets",
+        description="Alpaca Market Data API base URL (used by StockHistoricalDataClient)",
     )
 
     # Risk parameters
@@ -112,9 +117,9 @@ class Config(BaseModel):
     )
 
 
-def get_alpaca_credentials(mode: str) -> tuple[str, str, str]:
+def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
     """
-    Get Alpaca credentials based on trading mode.
+    Get Alpaca credentials and endpoints based on trading mode.
 
     Loads credentials from mode-specific environment variables:
     - Paper mode: ALPACA_PAPER_KEY_ID, ALPACA_PAPER_SECRET_KEY
@@ -122,22 +127,29 @@ def get_alpaca_credentials(mode: str) -> tuple[str, str, str]:
 
     Falls back to legacy ALPACA_API_KEY and ALPACA_SECRET_KEY if mode-specific vars not found.
 
+    Base URLs:
+    - Trading API: ALPACA_TRADING_BASE_URL (alpaca-py TradingClient will append /v2)
+    - Data API: ALPACA_DATA_BASE_URL (used by StockHistoricalDataClient)
+
     Args:
         mode: Trading mode (mock, paper, live, dry-run, or alpaca)
 
     Returns:
-        Tuple of (api_key, secret_key, base_url)
+        Tuple of (api_key, secret_key, trading_base_url, data_base_url)
     """
     # Determine if we're in live mode
+    # Check ALPACA_TRADING_BASE_URL instead of legacy ALPACA_BASE_URL
+    trading_base_url_check = os.getenv("ALPACA_TRADING_BASE_URL", "")
     is_live = mode == "live" or (
-        mode == "alpaca" and "paper" not in os.getenv("ALPACA_BASE_URL", "").lower()
+        mode == "alpaca" and trading_base_url_check and "paper" not in trading_base_url_check.lower()
     )
 
     if is_live:
         # Live mode: use ALPACA_LIVE_KEY_ID and ALPACA_LIVE_SECRET_KEY
         api_key = os.getenv("ALPACA_LIVE_KEY_ID", "")
         secret_key = os.getenv("ALPACA_LIVE_SECRET_KEY", "")
-        base_url = "https://api.alpaca.markets"
+        trading_base_url = "https://api.alpaca.markets"
+        data_base_url = "https://data.alpaca.markets"
 
         # Fallback to legacy vars if new vars not set
         if not api_key:
@@ -148,7 +160,8 @@ def get_alpaca_credentials(mode: str) -> tuple[str, str, str]:
         # Paper mode: use ALPACA_PAPER_KEY_ID and ALPACA_PAPER_SECRET_KEY
         api_key = os.getenv("ALPACA_PAPER_KEY_ID", "")
         secret_key = os.getenv("ALPACA_PAPER_SECRET_KEY", "")
-        base_url = "https://paper-api.alpaca.markets"
+        trading_base_url = "https://paper-api.alpaca.markets"
+        data_base_url = "https://data.alpaca.markets"
 
         # Fallback to legacy vars if new vars not set
         if not api_key:
@@ -156,10 +169,11 @@ def get_alpaca_credentials(mode: str) -> tuple[str, str, str]:
         if not secret_key:
             secret_key = os.getenv("ALPACA_SECRET_KEY", "")
 
-    # Allow explicit base URL override
-    base_url = os.getenv("ALPACA_BASE_URL", base_url)
+    # Allow explicit base URL overrides
+    trading_base_url = os.getenv("ALPACA_TRADING_BASE_URL", trading_base_url)
+    data_base_url = os.getenv("ALPACA_DATA_BASE_URL", data_base_url)
 
-    return api_key, secret_key, base_url
+    return api_key, secret_key, trading_base_url, data_base_url
 
 
 def load_config() -> Config:
@@ -174,14 +188,15 @@ def load_config() -> Config:
     mode = os.getenv("MODE", "mock")
 
     # Get Alpaca credentials based on mode
-    api_key, secret_key, base_url = get_alpaca_credentials(mode)
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials(mode)
 
     # Build config from environment variables
     config_dict = {
         "mode": mode,
         "alpaca_api_key": api_key,
         "alpaca_secret_key": secret_key,
-        "alpaca_base_url": base_url,
+        "alpaca_trading_base_url": trading_base_url,
+        "alpaca_data_base_url": data_base_url,
         "max_positions": int(os.getenv("MAX_POSITIONS", "5")),
         "max_order_quantity": int(os.getenv("MAX_ORDER_QUANTITY", "100")),
         "max_daily_loss": Decimal(os.getenv("MAX_DAILY_LOSS", "500")),
@@ -237,7 +252,7 @@ def is_live_trading_mode(config: Config) -> bool:
 
     Live trading mode is detected when:
     - mode is "alpaca" AND
-    - alpaca_base_url is the live API (not paper trading)
+    - alpaca_trading_base_url is the live API (not paper trading)
 
     Args:
         config: Configuration object
@@ -245,7 +260,7 @@ def is_live_trading_mode(config: Config) -> bool:
     Returns:
         True if live trading mode, False otherwise
     """
-    return config.mode == "alpaca" and "paper" not in config.alpaca_base_url.lower()
+    return config.mode == "alpaca" and "paper" not in config.alpaca_trading_base_url.lower()
 
 
 def validate_alpaca_credentials(mode: str, require_credentials: bool = True) -> tuple[bool, str]:
@@ -263,7 +278,7 @@ def validate_alpaca_credentials(mode: str, require_credentials: bool = True) -> 
         # Mock/dry-run modes don't need credentials
         return True, ""
 
-    api_key, secret_key, base_url = get_alpaca_credentials(mode)
+    api_key, secret_key, _, _ = get_alpaca_credentials(mode)
 
     if not require_credentials:
         # Just checking what's available, not enforcing

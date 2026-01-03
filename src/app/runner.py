@@ -101,7 +101,7 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     if provider is None:
         # Check if credentials are available
         if config.alpaca_api_key and config.alpaca_secret_key:
-            print(f"Using Alpaca hourly data provider (base_url: {config.alpaca_base_url})")
+            print(f"Using Alpaca hourly data provider (data_url: {config.alpaca_data_base_url})")
             provider = HourlyMarketDataProvider(
                 api_key=config.alpaca_api_key,
                 secret_key=config.alpaca_secret_key,
@@ -343,6 +343,11 @@ def run_paper_mode(
     print(f"Dry-run: {dry_run}")
     print(f"Cancel open orders: {cancel_open_orders}")
     print()
+    print("API Endpoint Configuration:")
+    print(f"  Trading API: {config.alpaca_trading_base_url} (TradingClient appends /v2)")
+    print(f"  Data API: {config.alpaca_data_base_url}")
+    print(f"  Credentials: {'Present (masked)' if config.alpaca_api_key else 'Not configured'}")
+    print()
 
     # Validate Alpaca credentials for paper mode
     if not dry_run:
@@ -362,7 +367,7 @@ def run_paper_mode(
     if provider is None:
         # Check if credentials are available
         if config.alpaca_api_key and config.alpaca_secret_key:
-            print(f"Using Alpaca hourly data provider (base_url: {config.alpaca_base_url})")
+            print(f"Using Alpaca hourly data provider (data_url: {config.alpaca_data_base_url})")
             provider = HourlyMarketDataProvider(
                 api_key=config.alpaca_api_key,
                 secret_key=config.alpaca_secret_key,
@@ -380,11 +385,11 @@ def run_paper_mode(
         print("Using MockBroker (dry-run or no credentials)")
         broker = MockBroker()
     else:
-        print(f"Using AlpacaBroker (paper trading at {config.alpaca_base_url})")
+        print(f"Using AlpacaBroker (paper trading at {config.alpaca_trading_base_url})")
         broker = AlpacaBroker(
             api_key=config.alpaca_api_key,
             secret_key=config.alpaca_secret_key,
-            base_url=config.alpaca_base_url,
+            trading_base_url=config.alpaca_trading_base_url,
         )
     print()
 
