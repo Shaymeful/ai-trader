@@ -1,9 +1,7 @@
 """Tests for loop runner functionality."""
 
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 

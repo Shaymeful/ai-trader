@@ -15,9 +15,9 @@ from zoneinfo import ZoneInfo
 # CRITICAL: pywin32 is REQUIRED for Windows single-instance guard on Windows
 # No try/except - if not available, import fails immediately (FAIL-CLOSED)
 try:
-    import win32event
-    import win32api
     import pywintypes
+    import win32api
+    import win32event
 except ImportError as e:
     if os.name == "nt":
         # Windows requires pywin32 for single-instance guard
@@ -718,7 +718,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             print(f"ERROR IN ITERATION {iteration}")
             print(f"Exception: {type(e).__name__}: {str(e)}")
             print(f"Error logged to: {error_log}")
-            print(f"Continuing to next iteration...")
+            print("Continuing to next iteration...")
             print(f"{'=' * 80}\n")
 
         # Sleep before next iteration
@@ -759,8 +759,8 @@ def _check_parent_is_runner() -> tuple[bool, dict]:
         ppid = os.getppid()
 
         # Try to open parent process handle for query
-        import win32process
         import win32con
+        import win32process
 
         try:
             parent_handle = win32api.OpenProcess(
@@ -843,13 +843,10 @@ def _acquire_mutex(mutex_name: str) -> bool:
 
         # Check if mutex already existed
         last_error = win32api.GetLastError()
-        if last_error == 183:  # ERROR_ALREADY_EXISTS
-            # Another instance is running
-            return False
-
-        # Successfully created new mutex - we are the only instance
+        # ERROR_ALREADY_EXISTS (183) means another instance is running
+        # Successfully created new mutex if error != 183
         # Mutex will be held until process exits (auto-released by OS)
-        return True
+        return last_error != 183
 
     except pywintypes.error as e:
         # Mutex creation/opening failed
@@ -957,12 +954,11 @@ def main():
 
     args = parser.parse_args()
 
-    if args.mode == "shadow":
-        if args.dry_run:
-            print(
-                "WARNING: --dry-run flag has no effect in shadow mode (shadow mode never places orders)"
-            )
-            print()
+    if args.mode == "shadow" and args.dry_run:
+        print(
+            "WARNING: --dry-run flag has no effect in shadow mode (shadow mode never places orders)"
+        )
+        print()
 
     # Run in loop or once
     if args.loop:

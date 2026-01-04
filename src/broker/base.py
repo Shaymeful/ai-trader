@@ -832,10 +832,7 @@ class AlpacaBroker(Broker):
         # Handle quantity - can be fractional or whole
         # Convert to float first, then to int only if it's a whole number
         qty_value = float(alpaca_order.qty)
-        if qty_value == int(qty_value):
-            quantity = int(qty_value)
-        else:
-            quantity = qty_value
+        quantity = int(qty_value) if qty_value == int(qty_value) else qty_value
 
         return Order(
             id=str(alpaca_order.id),
