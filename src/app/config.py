@@ -141,7 +141,9 @@ def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
     # Check ALPACA_TRADING_BASE_URL instead of legacy ALPACA_BASE_URL
     trading_base_url_check = os.getenv("ALPACA_TRADING_BASE_URL", "")
     is_live = mode == "live" or (
-        mode == "alpaca" and trading_base_url_check and "paper" not in trading_base_url_check.lower()
+        mode == "alpaca"
+        and trading_base_url_check
+        and "paper" not in trading_base_url_check.lower()
     )
 
     if is_live:

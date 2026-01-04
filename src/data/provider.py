@@ -149,11 +149,7 @@ class AlpacaDataProvider(DataProvider):
         from alpaca.data import StockHistoricalDataClient
 
         # Use url_override if an explicit data base URL is provided
-        self.client = StockHistoricalDataClient(
-            api_key,
-            secret_key,
-            url_override=data_base_url
-        )
+        self.client = StockHistoricalDataClient(api_key, secret_key, url_override=data_base_url)
 
     def get_latest_bars(self, symbols: list[str], limit: int = 1) -> dict[str, list[Bar]]:
         """

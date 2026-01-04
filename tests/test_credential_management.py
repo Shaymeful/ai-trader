@@ -15,6 +15,8 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
+    monkeypatch.delenv("ALPACA_TRADING_BASE_URL", raising=False)
+    monkeypatch.delenv("ALPACA_DATA_BASE_URL", raising=False)
 
 
 def test_paper_mode_uses_paper_credentials(clean_env, monkeypatch):
@@ -22,11 +24,12 @@ def test_paper_mode_uses_paper_credentials(clean_env, monkeypatch):
     monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "PK_PAPER_TEST")
     monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "SECRET_PAPER_TEST")
 
-    api_key, secret_key, base_url = get_alpaca_credentials("paper")
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials("paper")
 
     assert api_key == "PK_PAPER_TEST"
     assert secret_key == "SECRET_PAPER_TEST"
-    assert base_url == "https://paper-api.alpaca.markets"
+    assert trading_base_url == "https://paper-api.alpaca.markets"
+    assert data_base_url == "https://data.alpaca.markets"
 
 
 def test_live_mode_uses_live_credentials(clean_env, monkeypatch):
@@ -34,11 +37,12 @@ def test_live_mode_uses_live_credentials(clean_env, monkeypatch):
     monkeypatch.setenv("ALPACA_LIVE_KEY_ID", "AK_LIVE_TEST")
     monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "SECRET_LIVE_TEST")
 
-    api_key, secret_key, base_url = get_alpaca_credentials("live")
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials("live")
 
     assert api_key == "AK_LIVE_TEST"
     assert secret_key == "SECRET_LIVE_TEST"
-    assert base_url == "https://api.alpaca.markets"
+    assert trading_base_url == "https://api.alpaca.markets"
+    assert data_base_url == "https://data.alpaca.markets"
 
 
 def test_paper_mode_falls_back_to_legacy_vars(clean_env, monkeypatch):
@@ -46,11 +50,12 @@ def test_paper_mode_falls_back_to_legacy_vars(clean_env, monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "LEGACY_KEY")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "LEGACY_SECRET")
 
-    api_key, secret_key, base_url = get_alpaca_credentials("paper")
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials("paper")
 
     assert api_key == "LEGACY_KEY"
     assert secret_key == "LEGACY_SECRET"
-    assert base_url == "https://paper-api.alpaca.markets"
+    assert trading_base_url == "https://paper-api.alpaca.markets"
+    assert data_base_url == "https://data.alpaca.markets"
 
 
 def test_live_mode_falls_back_to_legacy_vars(clean_env, monkeypatch):
@@ -58,11 +63,12 @@ def test_live_mode_falls_back_to_legacy_vars(clean_env, monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "LEGACY_KEY")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "LEGACY_SECRET")
 
-    api_key, secret_key, base_url = get_alpaca_credentials("live")
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials("live")
 
     assert api_key == "LEGACY_KEY"
     assert secret_key == "LEGACY_SECRET"
-    assert base_url == "https://api.alpaca.markets"
+    assert trading_base_url == "https://api.alpaca.markets"
+    assert data_base_url == "https://data.alpaca.markets"
 
 
 def test_mode_specific_vars_take_precedence_over_legacy(clean_env, monkeypatch):
@@ -73,7 +79,7 @@ def test_mode_specific_vars_take_precedence_over_legacy(clean_env, monkeypatch):
     monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "PK_PAPER_KEY")
     monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "PAPER_SECRET")
 
-    api_key, secret_key, base_url = get_alpaca_credentials("paper")
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials("paper")
 
     # Should use paper-specific vars, not legacy
     assert api_key == "PK_PAPER_KEY"
@@ -88,16 +94,18 @@ def test_paper_and_live_credentials_can_coexist(clean_env, monkeypatch):
     monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "LIVE_SECRET")
 
     # Get paper credentials
-    paper_key, paper_secret, paper_url = get_alpaca_credentials("paper")
+    paper_key, paper_secret, paper_trading_url, paper_data_url = get_alpaca_credentials("paper")
     assert paper_key == "PK_PAPER"
     assert paper_secret == "PAPER_SECRET"
-    assert paper_url == "https://paper-api.alpaca.markets"
+    assert paper_trading_url == "https://paper-api.alpaca.markets"
+    assert paper_data_url == "https://data.alpaca.markets"
 
     # Get live credentials
-    live_key, live_secret, live_url = get_alpaca_credentials("live")
+    live_key, live_secret, live_trading_url, live_data_url = get_alpaca_credentials("live")
     assert live_key == "AK_LIVE"
     assert live_secret == "LIVE_SECRET"
-    assert live_url == "https://api.alpaca.markets"
+    assert live_trading_url == "https://api.alpaca.markets"
+    assert live_data_url == "https://data.alpaca.markets"
 
 
 def test_validation_passes_with_valid_paper_credentials(clean_env, monkeypatch):
@@ -166,14 +174,16 @@ def test_dry_run_mode_does_not_require_credentials(clean_env, monkeypatch):
 
 
 def test_base_url_can_be_overridden(clean_env, monkeypatch):
-    """Test that ALPACA_BASE_URL env var can override default base URLs."""
+    """Test that ALPACA_TRADING_BASE_URL and ALPACA_DATA_BASE_URL env vars can override defaults."""
     monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "PK_PAPER")
     monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "PAPER_SECRET")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://custom-api.example.com")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://custom-trading-api.example.com")
+    monkeypatch.setenv("ALPACA_DATA_BASE_URL", "https://custom-data-api.example.com")
 
-    api_key, secret_key, base_url = get_alpaca_credentials("paper")
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials("paper")
 
-    assert base_url == "https://custom-api.example.com"
+    assert trading_base_url == "https://custom-trading-api.example.com"
+    assert data_base_url == "https://custom-data-api.example.com"
 
 
 def test_check_env_integration(clean_env, monkeypatch):

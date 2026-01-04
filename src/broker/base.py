@@ -450,10 +450,7 @@ class AlpacaBroker(Broker):
         # Use url_override if an explicit base URL is provided
         # TradingClient will append /v2 automatically
         self.client = TradingClient(
-            api_key,
-            secret_key,
-            paper=is_paper,
-            url_override=trading_base_url
+            api_key, secret_key, paper=is_paper, url_override=trading_base_url
         )
 
     def submit_order(

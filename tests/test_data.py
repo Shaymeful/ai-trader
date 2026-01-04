@@ -140,7 +140,7 @@ def test_alpaca_provider_market_close_window():
         provider = AlpacaDataProvider(
             api_key="test_key",
             secret_key="test_secret",
-            base_url="https://paper-api.alpaca.markets",
+            data_base_url="https://data.alpaca.markets",
         )
 
         # Call get_latest_bars with limit=2 (should return last 2 bars)
