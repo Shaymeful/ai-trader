@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 
-from src.app import allocation
 from src.app.allocator import Allocator
 from src.app.config import Config
 from src.app.ledger import Ledger
@@ -12,9 +11,6 @@ from src.app.strategy_registry import StrategyRegistry
 
 class MockBrokerWithEquity:
     """Mock broker that provides account equity for testing."""
-
-    def __init__(self, equity: float):
-        self.equity = equity
 
     class MockAccount:
         def __init__(self, equity: float):
