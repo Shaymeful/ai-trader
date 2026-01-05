@@ -1,8 +1,6 @@
 """Tests for strategy registry system."""
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 
