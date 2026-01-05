@@ -5,7 +5,7 @@ Usage:
 """
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.app.candidates.schema import Action, Candidate, Horizon, write_snapshot
@@ -17,7 +17,7 @@ def generate_sample_candidates() -> list[Candidate]:
     Returns:
         List of 3 sample candidates with varied attributes
     """
-    now = datetime.now(datetime.UTC).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     expires = now + timedelta(hours=6)
 
     candidates = [

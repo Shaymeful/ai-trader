@@ -5,7 +5,7 @@ Candidates represent potential trading opportunities with metadata for filtering
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -99,13 +99,13 @@ class Candidate(BaseModel):
         """Check if candidate has expired.
 
         Args:
-            now: Current time (defaults to datetime.utcnow())
+            now: Current time (defaults to datetime.now(UTC).replace(tzinfo=None))
 
         Returns:
             True if candidate has expired
         """
         if now is None:
-            now = datetime.utcnow()
+            now = datetime.now(UTC).replace(tzinfo=None)
 
         expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
         # Make expires timezone-naive for comparison if now is naive
@@ -171,7 +171,7 @@ def write_snapshot(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     snapshot = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
         "count": len(candidates),
         "candidates": [candidate.model_dump() for candidate in candidates],
     }
@@ -203,7 +203,7 @@ def append_event(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     event = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
         "event_type": event_type,
         **data,
     }

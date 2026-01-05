@@ -4,7 +4,7 @@ Provides functions for loading, filtering, and managing candidate snapshots
 for consumption by trading strategies.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.app.candidates.schema import Candidate, load_snapshot
@@ -30,13 +30,13 @@ def filter_valid(candidates: list[Candidate], now: datetime | None = None) -> li
 
     Args:
         candidates: List of candidates to filter
-        now: Current time (defaults to datetime.utcnow())
+        now: Current time (defaults to datetime.now(UTC).replace(tzinfo=None))
 
     Returns:
         List of non-expired candidates
     """
     if now is None:
-        now = datetime.utcnow()
+        now = datetime.now(UTC).replace(tzinfo=None)
 
     return [c for c in candidates if not c.is_expired(now)]
 
@@ -105,7 +105,7 @@ def get_tradeable_candidates(
 
     Args:
         candidates: Raw list of candidates
-        now: Current time (defaults to datetime.utcnow())
+        now: Current time (defaults to datetime.now(UTC).replace(tzinfo=None))
         min_dollar_volume: Minimum average daily dollar volume
 
     Returns:

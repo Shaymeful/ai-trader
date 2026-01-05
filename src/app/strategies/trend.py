@@ -25,7 +25,12 @@ class TrendStrategy(Strategy):
         super().__init__(name=f"Trend_MA{ma_period}")
         self.ma_period = ma_period
 
-    def generate_intents(self, universe: list[str], market_data: dict) -> list[PositionIntent]:
+    def generate_intents(
+        self,
+        universe: list[str],
+        market_data: dict,
+        candidate_map: dict[str, str] | None = None,
+    ) -> list[PositionIntent]:
         """
         Generate position intents based on price vs moving average.
 
@@ -33,6 +38,7 @@ class TrendStrategy(Strategy):
             universe: List of symbols to analyze
             market_data: Dictionary with price and MA data
                 Example: {"SPY": {"price": 450.0, "ma": 445.0}}
+            candidate_map: Optional mapping of symbol -> candidate_id
 
         Returns:
             List of PositionIntent objects
@@ -52,6 +58,9 @@ class TrendStrategy(Strategy):
             if price is None or ma is None:
                 continue
 
+            # Get candidate_id if available
+            candidate_id = candidate_map.get(symbol) if candidate_map else None
+
             # Simple trend logic
             if price > ma:
                 # Bullish: price above MA
@@ -62,6 +71,7 @@ class TrendStrategy(Strategy):
                         target_quantity=1,  # Fixed 1 share for simplicity
                         conviction=conviction,
                         reason=f"Price {price:.2f} > MA({self.ma_period}) {ma:.2f}",
+                        candidate_id=candidate_id,
                     )
                 )
             else:
@@ -72,6 +82,7 @@ class TrendStrategy(Strategy):
                         target_quantity=0,  # Flat
                         conviction=0.0,
                         reason=f"Price {price:.2f} <= MA({self.ma_period}) {ma:.2f}",
+                        candidate_id=candidate_id,
                     )
                 )
 

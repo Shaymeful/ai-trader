@@ -34,6 +34,7 @@ except ImportError as e:
 from src.broker import AlpacaBroker, MockBroker
 
 from .allocator import Allocator
+from .candidates.store import get_tradeable_candidates, load_candidates
 from .config import load_config_with_yaml, validate_alpaca_credentials
 from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
@@ -91,12 +92,36 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     print(f"Max Gross Exposure USD: ${config.max_positions_notional}")
     print()
 
-    # Use universe from YAML if available, otherwise fall back to allowed_symbols
-    universe = config.universe_symbols if config.universe_symbols else config.allowed_symbols
+    # Load candidates from snapshot (if available)
+    print("Loading candidates...")
+    raw_candidates = load_candidates()
+    tradeable_candidates = get_tradeable_candidates(
+        raw_candidates,
+        now=datetime.now(UTC).replace(tzinfo=None),
+        min_dollar_volume=1_000_000.0,
+    )
+
+    print(f"  Loaded {len(raw_candidates)} candidates, {len(tradeable_candidates)} tradeable")
+
+    # Build universe from candidates (if available), otherwise use config
+    if tradeable_candidates:
+        # Use candidate symbols as universe
+        universe = [c.symbol for c in tradeable_candidates]
+        candidate_map = {c.symbol: c.candidate_id for c in tradeable_candidates}
+        print(f"  Universe from candidates: {', '.join(universe)}")
+    else:
+        # Fallback to config universe (backward compatibility)
+        universe = config.universe_symbols if config.universe_symbols else config.allowed_symbols
+        candidate_map = {}
+        print(f"  No candidates found, using config universe: {', '.join(universe)}")
 
     if not universe:
-        print("ERROR: No symbols in universe. Check config/config.yaml or ALLOWED_SYMBOLS env var.")
+        print(
+            "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
+        )
         sys.exit(1)
+
+    print()
 
     # Create market data provider if not injected
     if provider is None:
@@ -142,7 +167,7 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     print()
 
     for strategy in strategies:
-        intents = strategy.generate_intents(universe, market_data)
+        intents = strategy.generate_intents(universe, market_data, candidate_map)
 
         print(f"Strategy: {strategy.name}")
         print("-" * 80)
@@ -174,6 +199,7 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
                     "target_quantity": intent.target_quantity,
                     "conviction": intent.conviction,
                     "reason": intent.reason,
+                    "candidate_id": intent.candidate_id,
                     "market_price": market_data.get(intent.symbol, {}).get("price"),
                 }
             )
@@ -357,12 +383,36 @@ def run_paper_mode(
             print(error_msg)
             sys.exit(1)
 
-    # Use universe from YAML if available, otherwise fall back to allowed_symbols
-    universe = config.universe_symbols if config.universe_symbols else config.allowed_symbols
+    # Load candidates from snapshot (if available)
+    print("Loading candidates...")
+    raw_candidates = load_candidates()
+    tradeable_candidates = get_tradeable_candidates(
+        raw_candidates,
+        now=datetime.now(UTC).replace(tzinfo=None),
+        min_dollar_volume=1_000_000.0,
+    )
+
+    print(f"  Loaded {len(raw_candidates)} candidates, {len(tradeable_candidates)} tradeable")
+
+    # Build universe from candidates (if available), otherwise use config
+    if tradeable_candidates:
+        # Use candidate symbols as universe
+        universe = [c.symbol for c in tradeable_candidates]
+        candidate_map = {c.symbol: c.candidate_id for c in tradeable_candidates}
+        print(f"  Universe from candidates: {', '.join(universe)}")
+    else:
+        # Fallback to config universe (backward compatibility)
+        universe = config.universe_symbols if config.universe_symbols else config.allowed_symbols
+        candidate_map = {}
+        print(f"  No candidates found, using config universe: {', '.join(universe)}")
 
     if not universe:
-        print("ERROR: No symbols in universe. Check config/config.yaml or ALLOWED_SYMBOLS env var.")
+        print(
+            "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
+        )
         sys.exit(1)
+
+    print()
 
     # Create market data provider if not injected
     if provider is None:
@@ -430,7 +480,7 @@ def run_paper_mode(
     print()
 
     for strategy in strategies:
-        intents = strategy.generate_intents(universe, market_data)
+        intents = strategy.generate_intents(universe, market_data, candidate_map)
 
         print(f"Strategy: {strategy.name}")
         print("-" * 80)
