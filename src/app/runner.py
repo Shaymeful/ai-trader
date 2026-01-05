@@ -369,6 +369,7 @@ def run_paper_mode(
     provider: MarketDataProvider | None = None,
     dry_run: bool = False,
     cancel_open_orders: bool = False,
+    registry=None,
 ):
     """
     Run strategies in paper execution mode (places orders to Alpaca paper).
@@ -559,13 +560,32 @@ def run_paper_mode(
 
     # Allocate capital across strategies
     print("Allocating capital across strategies...")
-    allocator = Allocator(config)
+    allocator = Allocator(config, registry=registry, broker=broker, ledger=ledger)
     allocation_result = allocator.allocate(strategy_intents, current_prices)
 
-    print(f"Target positions: {allocation_result.target_positions}")
-    print(f"Strategy budgets: {allocation_result.strategy_budgets}")
+    # Display allocation results
+    if allocation_result.equity_used is not None:
+        print(f"Account equity: ${allocation_result.equity_used:,.2f}")
+        print("Allocation mode: EQUITY-BASED (normalized weights)")
+    else:
+        print("Allocation mode: LEGACY (equal-weight)")
+
+    if allocation_result.weight_summary:
+        weight_sum = allocation_result.weight_summary
+        print(f"\nStrategy weights (normalized among {len(weight_sum['enabled_ids'])} enabled):")
+        for strat_id in weight_sum["enabled_ids"]:
+            configured = weight_sum["configured_weights"].get(strat_id, 0)
+            normalized = weight_sum["normalized_weights"].get(strat_id, 0)
+            print(f"  {strat_id}: configured={configured:.3f}, normalized={normalized:.3f}")
+
+    print("\nStrategy budgets:")
+    for name, budget in allocation_result.strategy_budgets.items():
+        print(f"  {name}: ${budget:,.2f}")
+
+    print(f"\nTarget positions: {allocation_result.target_positions}")
+
     if allocation_result.warnings:
-        print("Allocation warnings:")
+        print("\nAllocation warnings:")
         for warning in allocation_result.warnings:
             print(f"  - {warning}")
     print()
@@ -793,7 +813,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             if mode == "shadow":
                 result = run_shadow_mode()
             elif mode == "paper":
-                result = run_paper_mode(dry_run=dry_run, cancel_open_orders=cancel_open_orders)
+                result = run_paper_mode(
+                    dry_run=dry_run, cancel_open_orders=cancel_open_orders, registry=registry
+                )
             else:
                 raise ValueError(f"Invalid mode: {mode}")
 

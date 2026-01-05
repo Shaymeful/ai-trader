@@ -283,6 +283,136 @@ class StrategyIntentCreatedEvent(LedgerEvent):
         self.candidate_id = candidate_id
 
 
+@dataclass
+class AllocationWeightsComputedEvent(LedgerEvent):
+    """Event: Allocation weights were computed from registry."""
+
+    equity: float  # Total account equity used for allocation
+    sum_enabled_weights: float  # Sum of configured weights for enabled strategies
+    normalized_weights: dict[str, float]  # strategy_id -> normalized weight
+    configured_weights: dict[str, float]  # strategy_id -> configured weight
+    enabled_strategy_ids: list[str]  # List of enabled strategy IDs
+
+    def __init__(
+        self,
+        equity: float,
+        sum_enabled_weights: float,
+        normalized_weights: dict[str, float],
+        configured_weights: dict[str, float],
+        enabled_strategy_ids: list[str],
+    ):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "allocation_weights_computed"
+        self.equity = equity
+        self.sum_enabled_weights = sum_enabled_weights
+        self.normalized_weights = normalized_weights
+        self.configured_weights = configured_weights
+        self.enabled_strategy_ids = enabled_strategy_ids
+
+
+@dataclass
+class StrategyBudgetComputedEvent(LedgerEvent):
+    """Event: Strategy budget was computed from equity and weight."""
+
+    strategy_id: str
+    equity: float  # Total account equity
+    normalized_weight: float  # Strategy's normalized weight
+    budget: float  # Computed budget (equity * normalized_weight)
+
+    def __init__(self, strategy_id: str, equity: float, normalized_weight: float, budget: float):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "strategy_budget_computed"
+        self.strategy_id = strategy_id
+        self.equity = equity
+        self.normalized_weight = normalized_weight
+        self.budget = budget
+
+
+@dataclass
+class IntentSizedEvent(LedgerEvent):
+    """Event: Position intent was sized based on budget and conviction."""
+
+    strategy_id: str
+    symbol: str
+    target_quantity: int  # Original target quantity from strategy
+    conviction: float  # Strategy's conviction score
+    budget: float  # Strategy's allocated budget
+    notional: float  # Computed notional (budget * conviction or capped)
+    price: float  # Current price used for sizing
+    candidate_id: str | None  # Candidate ID if intent originated from candidate
+
+    def __init__(
+        self,
+        strategy_id: str,
+        symbol: str,
+        target_quantity: int,
+        conviction: float,
+        budget: float,
+        notional: float,
+        price: float,
+        candidate_id: str | None = None,
+    ):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "intent_sized"
+        self.strategy_id = strategy_id
+        self.symbol = symbol
+        self.target_quantity = target_quantity
+        self.conviction = conviction
+        self.budget = budget
+        self.notional = notional
+        self.price = price
+        self.candidate_id = candidate_id
+
+
+@dataclass
+class NettedSymbolTargetEvent(LedgerEvent):
+    """Event: Multi-strategy intents were netted for a symbol."""
+
+    symbol: str
+    net_notional: float  # Net dollar amount (positive for buy, negative for sell)
+    net_quantity: float  # Net share quantity
+    final_direction: str  # "buy", "sell", or "neutral"
+    contributing_strategies: list[str]  # Strategy IDs that contributed intents
+    price: float  # Price used for netting
+
+    def __init__(
+        self,
+        symbol: str,
+        net_notional: float,
+        net_quantity: float,
+        final_direction: str,
+        contributing_strategies: list[str],
+        price: float,
+    ):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "netted_symbol_target"
+        self.symbol = symbol
+        self.net_notional = net_notional
+        self.net_quantity = net_quantity
+        self.final_direction = final_direction
+        self.contributing_strategies = contributing_strategies
+        self.price = price
+
+
+@dataclass
+class WarningEquityUnavailableEvent(LedgerEvent):
+    """Event: Warning emitted when account equity is unavailable."""
+
+    reason: str  # Reason equity was unavailable
+    fallback_mode: str  # What allocation mode was used as fallback
+
+    def __init__(self, reason: str, fallback_mode: str):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "warning_equity_unavailable"
+        self.reason = reason
+        self.fallback_mode = fallback_mode
+
+
 class Ledger:
     """
     Append-only JSONL ledger for tracking strategy events.

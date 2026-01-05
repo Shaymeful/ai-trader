@@ -64,6 +64,218 @@ established behavior.
 
 ---
 
+## Capital Allocation & Position Sizing
+
+### Overview
+
+The allocation engine distributes account capital across multiple strategies using **equity-based normalized weights** with deterministic netting for multi-strategy conflicts.
+
+**Key Design Principles:**
+- **Equity-based allocation**: Uses account equity (not buying_power) as the allocation base for risk management
+- **Dynamic weight normalization**: Adjusts weights among enabled strategies to prevent allocation errors when strategies are added/removed
+- **Fractional share support**: Supports decimal quantities where broker allows, otherwise rounds to whole shares
+- **Deterministic netting**: Combines multi-strategy intents for same symbol using signed notionals
+- **Centralized sizing**: Position sizing logic centralized in allocation module (not in strategies)
+- **Backward compatibility**: Falls back to legacy equal-weight allocation if registry/broker unavailable
+
+### Allocation Modes
+
+#### Registry Mode (NEW - Equity-Based)
+
+When StrategyRegistry + broker are available, uses equity-based allocation with normalized weights:
+
+```python
+# 1. Fetch account equity
+account = broker.client.get_account()
+equity = float(account.equity)  # e.g., $50,000
+
+# 2. Get enabled strategies and compute normalized weights
+# Config: Strategy A (weight=0.5, enabled), Strategy B (weight=0.3, enabled), Strategy C (weight=0.2, disabled)
+enabled_weight_sum = 0.5 + 0.3 = 0.8
+normalized_weights = {
+    "A": 0.5 / 0.8 = 0.625 (62.5%),
+    "B": 0.3 / 0.8 = 0.375 (37.5%)
+}
+
+# 3. Compute per-strategy budgets
+budget_A = equity * 0.625 = $31,250
+budget_B = equity * 0.375 = $18,750
+
+# 4. Size each intent using conviction
+# Strategy A has intent for AAPL with conviction=0.85
+target_notional = budget_A * 0.85 = $26,562.50
+# Apply per-strategy max_position_size if configured
+if max_position_size:
+    target_notional = min(target_notional, max_position_size)
+
+# 5. Convert to shares
+price_AAPL = $150
+qty = target_notional / price_AAPL = 177.08 shares
+# Round to int for final order: 177 shares
+```
+
+#### Legacy Mode (Backward Compatible)
+
+When registry/broker unavailable, uses equal-weight allocation with max_positions_notional:
+
+```python
+# Equal weight across all strategies
+num_strategies = 2
+budget_per_strategy = max_positions_notional / num_strategies
+
+# Simple aggregation: sum target quantities by symbol
+for strategy, intents in strategy_intents.items():
+    for intent in intents:
+        aggregated_targets[symbol] += intent.target_quantity
+```
+
+### Weight Normalization
+
+**Problem**: When strategies are enabled/disabled, configured weights may not sum to 1.0
+
+**Solution**: Normalize weights dynamically among enabled strategies:
+
+```python
+normalized_weight_i = weight_i / sum(weights of enabled strategies)
+```
+
+**Example**:
+- Strategy A: weight=0.5, enabled
+- Strategy B: weight=0.3, enabled
+- Strategy C: weight=0.2, disabled
+
+Sum of enabled weights = 0.8
+- Normalized A = 0.5 / 0.8 = 0.625 (62.5% of capital)
+- Normalized B = 0.3 / 0.8 = 0.375 (37.5% of capital)
+
+**Edge Case**: If all enabled strategies have weight=0, assign equal weights (1.0 / num_enabled)
+
+### Netting Policy
+
+**Purpose**: Combine multi-strategy intents for same symbol into single target position
+
+**Algorithm**:
+1. Convert each intent to signed notional:
+   - `target_quantity > 0` → `+notional` (buy/long)
+   - `target_quantity < 0` → `-notional` (sell/short)
+   - `target_quantity = 0` → neutral (close position)
+
+2. Sum notionals by symbol across all strategies:
+   ```python
+   net_notional = (Strategy_A_qty * price) + (Strategy_B_qty * price)
+   ```
+
+3. Determine final direction:
+   - `net_notional > 0` → BUY intent
+   - `net_notional < 0` → SELL intent
+   - `net_notional = 0` → NEUTRAL (intents cancel out)
+
+4. Convert net notional back to shares for final order
+
+**Example**:
+```python
+# Strategy A: wants to hold 10 shares of AAPL (buy)
+# Strategy B: wants to hold -5 shares of AAPL (sell short)
+# Price: $150
+
+notional_A = 10 * 150 = +$1,500
+notional_B = -5 * 150 = -$750
+net_notional = $1,500 + (-$750) = $750
+
+# Final: BUY 5 shares of AAPL (net_notional / price = 750 / 150)
+```
+
+**Attribution**: Track which strategies contributed to each netted target for ledger audit trail
+
+### Fractional Share Handling
+
+**Broker Support Detection**:
+- Fractional shares supported where Alpaca allows (typically liquid stocks)
+- Detection: Check if broker accepts fractional qty in order submission
+
+**Rounding Behavior**:
+```python
+# If fractional allowed:
+qty = notional / price  # Keep fractional (e.g., 33.33 shares)
+
+# If whole shares only:
+qty = int(notional / price)  # Floor to whole shares (e.g., 33 shares)
+```
+
+**Implementation**: `allocation.compute_qty_from_notional(price, notional, allow_fractional)`
+
+### Ledger Events
+
+Allocation engine emits detailed events for audit trail:
+
+**AllocationWeightsComputedEvent**:
+- Total equity used
+- Configured vs normalized weights
+- Enabled strategy IDs
+
+**StrategyBudgetComputedEvent** (per strategy):
+- Strategy ID
+- Equity
+- Normalized weight
+- Computed budget
+
+**IntentSizedEvent** (per intent):
+- Strategy ID
+- Symbol
+- Target quantity
+- Conviction
+- Budget
+- Computed notional
+- Price
+- Candidate ID (if from candidate system)
+
+**NettedSymbolTargetEvent** (per symbol):
+- Symbol
+- Net notional
+- Net quantity
+- Final direction (buy/sell/neutral)
+- Contributing strategies
+- Price
+
+**WarningEquityUnavailableEvent**:
+- Reason equity was unavailable
+- Fallback mode used
+
+### Implementation Files
+
+**Core Module**: `src/app/allocation.py`
+- `get_total_equity(account_state)` - Extract equity from account
+- `compute_weight_summary(strategies)` - Normalize weights among enabled strategies
+- `compute_strategy_budget(equity, normalized_weight)` - Compute per-strategy budget
+- `compute_target_notional(budget, conviction, risk_limits)` - Size intent using conviction
+- `compute_qty_from_notional(price, notional, allow_fractional)` - Convert notional to shares
+- `net_intents_by_symbol(intents, market_data, strategy_map)` - Net multi-strategy intents
+
+**Integration**: `src/app/allocator.py`
+- `Allocator` class with dual-mode support (registry + legacy)
+- `_allocate_with_registry()` - New equity-based allocation
+- `_allocate_legacy()` - Backward-compatible equal-weight allocation
+- Accepts optional `registry`, `broker`, `ledger` parameters
+
+**Ledger Events**: `src/app/ledger.py`
+- `AllocationWeightsComputedEvent`
+- `StrategyBudgetComputedEvent`
+- `IntentSizedEvent`
+- `NettedSymbolTargetEvent`
+- `WarningEquityUnavailableEvent`
+
+**Tests**: `tests/test_allocation.py`
+- 28 unit tests covering:
+  - Equity extraction
+  - Weight normalization (including edge cases)
+  - Budget computation
+  - Notional sizing with risk limits
+  - Quantity rounding (fractional vs whole shares)
+  - Multi-strategy netting
+  - Attribution tracking
+
+---
+
 ## Startup Reconciliation
 
 ### Purpose
