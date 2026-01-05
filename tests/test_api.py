@@ -1,6 +1,5 @@
 """Tests for FastAPI dashboard service."""
 
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -277,3 +276,14 @@ def test_multiple_changes_increment_version(client):
     assert strat1["weight"] == 0.9
     assert strat1["params"]["sma_fast_period"] == 12
     assert strat1["pending_version"] == 4
+
+
+def test_dashboard_endpoint(client):
+    """Test GET / dashboard endpoint."""
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert b"AI Trader Strategy Dashboard" in response.content
+    assert b"Account Summary" in response.content
+    assert b"Strategies" in response.content

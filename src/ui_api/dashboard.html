@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trader Strategy Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            margin-bottom: 2rem;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+
+        .status-ok { background: #10b981; }
+        .status-warning { background: #f59e0b; }
+        .status-error { background: #ef4444; }
+
+        /* Account Summary */
+        .account-summary {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .account-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .account-stat {
+            text-align: center;
+        }
+
+        .account-stat-label {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .account-stat-value {
+            color: #f1f5f9;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        /* Main Layout */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Strategy Cards */
+        .strategies-section h2,
+        .activity-section h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #f1f5f9;
+        }
+
+        .strategy-card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            border: 1px solid #334155;
+            transition: border-color 0.2s;
+        }
+
+        .strategy-card:hover {
+            border-color: #475569;
+        }
+
+        .strategy-card.pending {
+            border-color: #f59e0b;
+            box-shadow: 0 0 0 1px #f59e0b;
+        }
+
+        .strategy-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .strategy-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+
+        .strategy-description {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-top: 0.25rem;
+        }
+
+        .strategy-status {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .badge-enabled {
+            background: #10b98120;
+            color: #10b981;
+        }
+
+        .badge-disabled {
+            background: #64748b20;
+            color: #94a3b8;
+        }
+
+        .badge-pending {
+            background: #f59e0b20;
+            color: #f59e0b;
+        }
+
+        .strategy-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin: 1rem 0;
+            padding: 1rem;
+            background: #0f172a;
+            border-radius: 8px;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric-label {
+            color: #64748b;
+            font-size: 0.75rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .metric-value {
+            color: #f1f5f9;
+            font-weight: 600;
+        }
+
+        .strategy-controls {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .control-label {
+            display: block;
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #475569;
+            transition: 0.3s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .toggle-slider {
+            background-color: #10b981;
+        }
+
+        input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+
+        .slider-input {
+            width: 100%;
+            height: 6px;
+            border-radius: 5px;
+            background: #334155;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .slider-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+        }
+
+        .slider-input::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            border: none;
+        }
+
+        .slider-value {
+            display: inline-block;
+            margin-left: 0.5rem;
+            color: #f1f5f9;
+            font-weight: 600;
+        }
+
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #2563eb;
+        }
+
+        button:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+
+        /* Activity Feed */
+        .activity-feed {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid #334155;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .activity-item {
+            padding: 0.75rem;
+            border-left: 3px solid #334155;
+            margin-bottom: 0.75rem;
+            background: #0f172a;
+            border-radius: 4px;
+        }
+
+        .activity-item.config { border-left-color: #f59e0b; }
+        .activity-item.signal { border-left-color: #3b82f6; }
+        .activity-item.order { border-left-color: #8b5cf6; }
+        .activity-item.fill { border-left-color: #10b981; }
+
+        .activity-time {
+            color: #64748b;
+            font-size: 0.75rem;
+        }
+
+        .activity-type {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin: 0.25rem 0;
+        }
+
+        .activity-details {
+            color: #cbd5e1;
+            font-size: 0.85rem;
+        }
+
+        .refresh-bar {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .error-message {
+            background: #7f1d1d;
+            border: 1px solid #991b1b;
+            color: #fca5a5;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .success-message {
+            background: #14532d;
+            border: 1px solid #166534;
+            color: #86efac;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Trader Strategy Dashboard</h1>
+            <p class="subtitle">
+                <span class="status-indicator status-ok"></span>
+                Live monitoring and configuration
+            </p>
+        </header>
+
+        <div id="error-container"></div>
+
+        <div class="refresh-bar">
+            <div>
+                Last updated: <span id="last-update">Never</span>
+            </div>
+            <button onclick="loadDashboard()">Refresh Now</button>
+        </div>
+
+        <div class="account-summary">
+            <h2>Account Summary</h2>
+            <div class="account-grid">
+                <div class="account-stat">
+                    <div class="account-stat-label">Total Capital</div>
+                    <div class="account-stat-value" id="total-capital">$0</div>
+                </div>
+                <div class="account-stat">
+                    <div class="account-stat-label">Max Daily Loss</div>
+                    <div class="account-stat-value" id="max-daily-loss">$0</div>
+                </div>
+                <div class="account-stat">
+                    <div class="account-stat-label">Max Positions</div>
+                    <div class="account-stat-value" id="max-positions">0</div>
+                </div>
+                <div class="account-stat">
+                    <div class="account-stat-label">Enabled Strategies</div>
+                    <div class="account-stat-value" id="enabled-strategies">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-grid">
+            <div class="strategies-section">
+                <h2>Strategies</h2>
+                <div id="strategies-container"></div>
+            </div>
+
+            <div class="activity-section">
+                <h2>Recent Activity</h2>
+                <div class="activity-feed" id="activity-feed">
+                    <p style="color: #64748b; text-align: center;">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let strategiesData = [];
+
+        async function loadDashboard() {
+            try {
+                // Load account summary
+                const accountResponse = await fetch('/account/summary');
+                const accountData = await accountResponse.json();
+                updateAccountSummary(accountData);
+
+                // Load strategies
+                const strategiesResponse = await fetch('/strategies');
+                const strategiesResult = await strategiesResponse.json();
+                strategiesData = strategiesResult.strategies;
+                renderStrategies(strategiesData);
+
+                // Load activity
+                const activityResponse = await fetch('/activity?limit=20');
+                const activityData = await activityResponse.json();
+                renderActivity(activityData.events);
+
+                // Update timestamp
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+                // Clear any errors
+                document.getElementById('error-container').innerHTML = '';
+            } catch (error) {
+                showError('Failed to load dashboard: ' + error.message);
+            }
+        }
+
+        function updateAccountSummary(data) {
+            document.getElementById('total-capital').textContent = '$' + data.total_capital.toLocaleString();
+            document.getElementById('max-daily-loss').textContent = '$' + data.max_daily_loss.toLocaleString();
+            document.getElementById('max-positions').textContent = data.max_total_positions;
+            document.getElementById('enabled-strategies').textContent = data.enabled_strategies_count + ' / ' + data.total_strategies_count;
+        }
+
+        function renderStrategies(strategies) {
+            const container = document.getElementById('strategies-container');
+            container.innerHTML = strategies.map(strategy => `
+                <div class="strategy-card ${strategy.pending_version ? 'pending' : ''}" id="strategy-${strategy.strategy_id}">
+                    <div class="strategy-header">
+                        <div>
+                            <div class="strategy-title">${strategy.name}</div>
+                            <div class="strategy-description">${strategy.description}</div>
+                        </div>
+                        <div class="strategy-status">
+                            <span class="badge ${strategy.enabled ? 'badge-enabled' : 'badge-disabled'}">
+                                ${strategy.enabled ? 'ENABLED' : 'DISABLED'}
+                            </span>
+                            ${strategy.pending_version ? '<span class="badge badge-pending">PENDING v' + strategy.pending_version + '</span>' : ''}
+                        </div>
+                    </div>
+
+                    <div class="strategy-metrics">
+                        <div class="metric">
+                            <div class="metric-label">Weight</div>
+                            <div class="metric-value">${(strategy.weight * 100).toFixed(0)}%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Version</div>
+                            <div class="metric-value">v${strategy.active_version}</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Max Position</div>
+                            <div class="metric-value">$${strategy.risk_limits.max_position_size}</div>
+                        </div>
+                    </div>
+
+                    <div class="strategy-controls">
+                        <div class="control-group">
+                            <label class="control-label">
+                                Enable Strategy
+                            </label>
+                            <label class="toggle-switch">
+                                <input type="checkbox"
+                                       ${strategy.enabled ? 'checked' : ''}
+                                       onchange="toggleStrategy('${strategy.strategy_id}', this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="control-group">
+                            <label class="control-label">
+                                Capital Weight
+                                <span class="slider-value" id="weight-${strategy.strategy_id}">${(strategy.weight * 100).toFixed(0)}%</span>
+                            </label>
+                            <input type="range"
+                                   class="slider-input"
+                                   min="0"
+                                   max="100"
+                                   value="${strategy.weight * 100}"
+                                   oninput="updateWeightDisplay('${strategy.strategy_id}', this.value)"
+                                   onchange="updateWeight('${strategy.strategy_id}', this.value / 100)">
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #334155;">
+                        <details>
+                            <summary style="cursor: pointer; color: #94a3b8; font-size: 0.85rem;">View Parameters</summary>
+                            <pre style="margin-top: 0.5rem; padding: 0.5rem; background: #0f172a; border-radius: 4px; font-size: 0.75rem; color: #cbd5e1;">${JSON.stringify(strategy.params, null, 2)}</pre>
+                        </details>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderActivity(events) {
+            const container = document.getElementById('activity-feed');
+            if (events.length === 0) {
+                container.innerHTML = '<p style="color: #64748b; text-align: center;">No recent activity</p>';
+                return;
+            }
+
+            container.innerHTML = events.map(event => {
+                const time = new Date(event.timestamp).toLocaleTimeString();
+                const typeClass = event.event_type.includes('config') ? 'config' :
+                                 event.event_type.includes('signal') ? 'signal' :
+                                 event.event_type.includes('order') ? 'order' : 'fill';
+
+                return `
+                    <div class="activity-item ${typeClass}">
+                        <div class="activity-time">${time}</div>
+                        <div class="activity-type">${event.event_type.replace(/_/g, ' ').toUpperCase()}</div>
+                        <div class="activity-details">
+                            ${event.strategy_id ? 'Strategy: ' + event.strategy_id : ''}
+                            ${Object.keys(event.details).length > 0 ? '<br>' + JSON.stringify(event.details).substring(0, 100) : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function toggleStrategy(strategyId, enabled) {
+            try {
+                const response = await fetch(`/strategies/${strategyId}/enable`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    setTimeout(() => loadDashboard(), 500);
+                } else {
+                    showError(result.detail || 'Failed to update strategy');
+                    loadDashboard(); // Reload to reset UI
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+                loadDashboard();
+            }
+        }
+
+        function updateWeightDisplay(strategyId, value) {
+            document.getElementById(`weight-${strategyId}`).textContent = Math.round(value) + '%';
+        }
+
+        async function updateWeight(strategyId, weight) {
+            try {
+                const response = await fetch(`/strategies/${strategyId}/weight`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weight })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    setTimeout(() => loadDashboard(), 500);
+                } else {
+                    showError(result.detail || 'Failed to update weight');
+                    loadDashboard();
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+                loadDashboard();
+            }
+        }
+
+        function showError(message) {
+            const container = document.getElementById('error-container');
+            container.innerHTML = `<div class="error-message">${message}</div>`;
+            setTimeout(() => container.innerHTML = '', 5000);
+        }
+
+        function showSuccess(message) {
+            const container = document.getElementById('error-container');
+            container.innerHTML = `<div class="success-message">${message}</div>`;
+            setTimeout(() => container.innerHTML = '', 3000);
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadDashboard, 30000);
+
+        // Initial load
+        loadDashboard();
+    </script>
+</body>
+</html>

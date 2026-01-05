@@ -9,9 +9,11 @@ IMPORTANT: This service is optional. The bot runs normally if the API is never s
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from src.app.ledger import Ledger
@@ -362,11 +364,28 @@ async def update_strategy_params(strategy_id: str, request: ParamsRequest):
 
 
 # ============================================================================
-# Optional: Serve HTML Dashboard (Phase 3)
+# HTML Dashboard (Phase 3)
 # ============================================================================
 
-# This will be implemented in Phase 3
-# @app.get("/", response_class=HTMLResponse)
-# async def serve_dashboard():
-#     """Serve the HTML dashboard."""
-#     pass
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_dashboard():
+    """
+    Serve the HTML dashboard.
+
+    Returns a self-contained single-page application with:
+    - Account summary
+    - Strategy cards with enable/disable toggles and weight sliders
+    - Recent activity feed
+    - Auto-refresh every 30 seconds
+    """
+    dashboard_path = Path(__file__).parent / "dashboard.html"
+
+    try:
+        with open(dashboard_path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return HTMLResponse(
+            content="<h1>Dashboard not found</h1><p>dashboard.html is missing</p>",
+            status_code=404,
+        )
