@@ -13,11 +13,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # CRITICAL: pywin32 is REQUIRED for Windows single-instance guard on Windows
-# No try/except - if not available, import fails immediately (FAIL-CLOSED)
+# On non-Windows platforms, these imports will fail but that's okay
 try:
-    import win32event
-    import win32api
     import pywintypes
+    import win32api
+    import win32event
 except ImportError as e:
     if os.name == "nt":
         # Windows requires pywin32 for single-instance guard
@@ -28,8 +28,8 @@ except ImportError as e:
             f"  Current interpreter: {sys.executable}\n"
             "  Expected: .venv\\Scripts\\python.exe"
         ) from e
-    # Non-Windows: let it fail naturally (runner is Windows-only by design)
-    raise
+    # Non-Windows: silently ignore - platform guards in functions will handle it
+    pass
 
 from src.broker import AlpacaBroker, MockBroker
 
@@ -101,7 +101,7 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     if provider is None:
         # Check if credentials are available
         if config.alpaca_api_key and config.alpaca_secret_key:
-            print(f"Using Alpaca hourly data provider (base_url: {config.alpaca_base_url})")
+            print(f"Using Alpaca hourly data provider (data_url: {config.alpaca_data_base_url})")
             provider = HourlyMarketDataProvider(
                 api_key=config.alpaca_api_key,
                 secret_key=config.alpaca_secret_key,
@@ -309,7 +309,11 @@ def _create_mock_market_data(universe: list[str]) -> dict:
     return mock_data
 
 
-def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = False):
+def run_paper_mode(
+    provider: MarketDataProvider | None = None,
+    dry_run: bool = False,
+    cancel_open_orders: bool = False,
+):
     """
     Run strategies in paper execution mode (places orders to Alpaca paper).
 
@@ -320,11 +324,15 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
         provider: Optional market data provider. If None, creates an Alpaca
                   provider using credentials from config/environment.
         dry_run: If True, print orders without placing them
+        cancel_open_orders: If True, cancel all open orders before running
     """
     # Load configuration from YAML + env
     config = load_config_with_yaml()
 
     print("=" * 80)
+    if not dry_run:
+        print("⚠ LIVE PAPER TRADING ENABLED ⚠")
+        print("=" * 80)
     print(f"PAPER MODE: Strategy Runner {'(DRY-RUN)' if dry_run else '(LIVE ORDERS)'}")
     print("=" * 80)
     print(f"Timeframe: {config.timeframe}")
@@ -333,6 +341,12 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
     print(f"Max Daily Loss USD: ${config.max_daily_loss}")
     print(f"Max Gross Exposure USD: ${config.max_positions_notional}")
     print(f"Dry-run: {dry_run}")
+    print(f"Cancel open orders: {cancel_open_orders}")
+    print()
+    print("API Endpoint Configuration:")
+    print(f"  Trading API: {config.alpaca_trading_base_url} (TradingClient appends /v2)")
+    print(f"  Data API: {config.alpaca_data_base_url}")
+    print(f"  Credentials: {'Present (masked)' if config.alpaca_api_key else 'Not configured'}")
     print()
 
     # Validate Alpaca credentials for paper mode
@@ -353,7 +367,7 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
     if provider is None:
         # Check if credentials are available
         if config.alpaca_api_key and config.alpaca_secret_key:
-            print(f"Using Alpaca hourly data provider (base_url: {config.alpaca_base_url})")
+            print(f"Using Alpaca hourly data provider (data_url: {config.alpaca_data_base_url})")
             provider = HourlyMarketDataProvider(
                 api_key=config.alpaca_api_key,
                 secret_key=config.alpaca_secret_key,
@@ -371,13 +385,20 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
         print("Using MockBroker (dry-run or no credentials)")
         broker = MockBroker()
     else:
-        print(f"Using AlpacaBroker (paper trading at {config.alpaca_base_url})")
+        print(f"Using AlpacaBroker (paper trading at {config.alpaca_trading_base_url})")
         broker = AlpacaBroker(
             api_key=config.alpaca_api_key,
             secret_key=config.alpaca_secret_key,
-            base_url=config.alpaca_base_url,
+            trading_base_url=config.alpaca_trading_base_url,
         )
     print()
+
+    # Cancel open orders if requested
+    if cancel_open_orders and not dry_run:
+        print("Canceling open orders...")
+        canceled_count = broker.cancel_all_open_orders()
+        print(f"Canceled {canceled_count} open order(s)")
+        print()
 
     # Fetch market data
     print("Fetching market data...")
@@ -595,7 +616,7 @@ def run_paper_mode(provider: MarketDataProvider | None = None, dry_run: bool = F
     )
 
 
-def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
+def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: bool = False):
     """
     Run in loop mode: execute strategy runner repeatedly with sleep intervals.
 
@@ -606,6 +627,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
         mode: "shadow" or "paper"
         dry_run: Whether to run paper mode in dry-run
         sleep_seconds: Seconds to sleep between iterations
+        cancel_open_orders: Whether to cancel open orders before each run
     """
     # Ensure logs directory exists
     log_dir = Path("logs")
@@ -642,7 +664,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
             if mode == "shadow":
                 result = run_shadow_mode()
             elif mode == "paper":
-                result = run_paper_mode(dry_run=dry_run)
+                result = run_paper_mode(dry_run=dry_run, cancel_open_orders=cancel_open_orders)
             else:
                 raise ValueError(f"Invalid mode: {mode}")
 
@@ -696,7 +718,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int):
             print(f"ERROR IN ITERATION {iteration}")
             print(f"Exception: {type(e).__name__}: {str(e)}")
             print(f"Error logged to: {error_log}")
-            print(f"Continuing to next iteration...")
+            print("Continuing to next iteration...")
             print(f"{'=' * 80}\n")
 
         # Sleep before next iteration
@@ -733,12 +755,16 @@ def _check_parent_is_runner() -> tuple[bool, dict]:
         - is_runner: True if parent is python.exe with runner-like command line
         - info_dict: Parent process info (pid, name, cmdline)
     """
+    # This function is Windows-specific
+    if sys.platform != "win32":
+        return False, {"platform": sys.platform, "note": "Windows-only check"}
+
     try:
         ppid = os.getppid()
 
         # Try to open parent process handle for query
-        import win32process
         import win32con
+        import win32process
 
         try:
             parent_handle = win32api.OpenProcess(
@@ -812,6 +838,10 @@ def _acquire_mutex(mutex_name: str) -> bool:
         True if mutex acquired (we are the only instance)
         False if mutex already exists OR acquisition failed
     """
+    # This function is Windows-specific
+    if sys.platform != "win32":
+        return True  # On non-Windows, always return True (no mutex check)
+
     global _MUTEX_HANDLE
 
     try:
@@ -821,13 +851,10 @@ def _acquire_mutex(mutex_name: str) -> bool:
 
         # Check if mutex already existed
         last_error = win32api.GetLastError()
-        if last_error == 183:  # ERROR_ALREADY_EXISTS
-            # Another instance is running
-            return False
-
-        # Successfully created new mutex - we are the only instance
+        # ERROR_ALREADY_EXISTS (183) means another instance is running
+        # Successfully created new mutex if error != 183
         # Mutex will be held until process exits (auto-released by OS)
-        return True
+        return last_error != 183
 
     except pywintypes.error as e:
         # Mutex creation/opening failed
@@ -853,6 +880,10 @@ def _acquire_file_lock(lock_file: Path) -> bool:
         True if lock acquired (we are the only instance)
         False if lock already held OR acquisition failed
     """
+    # This function is Windows-specific
+    if sys.platform != "win32":
+        return True  # On non-Windows, always return True (no file lock check)
+
     global _LOCK_FILE_HANDLE
 
     try:
@@ -927,25 +958,34 @@ def main():
         default=3600,
         help="Seconds to sleep between loop iterations (default: 3600 = 1 hour)",
     )
+    parser.add_argument(
+        "--cancel-open-orders",
+        action="store_true",
+        help="Cancel all open orders before running (paper mode only)",
+    )
 
     args = parser.parse_args()
 
-    if args.mode == "shadow":
-        if args.dry_run:
-            print(
-                "WARNING: --dry-run flag has no effect in shadow mode (shadow mode never places orders)"
-            )
-            print()
+    if args.mode == "shadow" and args.dry_run:
+        print(
+            "WARNING: --dry-run flag has no effect in shadow mode (shadow mode never places orders)"
+        )
+        print()
 
     # Run in loop or once
     if args.loop:
-        run_loop(mode=args.mode, dry_run=args.dry_run, sleep_seconds=args.sleep_seconds)
+        run_loop(
+            mode=args.mode,
+            dry_run=args.dry_run,
+            sleep_seconds=args.sleep_seconds,
+            cancel_open_orders=args.cancel_open_orders,
+        )
     else:
         # Default: run once
         if args.mode == "shadow":
             run_shadow_mode()
         elif args.mode == "paper":
-            run_paper_mode(dry_run=args.dry_run)
+            run_paper_mode(dry_run=args.dry_run, cancel_open_orders=args.cancel_open_orders)
 
 
 # ============================================================================

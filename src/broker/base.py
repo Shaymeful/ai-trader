@@ -149,6 +149,16 @@ class Broker(ABC):
         """
         pass
 
+    @abstractmethod
+    def cancel_all_open_orders(self) -> int:
+        """
+        Cancel all open orders.
+
+        Returns:
+            Number of orders canceled
+        """
+        pass
+
 
 class MockBroker(Broker):
     """Mock broker for paper trading simulation."""
@@ -399,29 +409,49 @@ class MockBroker(Broker):
                 open_orders.append(order)
         return open_orders
 
+    def cancel_all_open_orders(self) -> int:
+        """
+        Cancel all open orders.
+
+        Returns:
+            Number of orders canceled
+        """
+        canceled_count = 0
+        for order in self.orders.values():
+            if order.status == OrderStatus.PENDING:
+                order.status = OrderStatus.CANCELED
+                canceled_count += 1
+        return canceled_count
+
 
 class AlpacaBroker(Broker):
     """Alpaca paper trading broker."""
 
-    def __init__(self, api_key: str, secret_key: str, base_url: str):
+    def __init__(self, api_key: str, secret_key: str, trading_base_url: str):
         """
         Initialize Alpaca broker.
 
         Args:
             api_key: Alpaca API key
             secret_key: Alpaca secret key
-            base_url: Alpaca API base URL
+            trading_base_url: Alpaca Trading API base URL (alpaca-py will append /v2)
+                             e.g., https://paper-api.alpaca.markets or https://api.alpaca.markets
         """
         self.api_key = api_key
         self.secret_key = secret_key
-        self.base_url = base_url
+        self.trading_base_url = trading_base_url
 
         # Initialize Alpaca trading client
         from alpaca.trading import TradingClient
 
-        # Determine if paper trading based on base_url
-        is_paper = "paper" in base_url.lower()
-        self.client = TradingClient(api_key, secret_key, paper=is_paper)
+        # Determine if paper trading based on trading_base_url
+        is_paper = "paper" in trading_base_url.lower()
+
+        # Use url_override if an explicit base URL is provided
+        # TradingClient will append /v2 automatically
+        self.client = TradingClient(
+            api_key, secret_key, paper=is_paper, url_override=trading_base_url
+        )
 
     def submit_order(
         self,
@@ -434,6 +464,9 @@ class AlpacaBroker(Broker):
     ) -> Order:
         """
         Submit order to Alpaca.
+
+        For fractional shares (qty < 1), uses notional instead of qty.
+        For whole shares (qty >= 1), submits as integer qty.
 
         Args:
             symbol: Trading symbol
@@ -453,26 +486,68 @@ class AlpacaBroker(Broker):
         # Convert our OrderSide to Alpaca's OrderSide
         alpaca_side = AlpacaOrderSide.BUY if side == OrderSide.BUY else AlpacaOrderSide.SELL
 
-        # Submit order based on type
-        if order_type == OrderType.MARKET:
-            order_request = MarketOrderRequest(
-                symbol=symbol,
-                qty=quantity,
-                side=alpaca_side,
-                time_in_force=TimeInForce.DAY,
-                client_order_id=client_order_id,
-            )
-        else:  # LIMIT
-            if limit_price is None:
-                raise ValueError("Limit price required for limit orders")
-            order_request = LimitOrderRequest(
-                symbol=symbol,
-                qty=quantity,
-                side=alpaca_side,
-                time_in_force=TimeInForce.DAY,
-                limit_price=float(limit_price),
-                client_order_id=client_order_id,
-            )
+        # Determine if this is a fractional order
+        # Fractional if: abs(qty) < 1 OR has decimal places
+        qty_decimal = Decimal(str(quantity))
+        is_fractional = abs(qty_decimal) < 1 or qty_decimal % 1 != 0
+
+        # For fractional shares, use notional instead of qty
+        # Alpaca requires notional for fractional orders
+        if is_fractional and side == OrderSide.BUY:
+            # Get current price to calculate notional
+            # For fractional BUYS, we use notional (dollar amount)
+            if limit_price:
+                price_for_notional = limit_price
+            else:
+                # For market orders, get current quote
+                quote = self.get_quote(symbol)
+                price_for_notional = quote.ask
+
+            notional = float(qty_decimal * price_for_notional)
+
+            if order_type == OrderType.MARKET:
+                order_request = MarketOrderRequest(
+                    symbol=symbol,
+                    notional=notional,
+                    side=alpaca_side,
+                    time_in_force=TimeInForce.DAY,
+                    client_order_id=client_order_id,
+                )
+            else:  # LIMIT - use qty with limit price for fractional limits
+                if limit_price is None:
+                    raise ValueError("Limit price required for limit orders")
+                # For limit orders, Alpaca accepts fractional qty
+                order_request = LimitOrderRequest(
+                    symbol=symbol,
+                    qty=float(quantity),
+                    side=alpaca_side,
+                    time_in_force=TimeInForce.DAY,
+                    limit_price=float(limit_price),
+                    client_order_id=client_order_id,
+                )
+        else:
+            # Whole share order - use qty as integer
+            qty_int = int(quantity)
+
+            if order_type == OrderType.MARKET:
+                order_request = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=qty_int,
+                    side=alpaca_side,
+                    time_in_force=TimeInForce.DAY,
+                    client_order_id=client_order_id,
+                )
+            else:  # LIMIT
+                if limit_price is None:
+                    raise ValueError("Limit price required for limit orders")
+                order_request = LimitOrderRequest(
+                    symbol=symbol,
+                    qty=qty_int,
+                    side=alpaca_side,
+                    time_in_force=TimeInForce.DAY,
+                    limit_price=float(limit_price),
+                    client_order_id=client_order_id,
+                )
 
         # Submit to Alpaca
         alpaca_order = self.client.submit_order(order_request)
@@ -691,6 +766,27 @@ class AlpacaBroker(Broker):
         except Exception:
             return []
 
+    def cancel_all_open_orders(self) -> int:
+        """
+        Cancel all open orders.
+
+        Returns:
+            Number of orders canceled
+        """
+        try:
+            # Get all open orders
+            open_orders = self.list_open_orders_detailed()
+            canceled_count = 0
+
+            # Cancel each order
+            for order in open_orders:
+                if self.cancel_order(order.id):
+                    canceled_count += 1
+
+            return canceled_count
+        except Exception:
+            return 0
+
     def _convert_alpaca_order(self, alpaca_order) -> Order:
         """
         Convert Alpaca order to our Order model.
@@ -733,12 +829,17 @@ class AlpacaBroker(Broker):
         # Get submitted time
         submitted_at = alpaca_order.submitted_at.replace(tzinfo=None)
 
+        # Handle quantity - can be fractional or whole
+        # Convert to float first, then to int only if it's a whole number
+        qty_value = float(alpaca_order.qty)
+        quantity = int(qty_value) if qty_value == int(qty_value) else qty_value
+
         return Order(
             id=str(alpaca_order.id),
             symbol=alpaca_order.symbol,
             side=our_side,
             type=our_type,
-            quantity=int(alpaca_order.qty),
+            quantity=quantity,
             price=Decimal(str(alpaca_order.limit_price)) if alpaca_order.limit_price else None,
             status=status,
             submitted_at=submitted_at,

@@ -16,19 +16,19 @@ def test_is_live_trading_mode_mock():
 
 def test_is_live_trading_mode_paper():
     """Test that alpaca paper trading is not considered live trading."""
-    config = Config(mode="alpaca", alpaca_base_url="https://paper-api.alpaca.markets")
+    config = Config(mode="alpaca", alpaca_trading_base_url="https://paper-api.alpaca.markets")
     assert not is_live_trading_mode(config)
 
 
 def test_is_live_trading_mode_live():
     """Test that alpaca live trading is detected."""
-    config = Config(mode="alpaca", alpaca_base_url="https://api.alpaca.markets")
+    config = Config(mode="alpaca", alpaca_trading_base_url="https://api.alpaca.markets")
     assert is_live_trading_mode(config)
 
 
 def test_is_live_trading_mode_live_case_insensitive():
     """Test that live mode detection is case-insensitive."""
-    config = Config(mode="alpaca", alpaca_base_url="https://API.ALPACA.MARKETS")
+    config = Config(mode="alpaca", alpaca_trading_base_url="https://API.ALPACA.MARKETS")
     assert is_live_trading_mode(config)
 
 
@@ -41,7 +41,7 @@ def test_live_trading_fails_without_flags(monkeypatch, tmp_path):
     try:
         # Set up live trading mode WITHOUT safety flags
         monkeypatch.setenv("MODE", "alpaca")
-        monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
         monkeypatch.setenv("ALPACA_API_KEY", "test-key")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
         # Explicitly NOT setting ENABLE_LIVE_TRADING or I_UNDERSTAND_LIVE_TRADING_RISK
@@ -67,7 +67,7 @@ def test_live_trading_fails_with_only_enable_flag(monkeypatch, tmp_path):
     try:
         # Set up live trading mode with only one flag
         monkeypatch.setenv("MODE", "alpaca")
-        monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
         monkeypatch.setenv("ALPACA_API_KEY", "test-key")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
         monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
@@ -92,7 +92,7 @@ def test_live_trading_fails_with_only_risk_flag(monkeypatch, tmp_path):
     try:
         # Set up live trading mode with only one flag
         monkeypatch.setenv("MODE", "alpaca")
-        monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
         monkeypatch.setenv("ALPACA_API_KEY", "test-key")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
         monkeypatch.setenv("I_UNDERSTAND_LIVE_TRADING_RISK", "true")
@@ -121,7 +121,7 @@ def test_live_trading_succeeds_with_both_flags(monkeypatch, tmp_path):
     try:
         # Set up live trading mode with BOTH safety flags
         monkeypatch.setenv("MODE", "alpaca")
-        monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
         monkeypatch.setenv("ALPACA_API_KEY", "test-key")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
         monkeypatch.setenv("ENABLE_LIVE_TRADING", "true")
@@ -150,7 +150,7 @@ def test_paper_trading_works_without_flags(monkeypatch, tmp_path):
     try:
         # Set up paper trading mode WITHOUT safety flags
         monkeypatch.setenv("MODE", "alpaca")
-        monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
         monkeypatch.setenv("ALPACA_API_KEY", "test-key")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
         # NOT setting safety flags - should still work for paper trading

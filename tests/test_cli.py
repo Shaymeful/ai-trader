@@ -921,7 +921,8 @@ def test_list_open_orders_requires_live_mode(monkeypatch, capsys):
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=1000,
-        alpaca_base_url="https://paper-api.alpaca.markets",
+        alpaca_trading_base_url="https://paper-api.alpaca.markets",
+        alpaca_data_base_url="https://data.alpaca.markets",
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
@@ -1085,7 +1086,8 @@ def test_cancel_order_requires_live_mode(monkeypatch, capsys):
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=1000,
-        alpaca_base_url="https://paper-api.alpaca.markets",
+        alpaca_trading_base_url="https://paper-api.alpaca.markets",
+        alpaca_data_base_url="https://data.alpaca.markets",
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 
@@ -1302,7 +1304,8 @@ def test_replace_order_requires_live_mode(monkeypatch, capsys):
         max_positions=5,
         max_order_quantity=100,
         max_daily_loss=1000,
-        alpaca_base_url="https://paper-api.alpaca.markets",
+        alpaca_trading_base_url="https://paper-api.alpaca.markets",
+        alpaca_data_base_url="https://data.alpaca.markets",
     )
     monkeypatch.setattr("src.app.__main__.load_config", lambda: mock_config)
 

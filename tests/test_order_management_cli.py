@@ -14,7 +14,8 @@ def mock_config():
     """Create mock config for testing."""
     return Config(
         mode="mock",
-        alpaca_base_url="https://paper-api.alpaca.markets",
+        alpaca_trading_base_url="https://paper-api.alpaca.markets",
+        alpaca_data_base_url="https://data.alpaca.markets",
         max_order_notional=10000,
         max_positions_notional=50000,
     )
@@ -25,7 +26,8 @@ def paper_config():
     """Create paper mode config."""
     return Config(
         mode="paper",
-        alpaca_base_url="https://paper-api.alpaca.markets",
+        alpaca_trading_base_url="https://paper-api.alpaca.markets",
+        alpaca_data_base_url="https://data.alpaca.markets",
         max_order_notional=10000,
         max_positions_notional=50000,
     )
@@ -36,7 +38,8 @@ def live_config():
     """Create live mode config."""
     return Config(
         mode="live",
-        alpaca_base_url="https://api.alpaca.markets",
+        alpaca_trading_base_url="https://api.alpaca.markets",
+        alpaca_data_base_url="https://data.alpaca.markets",
         max_order_notional=10000,
         max_positions_notional=50000,
     )

@@ -422,7 +422,9 @@ def run_paper_test_order(symbol: str, quantity: int) -> int:
 
     # Initialize Alpaca broker for paper trading
     try:
-        broker = AlpacaBroker(api_key, secret_key, "https://paper-api.alpaca.markets")
+        broker = AlpacaBroker(
+            api_key, secret_key, "https://paper-api.alpaca.markets"
+        )  # trading_base_url
         print("  [OK] Alpaca broker initialized (paper mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -482,9 +484,9 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
 
     # Safety gate 1: Check we're using live Alpaca API (not paper or dry-run)
     # After mode override, --mode live sets alpaca_base_url to live API
-    if config.alpaca_base_url != "https://api.alpaca.markets":
+    if config.alpaca_trading_base_url != "https://api.alpaca.markets":
         print(
-            f"ERROR: --test-order requires --mode live (current base URL: {config.alpaca_base_url})",
+            f"ERROR: --test-order requires --mode live (current base URL: {config.alpaca_trading_base_url})",
             file=sys.stderr,
         )
         return 1
@@ -538,7 +540,7 @@ def run_live_test_order(config: Config, i_understand_live_trading: bool) -> int:
 
     # Initialize Alpaca broker for LIVE trading
     try:
-        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")
+        broker = AlpacaBroker(api_key, secret_key, "https://api.alpaca.markets")  # trading_base_url
         print("  [OK] Alpaca broker initialized (LIVE mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -641,7 +643,7 @@ def _check_live_trading_safety_gates(
     import os
 
     # Only enforce safety gates for live mode
-    if config.alpaca_base_url != "https://api.alpaca.markets":
+    if config.alpaca_trading_base_url != "https://api.alpaca.markets":
         return (True, None)
 
     if not i_understand_live_trading:
@@ -682,7 +684,7 @@ def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int
 
     # Determine mode - check mock first
     is_mock = config.mode in ("mock", "dry-run")
-    is_live = config.alpaca_base_url == "https://api.alpaca.markets" and not is_mock
+    is_live = config.alpaca_trading_base_url == "https://api.alpaca.markets" and not is_mock
 
     # Print header
     print("=" * 70)
@@ -721,7 +723,7 @@ def run_list_open_orders(config: Config, i_understand_live_trading: bool) -> int
                 )
                 return 1
 
-            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_trading_base_url)
             print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -795,7 +797,7 @@ def run_cancel_order(
 
     # Determine mode - check mock first
     is_mock = config.mode in ("mock", "dry-run")
-    is_live = config.alpaca_base_url == "https://api.alpaca.markets" and not is_mock
+    is_live = config.alpaca_trading_base_url == "https://api.alpaca.markets" and not is_mock
 
     # Print header
     print("=" * 70)
@@ -834,7 +836,7 @@ def run_cancel_order(
                 )
                 return 1
 
-            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_trading_base_url)
             print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -906,7 +908,7 @@ def run_replace_order(
 
     # Determine mode - check mock first
     is_mock = config.mode in ("mock", "dry-run")
-    is_live = config.alpaca_base_url == "https://api.alpaca.markets" and not is_mock
+    is_live = config.alpaca_trading_base_url == "https://api.alpaca.markets" and not is_mock
 
     # Print header
     print("=" * 70)
@@ -945,7 +947,7 @@ def run_replace_order(
                 )
                 return 1
 
-            broker = AlpacaBroker(api_key, secret_key, config.alpaca_base_url)
+            broker = AlpacaBroker(api_key, secret_key, config.alpaca_trading_base_url)
             print(f"  [OK] Connected to Alpaca ({'LIVE' if is_live else 'PAPER'} mode)")
     except Exception as e:
         print(f"ERROR: Failed to initialize broker: {e}", file=sys.stderr)
@@ -1122,10 +1124,10 @@ def run_status(mode: str) -> int:
             config.dry_run = True
         elif mode == "paper":
             config.mode = "alpaca"
-            config.alpaca_base_url = "https://paper-api.alpaca.markets"
+            config.alpaca_trading_base_url = "https://paper-api.alpaca.markets"
         elif mode == "live":
             config.mode = "alpaca"
-            config.alpaca_base_url = "https://api.alpaca.markets"
+            config.alpaca_trading_base_url = "https://api.alpaca.markets"
 
         # Load state
         state = load_state()
@@ -1140,7 +1142,7 @@ def run_status(mode: str) -> int:
             broker = AlpacaBroker(
                 api_key=config.alpaca_api_key,
                 secret_key=config.alpaca_secret_key,
-                base_url=config.alpaca_base_url,
+                trading_base_url=config.alpaca_trading_base_url,
             )
 
         # Initialize risk manager
@@ -1308,7 +1310,7 @@ def run_check_env(mode: str) -> int:
     print()
 
     # Get credentials
-    api_key, secret_key, base_url = get_alpaca_credentials(cred_mode)
+    api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials(cred_mode)
 
     # Print expected env vars
     if cred_mode == "paper":
@@ -1322,7 +1324,8 @@ def run_check_env(mode: str) -> int:
 
     print()
     print("Configuration:")
-    print(f"  API Base URL: {base_url}")
+    print(f"  Trading API Base URL: {trading_base_url}")
+    print(f"  Data API Base URL: {data_base_url}")
     print()
 
     # Check if credentials are set
@@ -1413,11 +1416,11 @@ def main(argv: list[str] | None = None) -> int:
                 # Keep existing mode (mock or alpaca)
             elif args.mode == "paper":
                 config.mode = "alpaca"
-                config.alpaca_base_url = "https://paper-api.alpaca.markets"
+                config.alpaca_trading_base_url = "https://paper-api.alpaca.markets"
                 config.dry_run = False
             elif args.mode == "live":
                 config.mode = "alpaca"
-                config.alpaca_base_url = "https://api.alpaca.markets"
+                config.alpaca_trading_base_url = "https://api.alpaca.markets"
                 config.dry_run = False
 
             # Apply symbols override from CLI
@@ -1487,11 +1490,11 @@ def main(argv: list[str] | None = None) -> int:
                 config.dry_run = True
             elif args.mode == "paper":
                 config.mode = "alpaca"
-                config.alpaca_base_url = "https://paper-api.alpaca.markets"
+                config.alpaca_trading_base_url = "https://paper-api.alpaca.markets"
                 config.dry_run = False
             elif args.mode == "live":
                 config.mode = "alpaca"
-                config.alpaca_base_url = "https://api.alpaca.markets"
+                config.alpaca_trading_base_url = "https://api.alpaca.markets"
                 config.dry_run = False
 
             # Apply CLI overrides for risk parameters (needed for replace)
@@ -1850,11 +1853,11 @@ def run_trading_loop(iterations: int = 5, **kwargs):
             # Keep existing mode (mock or alpaca)
         elif mode_override == "paper":
             config.mode = "alpaca"
-            config.alpaca_base_url = "https://paper-api.alpaca.markets"
+            config.alpaca_trading_base_url = "https://paper-api.alpaca.markets"
             config.dry_run = False
         elif mode_override == "live":
             config.mode = "alpaca"
-            config.alpaca_base_url = "https://api.alpaca.markets"
+            config.alpaca_trading_base_url = "https://api.alpaca.markets"
             config.dry_run = False
 
     # Apply dry-run override from CLI flag (overrides mode setting)
@@ -2007,7 +2010,7 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                 logger.info("Using Alpaca data provider for market data")
                 try:
                     data_provider = AlpacaDataProvider(
-                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_data_base_url
                     )
                 except NotImplementedError:
                     logger.warning("Alpaca implementation requires alpaca-py library")
@@ -2036,10 +2039,12 @@ def run_trading_loop(iterations: int = 5, **kwargs):
                 logger.info("Using Alpaca data provider and broker")
                 try:
                     data_provider = AlpacaDataProvider(
-                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
+                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_data_base_url
                     )
                     broker = AlpacaBroker(
-                        config.alpaca_api_key, config.alpaca_secret_key, config.alpaca_base_url
+                        config.alpaca_api_key,
+                        config.alpaca_secret_key,
+                        config.alpaca_trading_base_url,
                     )
                 except NotImplementedError:
                     # If user explicitly requested paper/live mode, fail instead of fallback

@@ -131,23 +131,25 @@ class MockDataProvider(DataProvider):
 class AlpacaDataProvider(DataProvider):
     """Alpaca market data provider."""
 
-    def __init__(self, api_key: str, secret_key: str, base_url: str):
+    def __init__(self, api_key: str, secret_key: str, data_base_url: str):
         """
         Initialize Alpaca data provider.
 
         Args:
             api_key: Alpaca API key
             secret_key: Alpaca secret key
-            base_url: Alpaca API base URL (not used by data client, but kept for consistency)
+            data_base_url: Alpaca Data API base URL (used by StockHistoricalDataClient)
+                          e.g., https://data.alpaca.markets
         """
         self.api_key = api_key
         self.secret_key = secret_key
-        self.base_url = base_url
+        self.data_base_url = data_base_url
 
         # Initialize Alpaca data client
         from alpaca.data import StockHistoricalDataClient
 
-        self.client = StockHistoricalDataClient(api_key, secret_key)
+        # Use url_override if an explicit data base URL is provided
+        self.client = StockHistoricalDataClient(api_key, secret_key, url_override=data_base_url)
 
     def get_latest_bars(self, symbols: list[str], limit: int = 1) -> dict[str, list[Bar]]:
         """

@@ -3,7 +3,6 @@
 import tempfile
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
