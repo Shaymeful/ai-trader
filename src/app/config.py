@@ -184,7 +184,8 @@ def load_config() -> Config:
     # __file__ is src/app/config.py, so we go up 2 levels to reach repo root
     repo_root = Path(__file__).resolve().parents[2]
     dotenv_path = repo_root / ".env"
-    load_dotenv(dotenv_path=dotenv_path, override=False)
+    # Use override=True to make .env file take precedence over system environment variables
+    load_dotenv(dotenv_path=dotenv_path, override=True)
 
     # Get mode first
     mode = os.getenv("MODE", "mock")

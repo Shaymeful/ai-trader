@@ -1136,7 +1136,13 @@ def main():
         if args.mode == "shadow":
             run_shadow_mode()
         elif args.mode == "paper":
-            run_paper_mode(dry_run=args.dry_run, cancel_open_orders=args.cancel_open_orders)
+            # Initialize strategy registry for equity-based allocation
+            from src.app.strategy_registry import StrategyRegistry
+
+            registry = StrategyRegistry()
+            run_paper_mode(
+                dry_run=args.dry_run, cancel_open_orders=args.cancel_open_orders, registry=registry
+            )
 
 
 # ============================================================================
