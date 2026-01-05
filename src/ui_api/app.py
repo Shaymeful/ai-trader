@@ -382,10 +382,11 @@ async def serve_dashboard():
     dashboard_path = Path(__file__).parent / "dashboard.html"
 
     try:
-        with open(dashboard_path) as f:
+        with open(dashboard_path, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return HTMLResponse(
             content="<h1>Dashboard not found</h1><p>dashboard.html is missing</p>",
             status_code=404,
         )
+

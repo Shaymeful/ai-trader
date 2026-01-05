@@ -388,6 +388,163 @@
             border-radius: 8px;
             margin-bottom: 1rem;
         }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: #1e293b;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+
+        .modal-close {
+            background: transparent;
+            color: #94a3b8;
+            font-size: 1.5rem;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+        }
+
+        .modal-close:hover {
+            background: #334155;
+            color: #f1f5f9;
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-label {
+            display: block;
+            color: #cbd5e1;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.75rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #f1f5f9;
+            font-size: 0.9rem;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .form-hint {
+            color: #64748b;
+            font-size: 0.8rem;
+            margin-top: 0.25rem;
+        }
+
+        .modal-footer {
+            padding: 1.5rem;
+            border-top: 1px solid #334155;
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+        }
+
+        .btn-secondary {
+            background: #475569;
+        }
+
+        .btn-secondary:hover {
+            background: #334155;
+        }
+
+        .btn-edit {
+            background: #8b5cf6;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.8rem;
+        }
+
+        .btn-edit:hover {
+            background: #7c3aed;
+        }
+
+        .weight-indicator {
+            background: #0f172a;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            border: 1px solid #334155;
+        }
+
+        .weight-bar {
+            height: 8px;
+            background: #334155;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+
+        .weight-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #10b981, #3b82f6);
+            transition: width 0.3s;
+        }
+
+        .weight-fill.warning {
+            background: linear-gradient(90deg, #f59e0b, #ef4444);
+        }
+
+        .weight-text {
+            display: flex;
+            justify-content: space-between;
+            color: #cbd5e1;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
     </style>
 </head>
 <body>
@@ -434,6 +591,19 @@
         <div class="main-grid">
             <div class="strategies-section">
                 <h2>Strategies</h2>
+                <div class="weight-indicator">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #cbd5e1; font-weight: 500;">Total Weight Allocation</span>
+                        <span id="total-weight-display" style="color: #f1f5f9; font-weight: 600; font-size: 1.1rem;">0%</span>
+                    </div>
+                    <div class="weight-bar">
+                        <div id="weight-fill" class="weight-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="weight-text">
+                        <span>Remaining: <strong id="remaining-weight">100%</strong></span>
+                        <span id="weight-warning" style="color: #f59e0b; display: none;">⚠️ Exceeds 100%</span>
+                    </div>
+                </div>
                 <div id="strategies-container"></div>
             </div>
 
@@ -446,8 +616,34 @@
         </div>
     </div>
 
+    <!-- Edit Strategy Modal -->
+    <div id="edit-modal" class="modal-overlay" onclick="if(event.target === this) closeEditModal()">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modal-title">Edit Strategy</h3>
+                <button class="modal-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Strategy ID</label>
+                    <input type="text" id="edit-strategy-id" class="form-input" disabled>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <input type="text" id="edit-description" class="form-input" disabled>
+                </div>
+                <div id="params-container"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeEditModal()">Cancel</button>
+                <button onclick="saveParameters()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let strategiesData = [];
+        let currentEditStrategy = null;
 
         async function loadDashboard() {
             try {
@@ -486,6 +682,11 @@
 
         function renderStrategies(strategies) {
             const container = document.getElementById('strategies-container');
+
+            // Calculate total weight
+            const totalWeight = strategies.reduce((sum, s) => sum + s.weight, 0);
+            updateWeightIndicator(totalWeight);
+
             container.innerHTML = strategies.map(strategy => `
                 <div class="strategy-card ${strategy.pending_version ? 'pending' : ''}" id="strategy-${strategy.strategy_id}">
                     <div class="strategy-header">
@@ -536,6 +737,7 @@
                             </label>
                             <input type="range"
                                    class="slider-input"
+                                   id="slider-${strategy.strategy_id}"
                                    min="0"
                                    max="100"
                                    value="${strategy.weight * 100}"
@@ -544,14 +746,36 @@
                         </div>
                     </div>
 
-                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #334155;">
-                        <details>
+                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #334155; display: flex; justify-content: space-between; align-items: center;">
+                        <details style="flex: 1;">
                             <summary style="cursor: pointer; color: #94a3b8; font-size: 0.85rem;">View Parameters</summary>
                             <pre style="margin-top: 0.5rem; padding: 0.5rem; background: #0f172a; border-radius: 4px; font-size: 0.75rem; color: #cbd5e1;">${JSON.stringify(strategy.params, null, 2)}</pre>
                         </details>
+                        <button class="btn-edit" onclick="openEditModal('${strategy.strategy_id}')">✏️ Edit</button>
                     </div>
                 </div>
             `).join('');
+        }
+
+        function updateWeightIndicator(totalWeight) {
+            const percentage = (totalWeight * 100).toFixed(1);
+            const remaining = Math.max(0, 100 - percentage);
+            const exceeds = totalWeight > 1.0;
+
+            document.getElementById('total-weight-display').textContent = percentage + '%';
+            document.getElementById('remaining-weight').textContent = remaining.toFixed(1) + '%';
+            document.getElementById('weight-fill').style.width = Math.min(100, percentage) + '%';
+
+            const weightFill = document.getElementById('weight-fill');
+            const warningEl = document.getElementById('weight-warning');
+
+            if (exceeds) {
+                weightFill.classList.add('warning');
+                warningEl.style.display = 'block';
+            } else {
+                weightFill.classList.remove('warning');
+                warningEl.style.display = 'none';
+            }
         }
 
         function renderActivity(events) {
@@ -604,10 +828,46 @@
         }
 
         function updateWeightDisplay(strategyId, value) {
-            document.getElementById(`weight-${strategyId}`).textContent = Math.round(value) + '%';
+            const numValue = parseFloat(value);
+
+            // Calculate total weight excluding current strategy
+            const otherStrategiesWeight = strategiesData
+                .filter(s => s.strategy_id !== strategyId)
+                .reduce((sum, s) => sum + s.weight, 0);
+
+            // Calculate maximum allowed value for this strategy
+            const maxAllowed = Math.min(100, (1.0 - otherStrategiesWeight) * 100);
+
+            // Constrain the slider value
+            const constrainedValue = Math.min(numValue, maxAllowed);
+
+            // Update display
+            document.getElementById(`weight-${strategyId}`).textContent = Math.round(constrainedValue) + '%';
+
+            // Update slider if constrained
+            if (constrainedValue < numValue) {
+                document.getElementById(`slider-${strategyId}`).value = constrainedValue;
+            }
+
+            // Update indicator with preview
+            const newTotal = otherStrategiesWeight + (constrainedValue / 100);
+            updateWeightIndicator(newTotal);
         }
 
         async function updateWeight(strategyId, weight) {
+            // Calculate total weight excluding current strategy
+            const otherStrategiesWeight = strategiesData
+                .filter(s => s.strategy_id !== strategyId)
+                .reduce((sum, s) => sum + s.weight, 0);
+
+            // Check if new total exceeds 100%
+            const newTotal = otherStrategiesWeight + weight;
+            if (newTotal > 1.0) {
+                showError('Cannot exceed 100% total weight allocation. Remaining: ' + ((1.0 - otherStrategiesWeight) * 100).toFixed(1) + '%');
+                loadDashboard(); // Reset to previous values
+                return;
+            }
+
             try {
                 const response = await fetch(`/strategies/${strategyId}/weight`, {
                     method: 'POST',
@@ -627,6 +887,74 @@
             } catch (error) {
                 showError('Network error: ' + error.message);
                 loadDashboard();
+            }
+        }
+
+        function openEditModal(strategyId) {
+            const strategy = strategiesData.find(s => s.strategy_id === strategyId);
+            if (!strategy) return;
+
+            currentEditStrategy = strategy;
+
+            // Populate modal
+            document.getElementById('modal-title').textContent = `Edit ${strategy.name}`;
+            document.getElementById('edit-strategy-id').value = strategy.strategy_id;
+            document.getElementById('edit-description').value = strategy.description;
+
+            // Build parameters form
+            const paramsContainer = document.getElementById('params-container');
+            paramsContainer.innerHTML = Object.entries(strategy.params).map(([key, value]) => `
+                <div class="form-group">
+                    <label class="form-label">${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</label>
+                    <input type="number"
+                           id="param-${key}"
+                           class="form-input"
+                           value="${value}"
+                           step="${typeof value === 'number' && value % 1 !== 0 ? '0.01' : '1'}">
+                    <div class="form-hint">Current value: ${value}</div>
+                </div>
+            `).join('');
+
+            // Show modal
+            document.getElementById('edit-modal').classList.add('active');
+        }
+
+        function closeEditModal() {
+            document.getElementById('edit-modal').classList.remove('active');
+            currentEditStrategy = null;
+        }
+
+        async function saveParameters() {
+            if (!currentEditStrategy) return;
+
+            // Collect parameter values
+            const newParams = {};
+            Object.keys(currentEditStrategy.params).forEach(key => {
+                const input = document.getElementById(`param-${key}`);
+                if (input) {
+                    const value = parseFloat(input.value);
+                    newParams[key] = isNaN(value) ? input.value : value;
+                }
+            });
+
+            try {
+                const response = await fetch(`/strategies/${currentEditStrategy.strategy_id}/params`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ params: newParams })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    closeEditModal();
+                    setTimeout(() => loadDashboard(), 500);
+                } else {
+                    showError(result.detail || 'Failed to update parameters');
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
             }
         }
 
