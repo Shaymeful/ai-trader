@@ -36,6 +36,9 @@ def test_config_custom_values():
 
 def test_load_config_with_env_vars(monkeypatch):
     """Test loading config from environment variables."""
+    # Patch load_dotenv to skip .env file loading (test env vars should be used)
+    monkeypatch.setattr("src.app.config.load_dotenv", lambda **kwargs: None)
+
     # Set environment variables
     monkeypatch.setenv("MODE", "alpaca")
     monkeypatch.setenv("MAX_POSITIONS", "7")
