@@ -69,7 +69,10 @@ def test_run_shadow_mode_exits_with_no_universe(monkeypatch):
     mock_config.max_daily_loss = 250
     mock_config.max_positions_notional = 10000
 
-    with patch("src.app.runner.load_config_with_yaml", return_value=mock_config):
+    with (
+        patch("src.app.runner.load_config_with_yaml", return_value=mock_config),
+        patch("src.app.runner.load_candidates", return_value=[]),
+    ):
         with pytest.raises(SystemExit) as exc_info:
             run_shadow_mode()
 

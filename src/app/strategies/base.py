@@ -17,6 +17,9 @@ class PositionIntent:
     target_quantity: int  # Target position size (positive for long, negative for short, 0 for flat)
     conviction: float  # Signal strength/conviction (0.0 to 1.0)
     reason: str  # Human-readable reason for this intent
+    candidate_id: str | None = (
+        None  # Candidate ID from selector (if intent originated from candidate)
+    )
 
 
 class Strategy(ABC):
@@ -37,7 +40,12 @@ class Strategy(ABC):
         self.name = name
 
     @abstractmethod
-    def generate_intents(self, universe: list[str], market_data: dict) -> list[PositionIntent]:
+    def generate_intents(
+        self,
+        universe: list[str],
+        market_data: dict,
+        candidate_map: dict[str, str] | None = None,
+    ) -> list[PositionIntent]:
         """
         Generate position intents for the given universe.
 
@@ -45,6 +53,8 @@ class Strategy(ABC):
             universe: List of symbols to analyze
             market_data: Dictionary of symbol -> price/indicator data
                 Example: {"SPY": {"price": 450.0, "sma_20": 445.0, ...}}
+            candidate_map: Optional mapping of symbol -> candidate_id
+                for propagating candidate attribution
 
         Returns:
             List of PositionIntent objects

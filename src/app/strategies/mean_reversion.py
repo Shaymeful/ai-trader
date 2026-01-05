@@ -26,7 +26,12 @@ class MeanReversionStrategy(Strategy):
         super().__init__(name=f"MeanRev_Z{zscore_threshold}")
         self.zscore_threshold = zscore_threshold
 
-    def generate_intents(self, universe: list[str], market_data: dict) -> list[PositionIntent]:
+    def generate_intents(
+        self,
+        universe: list[str],
+        market_data: dict,
+        candidate_map: dict[str, str] | None = None,
+    ) -> list[PositionIntent]:
         """
         Generate position intents based on z-score mean reversion.
 
@@ -34,6 +39,7 @@ class MeanReversionStrategy(Strategy):
             universe: List of symbols to analyze
             market_data: Dictionary with price and z-score data
                 Example: {"SPY": {"price": 450.0, "zscore": -1.5}}
+            candidate_map: Optional mapping of symbol -> candidate_id
 
         Returns:
             List of PositionIntent objects
@@ -53,6 +59,9 @@ class MeanReversionStrategy(Strategy):
             if price is None or zscore is None:
                 continue
 
+            # Get candidate_id if available
+            candidate_id = candidate_map.get(symbol) if candidate_map else None
+
             # Mean reversion logic
             if zscore < -self.zscore_threshold:
                 # Oversold: potential bounce
@@ -63,6 +72,7 @@ class MeanReversionStrategy(Strategy):
                         target_quantity=1,  # Fixed 1 share for simplicity
                         conviction=conviction,
                         reason=f"Oversold: z-score {zscore:.2f} < {-self.zscore_threshold}",
+                        candidate_id=candidate_id,
                     )
                 )
             elif zscore > self.zscore_threshold:
@@ -73,6 +83,7 @@ class MeanReversionStrategy(Strategy):
                         target_quantity=0,  # Flat
                         conviction=0.0,
                         reason=f"Overbought: z-score {zscore:.2f} > {self.zscore_threshold}",
+                        candidate_id=candidate_id,
                     )
                 )
             else:
@@ -83,6 +94,7 @@ class MeanReversionStrategy(Strategy):
                         target_quantity=0,  # Flat
                         conviction=0.0,
                         reason=f"Neutral: z-score {zscore:.2f} in range [{-self.zscore_threshold}, {self.zscore_threshold}]",
+                        candidate_id=candidate_id,
                     )
                 )
 
