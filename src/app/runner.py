@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # CRITICAL: pywin32 is REQUIRED for Windows single-instance guard on Windows
-# No try/except - if not available, import fails immediately (FAIL-CLOSED)
+# On non-Windows platforms, these imports will fail but that's okay
 try:
     import pywintypes
     import win32api
@@ -28,8 +28,8 @@ except ImportError as e:
             f"  Current interpreter: {sys.executable}\n"
             "  Expected: .venv\\Scripts\\python.exe"
         ) from e
-    # Non-Windows: let it fail naturally (runner is Windows-only by design)
-    raise
+    # Non-Windows: silently ignore - platform guards in functions will handle it
+    pass
 
 from src.broker import AlpacaBroker, MockBroker
 
