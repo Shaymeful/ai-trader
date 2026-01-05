@@ -187,7 +187,8 @@ def test_run_loop_paper_mode_with_dry_run(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(
-        "src.app.runner.run_paper_mode", lambda dry_run, cancel_open_orders=False: mock_result
+        "src.app.runner.run_paper_mode",
+        lambda dry_run, cancel_open_orders=False, registry=None: mock_result,
     )
 
     # Use tmp_path for logs
@@ -250,7 +251,8 @@ def test_run_loop_handles_empty_strategy_weights(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(
-        "src.app.runner.run_paper_mode", lambda dry_run, cancel_open_orders=False: mock_result
+        "src.app.runner.run_paper_mode",
+        lambda dry_run, cancel_open_orders=False, registry=None: mock_result,
     )
 
     # Use tmp_path for logs
