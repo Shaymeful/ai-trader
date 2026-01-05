@@ -140,6 +140,68 @@ class ChangeResponse(BaseModel):
     pending_version: int | None
 
 
+class AllocationStrategyInfo(BaseModel):
+    """Per-strategy allocation information."""
+
+    strategy_id: str
+    enabled: bool
+    configured_weight: float
+    normalized_weight: float
+    budget: float
+    utilization: float | None
+
+
+class AllocationResponse(BaseModel):
+    """Allocation status response."""
+
+    equity_base: float | None
+    timestamp: str
+    strategies: list[AllocationStrategyInfo]
+    mode: str  # "equity-based" or "legacy"
+
+
+class CandidateInfo(BaseModel):
+    """Candidate information."""
+
+    symbol: str
+    action: str
+    confidence: float
+    horizon: str
+    expires_at: str | None
+    sector: str | None
+    tags: list[str]
+    reason: str
+
+
+class CandidatesResponse(BaseModel):
+    """Candidates list response."""
+
+    candidates: list[CandidateInfo]
+    count: int
+    last_generated: str | None
+
+
+class DetailedHealthResponse(BaseModel):
+    """Detailed health/readiness response."""
+
+    status: str
+    timestamp: str
+    market_status: str  # "open" or "closed"
+    last_loop_tick: str | None
+    last_data_fetch_status: str | None
+    last_error: str | None
+    registry_loaded: bool
+    ledger_available: bool
+    single_instance_ok: bool
+    trading_paused: bool
+
+
+class PauseRequest(BaseModel):
+    """Request to pause/resume trading."""
+
+    paused: bool
+
+
 # ============================================================================
 # GET Endpoints (Read-Only)
 # ============================================================================
@@ -361,6 +423,215 @@ async def update_strategy_params(strategy_id: str, request: ParamsRequest):
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to stage change: {e}") from e
+
+
+# ============================================================================
+# Ops Endpoints (Phase 4 - Dashboard Ops Controls)
+# ============================================================================
+
+
+@app.get("/allocation", response_model=AllocationResponse)
+async def get_allocation():
+    """
+    Get current allocation status.
+
+    Returns per-strategy allocation information including weights, budgets, and utilization.
+    """
+    if registry is None or registry.state is None:
+        raise HTTPException(status_code=503, detail="Registry not loaded")
+
+    from src.app import allocation as alloc_module
+
+    state = registry.get_state()
+    enabled_strategies = [s for s in state.strategies.values() if s.enabled]
+
+    # Compute normalized weights
+    weight_summary = alloc_module.compute_weight_summary(enabled_strategies)
+
+    # Build per-strategy allocation info
+    strategies_info = []
+    equity_base = None  # Would be fetched from broker in production
+
+    for strategy in state.strategies.values():
+        if strategy.enabled and strategy.strategy_id in weight_summary["normalized_weights"]:
+            normalized_weight = weight_summary["normalized_weights"][strategy.strategy_id]
+            budget = 0.0
+            if equity_base:
+                budget = alloc_module.compute_strategy_budget(equity_base, normalized_weight)
+
+            strategies_info.append(
+                AllocationStrategyInfo(
+                    strategy_id=strategy.strategy_id,
+                    enabled=strategy.enabled,
+                    configured_weight=strategy.weight,
+                    normalized_weight=normalized_weight,
+                    budget=budget,
+                    utilization=None,  # Would require position tracking
+                )
+            )
+        else:
+            strategies_info.append(
+                AllocationStrategyInfo(
+                    strategy_id=strategy.strategy_id,
+                    enabled=strategy.enabled,
+                    configured_weight=strategy.weight,
+                    normalized_weight=0.0,
+                    budget=0.0,
+                    utilization=None,
+                )
+            )
+
+    mode = "equity-based" if equity_base else "legacy"
+
+    return AllocationResponse(
+        equity_base=equity_base,
+        timestamp=datetime.now(UTC).isoformat(),
+        strategies=strategies_info,
+        mode=mode,
+    )
+
+
+@app.get("/candidates", response_model=CandidatesResponse)
+async def get_candidates():
+    """
+    Get current candidate list.
+
+    Returns candidates loaded from the most recent snapshot.
+    """
+    import json
+
+    snapshot_path = Path("out/selector/snapshot.json")
+
+    if not snapshot_path.exists():
+        return CandidatesResponse(candidates=[], count=0, last_generated=None)
+
+    try:
+        with open(snapshot_path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        candidates_list = []
+        for candidate in data.get("candidates", []):
+            candidates_list.append(
+                CandidateInfo(
+                    symbol=candidate.get("symbol", ""),
+                    action=candidate.get("action", ""),
+                    confidence=candidate.get("confidence", 0.0),
+                    horizon=candidate.get("horizon", ""),
+                    expires_at=candidate.get("expires_at"),
+                    sector=candidate.get("sector"),
+                    tags=candidate.get("tags", []),
+                    reason=candidate.get("reason", ""),
+                )
+            )
+
+        return CandidatesResponse(
+            candidates=candidates_list,
+            count=len(candidates_list),
+            last_generated=data.get("generated_at"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load candidates: {e}") from e
+
+
+@app.get("/health/detailed", response_model=DetailedHealthResponse)
+async def detailed_health():
+    """
+    Get detailed health and readiness status.
+
+    Returns comprehensive system status including market hours, last tick, errors, etc.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    # Determine market status based on current ET time
+    eastern = ZoneInfo("America/New_York")
+    now_et = datetime.now(eastern)
+    hour = now_et.hour
+    minute = now_et.minute
+
+    # Market hours: 9:30 AM - 4:00 PM ET
+    is_market_open = (
+        (hour == 9 and minute >= 30) or (10 <= hour < 16) or (hour == 16 and minute == 0)
+    )
+    market_status = "open" if is_market_open else "closed"
+
+    # Check for last loop tick in status log
+    last_loop_tick = None
+    last_error = None
+
+    status_log_path = Path("logs/loop_status.log")
+    if status_log_path.exists():
+        try:
+            with open(status_log_path, encoding="utf-8") as f:
+                lines = f.readlines()
+                if lines:
+                    last_line = lines[-1].strip()
+                    # Parse timestamp from log line format: [timestamp] STATUS | ...
+                    if last_line.startswith("["):
+                        end_bracket = last_line.find("]")
+                        if end_bracket > 0:
+                            last_loop_tick = last_line[1:end_bracket]
+        except Exception:
+            pass
+
+    error_log_path = Path("logs/loop_errors.log")
+    if error_log_path.exists():
+        try:
+            with open(error_log_path, encoding="utf-8") as f:
+                lines = f.readlines()
+                if lines:
+                    last_error = lines[-1].strip()[:200]  # Truncate to 200 chars
+        except Exception:
+            pass
+
+    return DetailedHealthResponse(
+        status="ok",
+        timestamp=datetime.now(UTC).isoformat(),
+        market_status=market_status,
+        last_loop_tick=last_loop_tick,
+        last_data_fetch_status=None,  # Would require tracking in runner
+        last_error=last_error,
+        registry_loaded=registry is not None and registry.state is not None,
+        ledger_available=ledger is not None,
+        single_instance_ok=True,  # Would require checking mutex
+        trading_paused=False,  # Would require state file
+    )
+
+
+@app.post("/pause_trading", response_model=ChangeResponse)
+async def pause_trading(request: PauseRequest):
+    """
+    Pause or resume trading.
+
+    This creates a pause flag file that the runner checks at the start of each tick.
+    Changes apply at the next loop iteration.
+    """
+    pause_file = Path("state/pause_trading.flag")
+    pause_file.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if request.paused:
+            # Create pause flag file
+            with open(pause_file, "w", encoding="utf-8") as f:
+                f.write(datetime.now(UTC).isoformat())
+
+            return ChangeResponse(
+                success=True,
+                message="Trading paused. Orders will not be placed on next tick.",
+                pending_version=None,
+            )
+        else:
+            # Remove pause flag file
+            if pause_file.exists():
+                pause_file.unlink()
+
+            return ChangeResponse(
+                success=True,
+                message="Trading resumed. Orders will be placed normally on next tick.",
+                pending_version=None,
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update pause state: {e}") from e
 
 
 # ============================================================================

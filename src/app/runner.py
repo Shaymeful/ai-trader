@@ -806,7 +806,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                 if activated:
                     print("Strategy configuration changes activated:")
                     for strategy_id, old_version, new_version in activated:
-                        print(f"  {strategy_id}: v{old_version} → v{new_version}")
+                        print(f"  {strategy_id}: v{old_version} -> v{new_version}")
                     print()
 
             # Run the appropriate mode

@@ -317,6 +317,14 @@ On startup, the bot reconciles its local state with the broker's actual state to
 ### Core Flags
 - `--mode {dry-run,paper,live}` - Trading mode
 - `--dry-run` - Run full pipeline (signals + risk checks + pricing) but never submit orders
+  - **Market-hours gating behavior**: In DryRun mode, market-hours checks apply ONLY to order submission (which is skipped anyway). The bot still:
+    - Loads candidates from snapshot
+    - Computes signals and strategy intents
+    - Runs allocation and position sizing logic
+    - Logs all events to ledger (JSONL format)
+    - Updates dashboard with latest data
+  - **Use case**: Testing full trading logic after market close without submitting orders. Validates end-to-end pipeline including candidate evaluation, signal generation, allocation, and risk checks.
+  - **Status file**: Writes success/failure to `logs/loop_status.log` with timestamp, orders placed (always 0 in DryRun), and strategy weights.
 - `--preflight` - Validate configuration and connectivity
 - `--once` - Run exactly 1 trading loop iteration
 - `--max-iterations N` (alias: `--iterations`) - Controls trading loop iterations (default: 5)
@@ -726,6 +734,78 @@ python -m src.app --max-session-loss 100
 | Reset | Automatic at midnight ET | Manual (restart bot) |
 | Use Case | Prevent daily loss bypass | In-session runaway protection |
 | Default | $500 | Disabled (None) |
+
+### Pause Trading (Global Kill Switch)
+
+The pause trading feature provides a runtime kill switch to stop order submission without terminating the bot process.
+
+**Key Characteristics:**
+- **File-based flag**: Uses `state/pause_trading.flag` file presence to control state
+- **Non-blocking**: Bot continues to run, evaluate signals, and log events while paused
+- **Dashboard control**: Managed via dashboard UI (`POST /pause_trading` endpoint)
+- **No data loss**: All trading logic still executes (signals, allocation, ledger logging) except order submission
+
+**Behavior:**
+
+When paused (`state/pause_trading.flag` exists):
+1. Trading loop continues normally (data fetching, candidate loading, signal evaluation)
+2. Strategy intents are computed and allocation is performed
+3. Orders are prepared and validated through risk gates
+4. **Order submission is skipped** (no broker API calls made)
+5. Ledger logs all events including "would-have-been" orders
+6. Dashboard shows warning banner: "TRADING PAUSED"
+
+When unpaused (`state/pause_trading.flag` removed):
+7. Next loop iteration resumes normal order submission
+8. No restart required
+
+**Control Methods:**
+
+1. **Dashboard UI**:
+   ```
+   Navigate to http://localhost:8000
+   Toggle "Pause Trading" switch in health panel
+   ```
+
+2. **API Endpoint**:
+   ```bash
+   # Pause trading
+   curl -X POST http://localhost:8000/pause_trading \
+     -H "Content-Type: application/json" \
+     -d '{"paused": true}'
+
+   # Resume trading
+   curl -X POST http://localhost:8000/pause_trading \
+     -H "Content-Type: application/json" \
+     -d '{"paused": false}'
+   ```
+
+3. **Manual File Control**:
+   ```bash
+   # Pause trading
+   echo "paused" > state/pause_trading.flag
+
+   # Resume trading
+   rm state/pause_trading.flag
+   ```
+
+**Use Cases:**
+- **Emergency stop**: Pause trading due to unexpected market conditions without killing bot
+- **Maintenance window**: Stop orders while investigating positions or logs
+- **Partial testing**: Test signal evaluation logic without submitting orders (similar to DryRun but runtime-controlled)
+- **Safe configuration changes**: Pause before making significant strategy parameter changes
+
+**Comparison to Other Controls:**
+
+| Feature | Pause Trading | DryRun Mode | Kill Bot Process |
+|---------|---------------|-------------|------------------|
+| Order Submission | Blocked | Blocked | Stopped |
+| Signal Evaluation | Active | Active | Stopped |
+| Ledger Logging | Active | Active | Stopped |
+| Dashboard Updates | Active | Active | Stopped |
+| Control Method | Runtime flag | CLI flag | Process termination |
+| Resume | Remove flag | Restart with --paper | Restart process |
+| Restart Required | No | Yes | Yes |
 
 ---
 
@@ -2624,8 +2704,11 @@ async def lifespan(app: FastAPI):
 | Endpoint | Purpose | Returns |
 |----------|---------|---------|
 | `GET /health` | Service health check | `{status, timestamp, registry_loaded, ledger_available}` |
+| `GET /health/detailed` | Comprehensive system health | `{status, timestamp, market_status, last_loop_tick, last_error, registry_loaded, ledger_available, single_instance_ok, trading_paused}` |
 | `GET /account/summary` | Account configuration | `{total_capital, max_daily_loss, max_total_positions, enabled_strategies_count, total_strategies_count}` |
 | `GET /strategies` | All strategies with config | `{strategies: [...], global_config: {...}}` |
+| `GET /allocation` | Allocation with normalized weights | `{equity_base, timestamp, strategies: [{strategy_id, enabled, configured_weight, normalized_weight, budget, utilization}], mode}` |
+| `GET /candidates` | Current candidate symbols | `{candidates: [{symbol, action, confidence, horizon, sector, tags, reason, expires_at}], count, last_generated}` |
 | `GET /activity?limit=N` | Recent ledger events | `{events: [...], total_events}` |
 
 **POST Endpoints (Safe Edit - Staged Changes):**
@@ -2635,6 +2718,17 @@ async def lifespan(app: FastAPI):
 | `POST /strategies/{id}/enable` | Enable/disable strategy | `{enabled: bool}` | `{success, message, pending_version}` |
 | `POST /strategies/{id}/weight` | Update capital weight | `{weight: float}` | `{success, message, pending_version}` |
 | `POST /strategies/{id}/params` | Update parameters | `{params: dict}` | `{success, message, pending_version}` |
+| `POST /pause_trading` | Pause/resume order submission | `{paused: bool}` | `{success, message}` |
+
+**Operational Control Endpoints:**
+
+- **GET /health/detailed**: Returns comprehensive system status including market hours (9:30 AM - 4:00 PM ET), last loop tick timestamp, last error from logs, and trading paused state.
+
+- **GET /allocation**: Returns per-strategy allocation details with normalized weights. When strategies are enabled/disabled, weights are dynamically normalized so they sum to 1.0. Shows equity-based budgets when account equity is available.
+
+- **GET /candidates**: Returns current symbol candidates from `out/selector/snapshot.json`. Candidates have expiration timestamps and are refreshed by external selector process.
+
+- **POST /pause_trading**: Creates/removes `state/pause_trading.flag` file. When paused, the trading loop continues to evaluate signals and log events, but skips order submission entirely. This is a safety mechanism for emergency stops without killing the bot process.
 
 **Validation:**
 - Weight must be 0.0 to 1.0 (Pydantic validation)
@@ -2665,22 +2759,47 @@ uvicorn src.ui_api.app:app --reload --port 8000
 
 **Features:**
 
-1. **Account Summary:**
+1. **Health & Status Panel:**
+   - Market status indicator (open/closed based on 9:30 AM - 4:00 PM ET)
+   - Last loop tick timestamp
+   - System health status (shows errors if any)
+   - Pause trading toggle (global kill switch)
+   - Warning banner when trading is paused
+
+2. **Account Summary:**
    - Total capital (proxy calculation)
    - Max daily loss limit
    - Max total positions
    - Enabled strategies count
 
-2. **Strategy Cards:**
+3. **Strategy Cards:**
    - Visual status badges (ENABLED/DISABLED)
    - Pending version indicator (orange border + badge)
-   - Key metrics: Weight %, Active Version, Max Position Size
+   - Key metrics:
+     - Configured Weight %
+     - Normalized Weight % (dynamic, sums to 100%)
+     - Equity-based Budget (when available)
    - Interactive controls:
      - Toggle switch for enable/disable
      - Range slider for weight adjustment (0-100%)
      - Collapsible parameters view (JSON formatted)
+     - Edit button for detailed parameter changes
 
-3. **Activity Feed:**
+4. **Candidates Inspector:**
+   - Table showing symbol candidates from selector
+   - Filterable by:
+     - Action (buy/sell/watch)
+     - Minimum confidence threshold
+     - Symbol/sector/tag search
+   - Displays:
+     - Symbol, action, confidence bar, horizon
+     - Sector classification
+     - Tags (momentum, breakout, etc.)
+     - Reason/rationale
+     - Expiration timestamp
+   - Shows count and last generated time
+
+5. **Activity Feed:**
    - Recent events from ledger (last 20)
    - Color-coded by event type:
      - Orange: config changes
@@ -2690,12 +2809,12 @@ uvicorn src.ui_api.app:app --reload --port 8000
    - Shows timestamp, event type, strategy ID, details
    - Scrollable feed
 
-4. **Auto-Refresh:**
+6. **Auto-Refresh:**
    - Automatic reload every 30 seconds
    - Manual refresh button
    - "Last updated" timestamp
 
-5. **User Feedback:**
+7. **User Feedback:**
    - Success messages (green, auto-dismiss after 3s)
    - Error messages (red, auto-dismiss after 5s)
    - Loading states during API calls

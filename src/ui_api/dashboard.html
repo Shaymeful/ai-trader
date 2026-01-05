@@ -545,6 +545,191 @@
             font-size: 0.85rem;
             margin-top: 0.5rem;
         }
+
+        /* Health Panel */
+        .health-panel {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .health-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .health-icon {
+            font-size: 1.5rem;
+        }
+
+        .health-info {
+            flex: 1;
+        }
+
+        .health-label {
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .health-value {
+            color: #f1f5f9;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .pause-control {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 0.75rem;
+            background: #0f172a;
+            border-radius: 8px;
+        }
+
+        .pause-control label {
+            color: #f1f5f9;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .warning-banner {
+            background: #7f1d1d;
+            border: 1px solid #991b1b;
+            color: #fca5a5;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            display: none;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 500;
+        }
+
+        .warning-banner.active {
+            display: flex;
+        }
+
+        /* Candidates Section */
+        .candidates-section {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .candidates-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .candidates-filters {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+
+        .filter-input {
+            padding: 0.5rem 0.75rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #f1f5f9;
+            font-size: 0.85rem;
+        }
+
+        .filter-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .candidates-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .candidates-table th {
+            text-align: left;
+            padding: 0.75rem;
+            color: #94a3b8;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border-bottom: 1px solid #334155;
+        }
+
+        .candidates-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid #334155;
+            font-size: 0.9rem;
+        }
+
+        .candidates-table tr:hover {
+            background: #0f172a;
+        }
+
+        .candidate-symbol {
+            color: #f1f5f9;
+            font-weight: 600;
+        }
+
+        .candidate-action {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .action-buy {
+            background: #10b98120;
+            color: #10b981;
+        }
+
+        .action-sell {
+            background: #ef444420;
+            color: #ef4444;
+        }
+
+        .action-watch {
+            background: #64748b20;
+            color: #94a3b8;
+        }
+
+        .candidate-tags {
+            display: flex;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+        }
+
+        .tag {
+            padding: 0.125rem 0.5rem;
+            background: #334155;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            color: #cbd5e1;
+        }
+
+        .confidence-bar {
+            width: 80px;
+            height: 6px;
+            background: #334155;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #10b981);
+        }
     </style>
 </head>
 <body>
@@ -552,10 +737,17 @@
         <header>
             <h1>AI Trader Strategy Dashboard</h1>
             <p class="subtitle">
-                <span class="status-indicator status-ok"></span>
-                Live monitoring and configuration
+                <span class="status-indicator status-ok" id="system-status-indicator"></span>
+                <span id="system-status-text">Live monitoring and configuration</span>
             </p>
         </header>
+
+        <div id="warning-container">
+            <div id="pause-warning" class="warning-banner">
+                <span style="font-size: 1.5rem;">&#9888;</span>
+                <span><strong>TRADING PAUSED</strong> - Orders will not be placed</span>
+            </div>
+        </div>
 
         <div id="error-container"></div>
 
@@ -564,6 +756,37 @@
                 Last updated: <span id="last-update">Never</span>
             </div>
             <button onclick="loadDashboard()">Refresh Now</button>
+        </div>
+
+        <div class="health-panel" id="health-panel">
+            <div class="health-item">
+                <div class="health-icon" id="market-icon">🕐</div>
+                <div class="health-info">
+                    <div class="health-label">Market Status</div>
+                    <div class="health-value" id="market-status">Loading...</div>
+                </div>
+            </div>
+            <div class="health-item">
+                <div class="health-icon">📊</div>
+                <div class="health-info">
+                    <div class="health-label">Last Loop Tick</div>
+                    <div class="health-value" id="last-tick">N/A</div>
+                </div>
+            </div>
+            <div class="health-item">
+                <div class="health-icon" id="error-icon">✓</div>
+                <div class="health-info">
+                    <div class="health-label">System Status</div>
+                    <div class="health-value" id="system-health">Healthy</div>
+                </div>
+            </div>
+            <div class="pause-control">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="pause-trading-toggle" onchange="togglePauseTrading(this.checked)">
+                    <span class="toggle-slider"></span>
+                </label>
+                <label for="pause-trading-toggle">Pause Trading</label>
+            </div>
         </div>
 
         <div class="account-summary">
@@ -614,6 +837,51 @@
                 </div>
             </div>
         </div>
+
+        <div class="candidates-section">
+            <div class="candidates-header">
+                <h2 style="margin: 0;">Candidates</h2>
+                <div style="color: #94a3b8; font-size: 0.85rem;">
+                    <span id="candidates-count">0</span> candidates |
+                    Last generated: <span id="candidates-last-generated">N/A</span>
+                </div>
+            </div>
+            <div class="candidates-filters">
+                <select id="filter-action" class="filter-input" onchange="filterCandidates()">
+                    <option value="">All Actions</option>
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                    <option value="watch">Watch</option>
+                </select>
+                <input type="number" id="filter-min-confidence" class="filter-input"
+                       placeholder="Min Confidence (0-1)" step="0.1" min="0" max="1"
+                       oninput="filterCandidates()">
+                <input type="text" id="filter-search" class="filter-input"
+                       placeholder="Search symbol, sector, tags..."
+                       oninput="filterCandidates()">
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="candidates-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Action</th>
+                            <th>Confidence</th>
+                            <th>Horizon</th>
+                            <th>Sector</th>
+                            <th>Tags</th>
+                            <th>Reason</th>
+                            <th>Expires</th>
+                        </tr>
+                    </thead>
+                    <tbody id="candidates-tbody">
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: #64748b;">Loading candidates...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <!-- Edit Strategy Modal -->
@@ -643,20 +911,38 @@
 
     <script>
         let strategiesData = [];
+        let allocationData = null;
+        let candidatesData = [];
         let currentEditStrategy = null;
 
         async function loadDashboard() {
             try {
+                // Load health status
+                const healthResponse = await fetch('/health/detailed');
+                const healthData = await healthResponse.json();
+                updateHealthPanel(healthData);
+
                 // Load account summary
                 const accountResponse = await fetch('/account/summary');
                 const accountData = await accountResponse.json();
                 updateAccountSummary(accountData);
+
+                // Load allocation
+                const allocationResponse = await fetch('/allocation');
+                allocationData = await allocationResponse.json();
 
                 // Load strategies
                 const strategiesResponse = await fetch('/strategies');
                 const strategiesResult = await strategiesResponse.json();
                 strategiesData = strategiesResult.strategies;
                 renderStrategies(strategiesData);
+
+                // Load candidates
+                const candidatesResponse = await fetch('/candidates');
+                const candidatesResult = await candidatesResponse.json();
+                candidatesData = candidatesResult.candidates;
+                renderCandidates(candidatesData);
+                updateCandidatesHeader(candidatesResult);
 
                 // Load activity
                 const activityResponse = await fetch('/activity?limit=20');
@@ -673,6 +959,157 @@
             }
         }
 
+        function updateHealthPanel(health) {
+            // Update market status
+            const marketIcon = document.getElementById('market-icon');
+            const marketStatus = document.getElementById('market-status');
+            if (health.market_status === 'open') {
+                marketIcon.textContent = '🟢';
+                marketStatus.textContent = 'Market Open';
+                marketStatus.style.color = '#10b981';
+            } else {
+                marketIcon.textContent = '🔴';
+                marketStatus.textContent = 'Market Closed';
+                marketStatus.style.color = '#94a3b8';
+            }
+
+            // Update last tick
+            const lastTick = document.getElementById('last-tick');
+            if (health.last_loop_tick) {
+                const tickDate = new Date(health.last_loop_tick);
+                lastTick.textContent = tickDate.toLocaleTimeString();
+            } else {
+                lastTick.textContent = 'No ticks yet';
+            }
+
+            // Update system health
+            const errorIcon = document.getElementById('error-icon');
+            const systemHealth = document.getElementById('system-health');
+            if (health.last_error) {
+                errorIcon.textContent = '⚠';
+                systemHealth.textContent = 'Errors Detected';
+                systemHealth.style.color = '#f59e0b';
+            } else {
+                errorIcon.textContent = '✓';
+                systemHealth.textContent = 'Healthy';
+                systemHealth.style.color = '#10b981';
+            }
+
+            // Update pause trading toggle
+            const pauseToggle = document.getElementById('pause-trading-toggle');
+            pauseToggle.checked = health.trading_paused;
+
+            // Show/hide warning banner
+            const pauseWarning = document.getElementById('pause-warning');
+            if (health.trading_paused) {
+                pauseWarning.classList.add('active');
+            } else {
+                pauseWarning.classList.remove('active');
+            }
+
+            // Update system status indicator
+            const statusIndicator = document.getElementById('system-status-indicator');
+            const statusText = document.getElementById('system-status-text');
+            if (health.last_error) {
+                statusIndicator.className = 'status-indicator status-warning';
+                statusText.textContent = 'System warnings detected';
+            } else if (health.trading_paused) {
+                statusIndicator.className = 'status-indicator status-warning';
+                statusText.textContent = 'Trading paused';
+            } else {
+                statusIndicator.className = 'status-indicator status-ok';
+                statusText.textContent = 'Live monitoring and configuration';
+            }
+        }
+
+        async function togglePauseTrading(paused) {
+            try {
+                const response = await fetch('/pause_trading', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paused })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    setTimeout(() => loadDashboard(), 500);
+                } else {
+                    showError(result.detail || 'Failed to update pause state');
+                    loadDashboard();
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+                loadDashboard();
+            }
+        }
+
+        function updateCandidatesHeader(data) {
+            document.getElementById('candidates-count').textContent = data.count;
+            if (data.last_generated) {
+                const genDate = new Date(data.last_generated);
+                document.getElementById('candidates-last-generated').textContent = genDate.toLocaleString();
+            }
+        }
+
+        function renderCandidates(candidates) {
+            const tbody = document.getElementById('candidates-tbody');
+            if (candidates.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b;">No candidates available</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = candidates.map(c => {
+                const expiresDate = c.expires_at ? new Date(c.expires_at) : null;
+                const expiresText = expiresDate ? expiresDate.toLocaleString() : 'N/A';
+                const actionClass = `action-${c.action}`;
+
+                return `
+                    <tr data-symbol="${c.symbol}" data-action="${c.action}" data-confidence="${c.confidence}"
+                        data-sector="${c.sector || ''}" data-tags="${c.tags.join(' ')}">
+                        <td class="candidate-symbol">${c.symbol}</td>
+                        <td><span class="candidate-action ${actionClass}">${c.action.toUpperCase()}</span></td>
+                        <td>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <div class="confidence-bar">
+                                    <div class="confidence-fill" style="width: ${c.confidence * 100}%"></div>
+                                </div>
+                                <span style="color: #cbd5e1;">${(c.confidence * 100).toFixed(0)}%</span>
+                            </div>
+                        </td>
+                        <td style="color: #cbd5e1;">${c.horizon}</td>
+                        <td style="color: #cbd5e1;">${c.sector || '-'}</td>
+                        <td>
+                            <div class="candidate-tags">
+                                ${c.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
+                            </div>
+                        </td>
+                        <td style="color: #cbd5e1;">${c.reason}</td>
+                        <td style="color: #94a3b8; font-size: 0.8rem;">${expiresText}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function filterCandidates() {
+            const action = document.getElementById('filter-action').value.toLowerCase();
+            const minConfidence = parseFloat(document.getElementById('filter-min-confidence').value) || 0;
+            const search = document.getElementById('filter-search').value.toLowerCase();
+
+            const filtered = candidatesData.filter(c => {
+                if (action && c.action !== action) return false;
+                if (c.confidence < minConfidence) return false;
+                if (search) {
+                    const searchable = `${c.symbol} ${c.sector || ''} ${c.tags.join(' ')}`.toLowerCase();
+                    if (!searchable.includes(search)) return false;
+                }
+                return true;
+            });
+
+            renderCandidates(filtered);
+        }
+
         function updateAccountSummary(data) {
             document.getElementById('total-capital').textContent = '$' + data.total_capital.toLocaleString();
             document.getElementById('max-daily-loss').textContent = '$' + data.max_daily_loss.toLocaleString();
@@ -687,7 +1124,20 @@
             const totalWeight = strategies.reduce((sum, s) => sum + s.weight, 0);
             updateWeightIndicator(totalWeight);
 
-            container.innerHTML = strategies.map(strategy => `
+            // Create allocation lookup
+            const allocationLookup = {};
+            if (allocationData && allocationData.strategies) {
+                allocationData.strategies.forEach(s => {
+                    allocationLookup[s.strategy_id] = s;
+                });
+            }
+
+            container.innerHTML = strategies.map(strategy => {
+                const allocation = allocationLookup[strategy.strategy_id];
+                const normalizedWeight = allocation ? allocation.normalized_weight : 0;
+                const budget = allocation ? allocation.budget : 0;
+
+                return `
                 <div class="strategy-card ${strategy.pending_version ? 'pending' : ''}" id="strategy-${strategy.strategy_id}">
                     <div class="strategy-header">
                         <div>
@@ -704,9 +1154,19 @@
 
                     <div class="strategy-metrics">
                         <div class="metric">
-                            <div class="metric-label">Weight</div>
+                            <div class="metric-label">Configured Weight</div>
                             <div class="metric-value">${(strategy.weight * 100).toFixed(0)}%</div>
                         </div>
+                        ${allocation ? `
+                        <div class="metric">
+                            <div class="metric-label">Normalized Weight</div>
+                            <div class="metric-value" style="color: #3b82f6;">${(normalizedWeight * 100).toFixed(1)}%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Budget</div>
+                            <div class="metric-value">${budget > 0 ? '$' + budget.toFixed(0) : 'N/A'}</div>
+                        </div>
+                        ` : `
                         <div class="metric">
                             <div class="metric-label">Version</div>
                             <div class="metric-value">v${strategy.active_version}</div>
@@ -715,6 +1175,7 @@
                             <div class="metric-label">Max Position</div>
                             <div class="metric-value">$${strategy.risk_limits.max_position_size}</div>
                         </div>
+                        `}
                     </div>
 
                     <div class="strategy-controls">
@@ -754,7 +1215,8 @@
                         <button class="btn-edit" onclick="openEditModal('${strategy.strategy_id}')">✏️ Edit</button>
                     </div>
                 </div>
-            `).join('');
+            `
+            }).join('');
         }
 
         function updateWeightIndicator(totalWeight) {

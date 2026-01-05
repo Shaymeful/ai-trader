@@ -1,5 +1,6 @@
 """Test script to verify Alpaca data API credentials."""
 
+import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -7,7 +8,6 @@ from alpaca.data import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
-import os
 
 # Load environment (.env overrides system variables)
 load_dotenv(override=True)
