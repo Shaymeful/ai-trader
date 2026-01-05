@@ -1775,6 +1775,405 @@ python -m src.app.runner --mode paper --loop
 
 ---
 
+## Candidate System (Selector-to-Execution Pipeline)
+
+### Overview
+
+The candidate system implements a multi-layer architecture that separates **candidate sourcing** (AI/news/screeners) from **strategy confirmation** (price-action validation). This design enables:
+
+- **Attribution tracking**: Full traceability from candidate → strategy → intent → order → fill → PnL
+- **Risk isolation**: Strategies gate on both candidate recommendation AND price confirmation
+- **Flexible sourcing**: Candidates can come from AI, news APIs, screeners, or manual input
+- **Backward compatibility**: If no candidates exist, strategies fall back to config universe
+
+**Design Principle:** Candidates represent *potential* trading opportunities that strategies must independently confirm. A BUY candidate does NOT automatically result in a trade - the strategy must verify the signal with price action.
+
+### Architecture Layers
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 1: Selector (AI/News/Screener)                       │
+│  - Generates candidates with metadata                       │
+│  - Writes to out/selector/snapshot.json                     │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 2: Candidate Store (src/app/candidates/)             │
+│  - Loads and filters candidates                             │
+│  - Applies: expiration, liquidity, deduplication            │
+│  - Outputs: tradeable candidates only (BUY/SELL)            │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 3: Strategy Execution (src/app/runner.py)            │
+│  - Strategies evaluate candidate symbols                    │
+│  - Generate intents ONLY if BOTH:                           │
+│    * Candidate says BUY/SELL                                │
+│    * Strategy confirms with price-action                    │
+│  - Propagates candidate_id through to orders                │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 4: Ledger/Attribution (src/app/ledger.py)            │
+│  - Tracks candidate_loaded events                           │
+│  - Tracks strategy_intent_created events                    │
+│  - Tracks order_placed events (with candidate_id)           │
+│  - Enables full attribution analysis                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Candidate Schema
+
+**Location:** `src/app/candidates/schema.py`
+
+**Core Fields:**
+```python
+class Candidate(BaseModel):
+    # Identification
+    candidate_id: str              # Stable unique identifier
+    created_at: str                # ISO 8601 timestamp (UTC)
+    expires_at: str                # ISO 8601 timestamp (UTC)
+
+    # Trading details
+    symbol: str                    # Trading symbol
+    action: Action                 # BUY, SELL, WATCH, AVOID
+    confidence: float              # 0.0 to 1.0
+    horizon: Horizon               # INTRADAY, SWING, LONG
+
+    # Optional metadata
+    sector: str | None             # Sector classification
+    event_type: str | None         # Event trigger (earnings, news, technical)
+    tags: list[str]                # Additional tags
+    reason: str | None             # Human-readable reason
+    avg_dollar_volume: float | None  # For liquidity filtering
+```
+
+**Enums:**
+- **Action:** `BUY`, `SELL`, `WATCH` (monitor only), `AVOID` (explicitly skip)
+- **Horizon:** `INTRADAY` (same-day), `SWING` (2-10 days), `LONG` (weeks+)
+
+**Methods:**
+- `is_expired(now)`: Check if candidate has expired
+- `is_tradeable()`: Returns True if action is BUY or SELL
+
+### Storage Format
+
+**Snapshot File:** `out/selector/snapshot.json`
+
+```json
+{
+  "generated_at": "2026-01-05T04:11:20Z",
+  "count": 3,
+  "candidates": [
+    {
+      "candidate_id": "sample-001",
+      "created_at": "2026-01-05T03:42:32Z",
+      "expires_at": "2026-01-05T09:42:32Z",
+      "symbol": "AAPL",
+      "action": "buy",
+      "confidence": 0.85,
+      "horizon": "intraday",
+      "sector": "Technology",
+      "event_type": "earnings_beat",
+      "tags": ["momentum", "breakout"],
+      "reason": "Strong earnings beat with positive guidance",
+      "avg_dollar_volume": 50000000000.0
+    }
+  ],
+  "metadata": {
+    "source": "ai_selector",
+    "description": "GPT-4 generated candidates"
+  }
+}
+```
+
+**Event Log:** `out/selector/events.jsonl` (JSONL format, one event per line)
+- Used for tracking candidate generation history
+- Each line is a JSON object with timestamp and event_type
+
+### Filtering Pipeline
+
+**Location:** `src/app/candidates/store.py`
+
+The filtering pipeline processes raw candidates through multiple stages:
+
+1. **filter_valid()**: Remove expired candidates
+   - Compares `expires_at` against current time
+   - Timezone-aware comparison (handles naive/aware datetime)
+
+2. **filter_by_liquidity()**: Remove illiquid candidates
+   - Filters by `avg_dollar_volume >= min_dollar_volume`
+   - Default threshold: $1M daily volume
+   - Candidates with `avg_dollar_volume=None` pass through (unknown liquidity)
+
+3. **deduplicate()**: Remove duplicate candidate_ids
+   - Keeps newest candidate based on `created_at` timestamp
+   - Handles updates to existing candidates
+
+4. **Filter to tradeable actions**: Remove WATCH and AVOID
+   - Only BUY and SELL actions pass through
+   - WATCH candidates are tracked but not traded
+   - AVOID candidates explicitly excluded
+
+**Usage:**
+```python
+from src.app.candidates.store import get_tradeable_candidates, load_candidates
+
+# Load and filter candidates
+raw_candidates = load_candidates()  # Safe fallback to empty list
+tradeable = get_tradeable_candidates(
+    raw_candidates,
+    now=datetime.now(UTC).replace(tzinfo=None),
+    min_dollar_volume=1_000_000.0
+)
+```
+
+### Integration with Strategies
+
+**Location:** `src/app/runner.py` (shadow and paper modes)
+
+**Execution Flow:**
+
+1. **Load Candidates:**
+   ```python
+   raw_candidates = load_candidates()
+   tradeable_candidates = get_tradeable_candidates(raw_candidates, now, min_dollar_volume)
+   ```
+
+2. **Build Universe:**
+   ```python
+   if tradeable_candidates:
+       universe = [c.symbol for c in tradeable_candidates]
+       candidate_map = {c.symbol: c.candidate_id for c in tradeable_candidates}
+   else:
+       universe = config.universe_symbols  # Fallback to config
+       candidate_map = {}
+   ```
+
+3. **Strategy Evaluation:**
+   ```python
+   for strategy in strategies:
+       intents = strategy.generate_intents(universe, market_data, candidate_map)
+
+       for intent in intents:
+           # intent.candidate_id contains the candidate attribution
+           if intent.target_quantity > 0:  # Strategy confirmed candidate
+               # Proceed to order placement
+   ```
+
+**Strategy Interface:**
+```python
+class Strategy(ABC):
+    @abstractmethod
+    def generate_intents(
+        self,
+        universe: list[str],
+        market_data: dict,
+        candidate_map: dict[str, str] | None = None
+    ) -> list[PositionIntent]:
+        pass
+```
+
+**PositionIntent Model:**
+```python
+@dataclass
+class PositionIntent:
+    symbol: str
+    target_quantity: int
+    conviction: float
+    reason: str
+    candidate_id: str | None = None  # Propagated from candidate_map
+```
+
+### Ledger Events
+
+**Location:** `src/app/ledger.py`
+
+The ledger tracks candidate attribution through the full execution pipeline:
+
+#### CandidateLoadedEvent
+Emitted when candidates are loaded from snapshot:
+```python
+{
+  "event_id": "uuid",
+  "timestamp": "2026-01-05T04:11:20+00:00",
+  "event_type": "candidate_loaded",
+  "count_total": 3,
+  "count_tradeable": 2,
+  "symbols": ["AAPL", "SPY"],
+  "snapshot_path": "out/selector/snapshot.json"
+}
+```
+
+#### CandidateSelectedEvent
+Emitted when a strategy selects a candidate for evaluation:
+```python
+{
+  "event_id": "uuid",
+  "timestamp": "2026-01-05T04:11:21+00:00",
+  "event_type": "candidate_selected",
+  "candidate_id": "sample-001",
+  "symbol": "AAPL",
+  "action": "buy",
+  "confidence": 0.85,
+  "horizon": "intraday",
+  "strategy_id": "Trend_MA20",
+  "reason": "Candidate passed strategy filters"
+}
+```
+
+#### StrategyIntentCreatedEvent
+Emitted when a strategy generates a position intent:
+```python
+{
+  "event_id": "uuid",
+  "timestamp": "2026-01-05T04:11:22+00:00",
+  "event_type": "strategy_intent_created",
+  "strategy_id": "Trend_MA20",
+  "version": 1,
+  "symbol": "AAPL",
+  "target_quantity": 1,
+  "conviction": 0.85,
+  "reason": "Price 150.0 > MA(20) 145.0",
+  "candidate_id": "sample-001"
+}
+```
+
+#### OrderPlacedEvent (Updated)
+Includes candidate_id for full attribution:
+```python
+{
+  "event_id": "uuid",
+  "timestamp": "2026-01-05T04:11:23+00:00",
+  "event_type": "order_placed",
+  "strategy_id": "Trend_MA20",
+  "version": 1,
+  "client_order_id": "order-123",
+  "symbol": "AAPL",
+  "side": "buy",
+  "quantity": "1",
+  "order_type": "market",
+  "limit_price": null,
+  "candidate_id": "sample-001"
+}
+```
+
+**Ledger File:** `out/ledger/YYYY-MM-DD.jsonl` (one event per line)
+
+### Attribution Chain Example
+
+Full end-to-end attribution flow:
+
+```
+1. candidate_loaded
+   ├─ 3 total candidates loaded
+   └─ 2 tradeable (AAPL buy, SPY buy)
+
+2. strategy_intent_created
+   ├─ Trend_MA20 → AAPL
+   ├─ candidate_id: sample-001
+   └─ reason: "Price > MA"
+
+3. order_placed
+   ├─ AAPL market buy 1 share
+   ├─ candidate_id: sample-001
+   └─ strategy_id: Trend_MA20
+
+4. order_filled
+   ├─ AAPL filled @ $150.00
+   └─ candidate_id: sample-001
+
+5. position_update
+   └─ AAPL position: +1 @ $150.00, PnL: $0.00
+
+Query: "Which candidate generated the most PnL?"
+Answer: Filter ledger by candidate_id, sum realized PnL
+```
+
+### Backward Compatibility
+
+The candidate system is fully backward compatible:
+
+1. **Empty Candidate List:**
+   - `load_candidates()` returns `[]` if no snapshot exists
+   - Runner falls back to `config.universe_symbols`
+   - No candidates = no candidate-related ledger events
+
+2. **Optional candidate_id:**
+   - All `candidate_id` fields are `str | None`
+   - Legacy code paths set `candidate_id=None`
+   - Existing intents/orders continue to work
+
+3. **Config Universe Fallback:**
+   ```python
+   if tradeable_candidates:
+       universe = [c.symbol for c in tradeable_candidates]
+   else:
+       universe = config.universe_symbols  # Fallback
+   ```
+
+4. **No Breaking Changes:**
+   - Existing strategy interface preserved
+   - `candidate_map` parameter is optional
+   - All tests pass (389/395, 6 pre-existing failures)
+
+### Testing
+
+**Test File:** `tests/test_candidates.py`
+
+**Test Coverage:**
+- Schema validation (19 tests)
+- Candidate expiration and tradeability
+- Confidence range validation (0.0-1.0)
+- Timestamp format validation (ISO 8601)
+- Storage (write/load snapshot)
+- Filtering pipeline:
+  - Expiration filtering
+  - Liquidity filtering
+  - Deduplication (keeps newest)
+  - Full pipeline (get_tradeable_candidates)
+- Propagation:
+  - PositionIntent includes candidate_id
+  - Strategies propagate candidate_id
+- Ledger events:
+  - CandidateLoadedEvent
+  - StrategyIntentCreatedEvent
+  - OrderPlacedEvent with candidate_id
+
+**Sample Data Generation:**
+```bash
+python -m src.app.candidates.sample_snapshot --output out/selector/snapshot.json --force
+```
+
+Generates 3 sample candidates:
+- AAPL (buy, confidence=0.85, intraday)
+- SPY (buy, confidence=0.72, swing)
+- TSLA (watch, confidence=0.65, intraday)
+
+### Future Enhancements
+
+**Short Term:**
+- Add `CandidateSelectedEvent` emission when strategies evaluate candidates
+- Wire `candidate_id` through to actual order placement (currently in events only)
+- Add ledger querying/reporting tools for attribution analysis
+
+**Medium Term:**
+- Implement AI-powered candidate generation (GPT-4 + news APIs)
+- Add candidate scoring/ranking based on historical performance
+- Support per-strategy candidate filtering (sector, horizon, confidence thresholds)
+- Add candidate expiration notifications
+
+**Long Term:**
+- Real-time candidate streaming (WebSocket)
+- Machine learning model for candidate quality scoring
+- Multi-source candidate aggregation (AI + screeners + news)
+- Candidate performance analytics dashboard
+
+---
+
 ## Strategy Dashboard System
 
 ### Overview
