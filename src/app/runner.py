@@ -755,6 +755,10 @@ def _check_parent_is_runner() -> tuple[bool, dict]:
         - is_runner: True if parent is python.exe with runner-like command line
         - info_dict: Parent process info (pid, name, cmdline)
     """
+    # This function is Windows-specific
+    if sys.platform != "win32":
+        return False, {"platform": sys.platform, "note": "Windows-only check"}
+
     try:
         ppid = os.getppid()
 
@@ -834,6 +838,10 @@ def _acquire_mutex(mutex_name: str) -> bool:
         True if mutex acquired (we are the only instance)
         False if mutex already exists OR acquisition failed
     """
+    # This function is Windows-specific
+    if sys.platform != "win32":
+        return True  # On non-Windows, always return True (no mutex check)
+
     global _MUTEX_HANDLE
 
     try:
@@ -872,6 +880,10 @@ def _acquire_file_lock(lock_file: Path) -> bool:
         True if lock acquired (we are the only instance)
         False if lock already held OR acquisition failed
     """
+    # This function is Windows-specific
+    if sys.platform != "win32":
+        return True  # On non-Windows, always return True (no file lock check)
+
     global _LOCK_FILE_HANDLE
 
     try:
