@@ -388,7 +388,7 @@ def run_paper_mode(
 
     print("=" * 80)
     if not dry_run:
-        print("⚠ LIVE PAPER TRADING ENABLED ⚠")
+        print("WARNING: LIVE PAPER TRADING ENABLED")
         print("=" * 80)
     print(f"PAPER MODE: Strategy Runner {'(DRY-RUN)' if dry_run else '(LIVE ORDERS)'}")
     print("=" * 80)
