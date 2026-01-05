@@ -1775,6 +1775,607 @@ python -m src.app.runner --mode paper --loop
 
 ---
 
+## Strategy Dashboard System
+
+### Overview
+
+The strategy dashboard provides a read-only monitoring interface and safe configuration API for managing multiple trading strategies on a single Alpaca account. The system is **optional** - the bot runs normally if the dashboard is never started.
+
+**Key Design Principles:**
+- **Next-tick activation**: All configuration changes are staged and activate only at the start of the next trading loop iteration
+- **No mid-loop changes**: Zero impact on in-flight orders or execution logic
+- **Optional service**: Bot functions identically whether dashboard is running or not
+- **Safe edits**: All changes go through validation and version tracking
+- **Backward compatible**: Existing execution, risk, and order logic unchanged
+
+### Architecture Components
+
+#### 1. Strategy Registry (`src/app/strategy_registry.py`)
+
+**Purpose:** Central configuration management with version tracking and deterministic loading.
+
+**Data Model:**
+```python
+@dataclass
+class StrategyConfig:
+    strategy_id: str              # Unique identifier
+    name: str                     # Display name
+    description: str              # Human-readable description
+    enabled: bool                 # Whether strategy is active
+    weight: float                 # Capital allocation (0.0 to 1.0)
+    params: dict[str, Any]        # Strategy-specific parameters
+    risk_limits: dict             # Per-strategy risk constraints
+    active_version: int           # Currently running version
+    pending_version: int | None   # Staged version for next tick
+    last_modified: datetime       # Last configuration change timestamp
+
+@dataclass
+class GlobalConfig:
+    max_daily_loss: float
+    max_total_positions: int
+    max_order_notional: float
+    bar_timeframe: str
+    market_open_hour: int
+    market_open_minute: int
+    market_close_hour: int
+    market_close_minute: int
+```
+
+**Configuration Sources:**
+1. **Base Configuration** (`config/strategies.yaml`):
+   - Version-controlled strategy definitions
+   - Immutable baseline configuration
+   - Defines default parameters and risk limits
+
+2. **Operator Overrides** (`out/strategies_overrides.json`):
+   - Runtime configuration changes
+   - Persisted modifications from dashboard/API
+   - Merged on top of base configuration
+
+**Loading Process:**
+1. Load base config from YAML
+2. Parse strategies and global settings
+3. Load overrides from JSON (if exists)
+4. Apply overrides with deterministic merge (override wins)
+5. Initialize version tracking
+
+**API Methods:**
+- `load()` - Load and merge configurations
+- `get_strategy(strategy_id)` - Get specific strategy config
+- `get_enabled_strategies()` - Filter for enabled strategies only
+- `stage_change(strategy_id, changes)` - Stage configuration change
+- `check_and_activate_pending()` - Activate pending versions (called at loop start)
+- `_save_overrides()` - Persist changes to JSON (atomic write)
+
+**Version Tracking:**
+- `active_version`: Currently running configuration version
+- `pending_version`: Configuration staged for next loop tick
+- Each `stage_change()` increments `pending_version`
+- `check_and_activate_pending()` promotes `pending_version` to `active_version`
+
+**Example Base Configuration** (`config/strategies.yaml`):
+```yaml
+strategies:
+  - strategy_id: "Trend_MA20"
+    name: "Trend Following (MA20)"
+    description: "SMA crossover with 10/20 periods"
+    enabled: true
+    weight: 0.4
+    params:
+      sma_fast_period: 10
+      sma_slow_period: 20
+    risk_limits:
+      max_position_size: 5000
+      max_positions: 3
+      max_daily_loss: 500
+
+global:
+  max_daily_loss: 1000
+  max_total_positions: 10
+  max_order_notional: 10000
+  bar_timeframe: "1Min"
+```
+
+#### 2. Event Ledger (`src/app/ledger.py`)
+
+**Purpose:** Append-only event log for tracking strategy decisions, orders, and fills with deterministic state reconstruction.
+
+**File Format:** JSONL (JSON Lines) - one event per line
+- Location: `out/ledger/YYYY-MM-DD.jsonl`
+- Daily rotation (one file per calendar day)
+
+**Event Types:**
+1. `strategy_config_activated` - Strategy configuration version activated
+2. `signal_generated` - Strategy produced a trading signal
+3. `order_placed` - Order submitted to broker
+4. `order_filled` - Order execution completed
+5. `position_update` - Position state changed
+
+**Event Schema:**
+```python
+@dataclass
+class LedgerEvent:
+    event_id: str        # UUID
+    timestamp: str       # ISO 8601 timestamp (UTC)
+    event_type: str      # Event type discriminator
+```
+
+**Example Events:**
+```json
+{"event_id": "uuid", "timestamp": "2024-01-15T10:30:00Z", "event_type": "strategy_config_activated", "strategy_id": "Trend_MA20", "version": 2, "config_snapshot": {...}}
+{"event_id": "uuid", "timestamp": "2024-01-15T10:31:00Z", "event_type": "signal_generated", "strategy_id": "Trend_MA20", "version": 2, "symbol": "AAPL", "signal_type": "buy", "strength": 0.85}
+{"event_id": "uuid", "timestamp": "2024-01-15T10:31:05Z", "event_type": "order_placed", "strategy_id": "Trend_MA20", "version": 2, "client_order_id": "AAPL-uuid", "symbol": "AAPL", "side": "buy", "quantity": "10"}
+{"event_id": "uuid", "timestamp": "2024-01-15T10:31:30Z", "event_type": "order_filled", "strategy_id": "Trend_MA20", "version": 2, "client_order_id": "AAPL-uuid", "fill_price": "150.50"}
+```
+
+**API Methods:**
+- `append(event)` - Append event to today's ledger
+- `read_all(date=None)` - Read all events (optionally for specific date)
+- `rebuild_state()` - Deterministically reconstruct state from event stream
+
+**State Reconstruction:**
+The `rebuild_state()` method processes all events in chronological order to reconstruct:
+- Active strategy configurations
+- Per-strategy positions (symbol -> quantity, avg_price, unrealized_pnl)
+- Per-strategy realized PnL
+- Order history with fill status
+
+This enables:
+- Crash recovery without external state
+- Historical PnL attribution
+- Audit trail for all strategy decisions
+- Debugging and backtesting
+
+#### 3. Order Attribution
+
+**Purpose:** Track which strategy generated each order for multi-strategy attribution.
+
+**Model Changes:**
+```python
+class Order(BaseModel):
+    # ... existing fields ...
+    strategy_id: str | None = None      # Strategy that generated order
+    strategy_version: int | None = None # Strategy version at order time
+
+class OrderRecord(BaseModel):  # CSV output
+    # ... existing fields ...
+    strategy_id: str | None = None
+    strategy_version: int | None = None
+
+class FillRecord(BaseModel):   # CSV output
+    # ... existing fields ...
+    strategy_id: str | None = None
+    strategy_version: int | None = None
+
+class TradeRecord(BaseModel):  # CSV output
+    # ... existing fields ...
+    strategy_id: str | None = None
+    strategy_version: int | None = None
+```
+
+**CSV Headers Updated:**
+- `orders.csv`: Added `strategy_id,strategy_version` columns
+- `fills.csv`: Added `strategy_id,strategy_version` columns
+- `trades.csv`: Added `strategy_id,strategy_version` columns
+
+**Backward Compatibility:**
+- Fields are optional (default to `None`)
+- Existing orders without attribution still work
+- Empty strings in CSV if no attribution
+
+#### 4. Trading Loop Integration (`src/app/runner.py`)
+
+**Initialization:**
+```python
+# Before loop starts
+registry = StrategyRegistry()
+print(f"Registry loaded: {len(registry.get_state().strategies)} strategies configured")
+```
+
+**Next-Tick Activation:**
+```python
+# At START of each loop iteration
+activated = registry.check_and_activate_pending()
+if activated:
+    for strategy_id, old_version, new_version in activated:
+        print(f"  {strategy_id}: v{old_version} → v{new_version}")
+```
+
+**Execution Flow:**
+1. Loop iteration begins
+2. `check_and_activate_pending()` promotes any staged changes
+3. Log activated version changes
+4. Execute trading logic with **new** configuration
+5. Sleep until next iteration
+
+**Safety:**
+- Changes activate at loop boundary only
+- No mid-loop configuration drift
+- Atomic version transitions
+- Deterministic activation timing
+
+#### 5. FastAPI Service (`src/ui_api/app.py`)
+
+**Purpose:** RESTful API for read-only monitoring and safe configuration edits.
+
+**Startup:**
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global registry, ledger
+    registry = StrategyRegistry()
+    ledger = Ledger()
+    yield
+```
+
+**GET Endpoints (Read-Only):**
+
+| Endpoint | Purpose | Returns |
+|----------|---------|---------|
+| `GET /health` | Service health check | `{status, timestamp, registry_loaded, ledger_available}` |
+| `GET /account/summary` | Account configuration | `{total_capital, max_daily_loss, max_total_positions, enabled_strategies_count, total_strategies_count}` |
+| `GET /strategies` | All strategies with config | `{strategies: [...], global_config: {...}}` |
+| `GET /activity?limit=N` | Recent ledger events | `{events: [...], total_events}` |
+
+**POST Endpoints (Safe Edit - Staged Changes):**
+
+| Endpoint | Purpose | Request Body | Returns |
+|----------|---------|--------------|---------|
+| `POST /strategies/{id}/enable` | Enable/disable strategy | `{enabled: bool}` | `{success, message, pending_version}` |
+| `POST /strategies/{id}/weight` | Update capital weight | `{weight: float}` | `{success, message, pending_version}` |
+| `POST /strategies/{id}/params` | Update parameters | `{params: dict}` | `{success, message, pending_version}` |
+
+**Validation:**
+- Weight must be 0.0 to 1.0 (Pydantic validation)
+- Strategy ID must exist (ValueError on unknown strategy)
+- All changes persist to `out/strategies_overrides.json`
+- All changes set `pending_version` and activate on next tick
+
+**Error Handling:**
+- 400 Bad Request: Invalid input (weight out of range, unknown strategy)
+- 500 Internal Server Error: Failed to persist changes
+- 503 Service Unavailable: Registry/ledger not loaded
+- Proper exception chaining with `from e`
+
+**Starting the Service:**
+```bash
+uvicorn src.ui_api.app:app --reload --port 8000
+```
+
+**API Documentation:**
+- Automatic OpenAPI schema: http://localhost:8000/docs
+- ReDoc alternative: http://localhost:8000/redoc
+
+#### 6. HTML Dashboard (`src/ui_api/dashboard.html`)
+
+**Purpose:** Single-page web application for visual strategy monitoring and configuration.
+
+**Served At:** `GET /` - http://localhost:8000
+
+**Features:**
+
+1. **Account Summary:**
+   - Total capital (proxy calculation)
+   - Max daily loss limit
+   - Max total positions
+   - Enabled strategies count
+
+2. **Strategy Cards:**
+   - Visual status badges (ENABLED/DISABLED)
+   - Pending version indicator (orange border + badge)
+   - Key metrics: Weight %, Active Version, Max Position Size
+   - Interactive controls:
+     - Toggle switch for enable/disable
+     - Range slider for weight adjustment (0-100%)
+     - Collapsible parameters view (JSON formatted)
+
+3. **Activity Feed:**
+   - Recent events from ledger (last 20)
+   - Color-coded by event type:
+     - Orange: config changes
+     - Blue: signals
+     - Purple: orders
+     - Green: fills
+   - Shows timestamp, event type, strategy ID, details
+   - Scrollable feed
+
+4. **Auto-Refresh:**
+   - Automatic reload every 30 seconds
+   - Manual refresh button
+   - "Last updated" timestamp
+
+5. **User Feedback:**
+   - Success messages (green, auto-dismiss after 3s)
+   - Error messages (red, auto-dismiss after 5s)
+   - Loading states during API calls
+   - Graceful error handling
+
+**Technology:**
+- Self-contained single HTML file
+- Embedded CSS (no external stylesheets)
+- Vanilla JavaScript (no frameworks)
+- Mobile-responsive design
+- Dark theme (`#0f172a` background)
+
+**API Integration:**
+```javascript
+// On load and every 30s
+async function loadDashboard() {
+    const accountData = await fetch('/account/summary');
+    const strategiesData = await fetch('/strategies');
+    const activityData = await fetch('/activity?limit=20');
+    // Update UI
+}
+
+// User interactions
+async function toggleStrategy(strategyId, enabled) {
+    await fetch(`/strategies/${strategyId}/enable`, {
+        method: 'POST',
+        body: JSON.stringify({enabled})
+    });
+    showSuccess('Change will activate on next loop tick');
+    loadDashboard();  // Refresh to show pending version
+}
+```
+
+### Usage Examples
+
+#### Starting the Dashboard
+
+```bash
+# Terminal 1: Start trading bot with registry
+python -m src.app.runner --mode paper --dry-run --loop
+
+# Terminal 2: Start dashboard API (optional)
+uvicorn src.ui_api.app:app --reload --port 8000
+
+# Browser: Open dashboard
+# http://localhost:8000
+```
+
+#### Programmatic API Usage
+
+```bash
+# Get all strategies
+curl http://localhost:8000/strategies
+
+# Disable a strategy
+curl -X POST http://localhost:8000/strategies/Trend_MA20/enable \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+
+# Update weight
+curl -X POST http://localhost:8000/strategies/MeanRev_Z1.0/weight \
+  -H "Content-Type: application/json" \
+  -d '{"weight": 0.5}'
+
+# Update parameters
+curl -X POST http://localhost:8000/strategies/Trend_MA20/params \
+  -H "Content-Type: application/json" \
+  -d '{"params": {"sma_fast_period": 15, "sma_slow_period": 30}}'
+```
+
+#### Configuration Files
+
+**Base Configuration** (`config/strategies.yaml`):
+```yaml
+strategies:
+  - strategy_id: "Trend_MA20"
+    name: "Trend Following (MA20)"
+    description: "SMA crossover with 10/20 periods for trend following"
+    enabled: true
+    weight: 0.4
+    params:
+      sma_fast_period: 10
+      sma_slow_period: 20
+    risk_limits:
+      max_position_size: 5000
+      max_positions: 3
+      max_daily_loss: 500
+
+  - strategy_id: "MeanRev_Z1.0"
+    name: "Mean Reversion (Z-Score 1.0)"
+    description: "SMA crossover with 5/15 periods for mean reversion"
+    enabled: true
+    weight: 0.3
+    params:
+      sma_fast_period: 5
+      sma_slow_period: 15
+    risk_limits:
+      max_position_size: 3000
+      max_positions: 5
+      max_daily_loss: 300
+
+  - strategy_id: "Momentum_MACD"
+    name: "Momentum (MACD-like)"
+    description: "SMA crossover with 12/26 periods for momentum"
+    enabled: false
+    weight: 0.3
+    params:
+      sma_fast_period: 12
+      sma_slow_period: 26
+    risk_limits:
+      max_position_size: 4000
+      max_positions: 4
+      max_daily_loss: 400
+
+global:
+  max_daily_loss: 1000
+  max_total_positions: 10
+  max_order_notional: 10000
+  bar_timeframe: "1Min"
+  market_open_hour: 9
+  market_open_minute: 30
+  market_close_hour: 16
+  market_close_minute: 0
+```
+
+**Overrides File** (`out/strategies_overrides.json` - auto-generated):
+```json
+{
+  "strategies": {
+    "Trend_MA20": {
+      "enabled": false,
+      "weight": 0.3,
+      "params": {
+        "sma_fast_period": 10,
+        "sma_slow_period": 20
+      },
+      "active_version": 2,
+      "pending_version": null,
+      "last_modified": "2024-01-15T10:30:00+00:00"
+    }
+  },
+  "registry_version": 1,
+  "last_saved": "2024-01-15T10:30:00+00:00"
+}
+```
+
+### Safety Guarantees
+
+1. **Next-Tick Activation:**
+   - Changes never apply mid-loop
+   - All changes activate at loop boundary
+   - Deterministic activation timing
+   - No race conditions
+
+2. **Version Tracking:**
+   - Every change increments version
+   - `active_version` vs `pending_version` clearly separated
+   - Audit trail of all configuration changes
+   - Rollback possible by reverting overrides file
+
+3. **Atomic Persistence:**
+   - Write to temp file, then rename (atomic operation)
+   - No partial writes
+   - Crash-safe persistence
+
+4. **Zero Execution Impact:**
+   - Dashboard is optional (bot runs without it)
+   - No changes to existing execution logic
+   - No changes to risk controls
+   - No changes to order placement logic
+   - Only adds optional attribution fields
+
+5. **Validation:**
+   - Weight bounded to [0.0, 1.0]
+   - Strategy ID must exist
+   - Type validation via Pydantic
+   - Graceful error handling
+
+### Testing
+
+**Test Coverage:** 395 tests passing
+- 8 tests: Strategy registry (loading, merging, staging, activation, validation)
+- 13 tests: Ledger system (append, read, rebuild, event types)
+- 14 tests: FastAPI service (all endpoints, validation, error handling, dashboard)
+- All existing tests pass (backward compatible)
+
+**Test Files:**
+- `tests/test_strategy_registry.py` - Registry functionality
+- `tests/test_ledger.py` - Event logging and state reconstruction
+- `tests/test_api.py` - API endpoints and dashboard
+- `tests/test_main.py` - Updated for new CSV headers (strategy attribution)
+
+**Test Strategy:**
+- Unit tests with temporary config directories
+- FastAPI TestClient for API tests
+- Mocked fixtures for isolated testing
+- No external dependencies (no real broker/ledger files)
+
+### Dependencies
+
+**Added Dependencies:**
+```
+fastapi>=0.104.0    # Web framework
+uvicorn>=0.24.0     # ASGI server
+httpx>=0.28.0       # TestClient support (dev only)
+```
+
+**No Breaking Changes:**
+- All dependencies optional for dashboard
+- Bot runs without FastAPI installed
+- Graceful degradation if config files missing
+
+### File Structure
+
+```
+ai-trader/
+├── config/
+│   └── strategies.yaml              # Base strategy configuration (version controlled)
+├── out/
+│   ├── strategies_overrides.json    # Runtime configuration overrides (auto-generated)
+│   └── ledger/
+│       └── YYYY-MM-DD.jsonl        # Daily event logs (auto-generated)
+├── src/
+│   ├── app/
+│   │   ├── strategy_registry.py    # Configuration management
+│   │   ├── ledger.py               # Event logging
+│   │   ├── runner.py               # Loop integration (next-tick activation)
+│   │   └── models.py               # Order attribution fields
+│   └── ui_api/
+│       ├── __init__.py
+│       ├── app.py                  # FastAPI service
+│       └── dashboard.html          # Web dashboard
+└── tests/
+    ├── test_strategy_registry.py   # Registry tests
+    ├── test_ledger.py              # Ledger tests
+    └── test_api.py                 # API tests
+```
+
+### Performance Considerations
+
+1. **Registry Loading:**
+   - Happens once at loop startup
+   - YAML parsing is fast (<1ms for typical configs)
+   - JSON override loading is fast (<1ms)
+
+2. **Ledger Appends:**
+   - Append-only writes (fast)
+   - No locks or complex I/O
+   - Daily rotation keeps files small
+
+3. **API Latency:**
+   - Registry reads are in-memory (microseconds)
+   - Ledger reads scan file (milliseconds for typical daily activity)
+   - Dashboard auto-refresh configurable (default 30s)
+
+4. **Loop Impact:**
+   - `check_and_activate_pending()` is O(N) where N = number of strategies (typically 3-5)
+   - Runs once per loop tick (minimal overhead)
+   - No blocking I/O in hot path
+
+### Future Enhancements (Not Implemented)
+
+Potential future additions (listed here for architectural consideration):
+
+1. **Multi-Strategy Execution:**
+   - Currently, strategies defined but not executed in parallel
+   - Would require allocator integration
+   - Would require per-strategy position tracking in risk manager
+
+2. **Real-Time WebSocket Updates:**
+   - Dashboard currently polls every 30s
+   - WebSocket would enable push updates
+   - Would require SSE or WebSocket endpoint
+
+3. **Historical Performance Metrics:**
+   - Ledger supports this via `rebuild_state()`
+   - Would need UI components for charts/graphs
+   - Could calculate Sharpe ratio, drawdown, etc. per strategy
+
+4. **Strategy Parameter Optimization:**
+   - Grid search or genetic algorithms
+   - Would use ledger for historical evaluation
+   - Would stage optimal parameters via existing API
+
+5. **Multi-Account Support:**
+   - Currently single Alpaca account
+   - Would require account_id field throughout
+   - Registry would need per-account strategies
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing

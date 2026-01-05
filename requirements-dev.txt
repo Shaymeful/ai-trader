@@ -7,3 +7,4 @@ ruff>=0.1.0
 # Testing tooling
 pytest>=7.4.0
 pytest-cov>=4.1.0
+httpx>=0.28.0  # For FastAPI TestClient

@@ -39,6 +39,7 @@ from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .execution import AlpacaExecutor
 from .strategies import MeanReversionStrategy, TrendStrategy
+from .strategy_registry import StrategyRegistry
 
 
 def get_market_time_now() -> datetime:
@@ -648,6 +649,18 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
     print("=" * 80)
     print()
 
+    # Initialize strategy registry for next-tick activation
+    print("Initializing strategy registry...")
+    try:
+        registry = StrategyRegistry()
+        print(f"Registry loaded: {len(registry.get_state().strategies)} strategies configured")
+        print()
+    except FileNotFoundError:
+        print("WARNING: Strategy registry not found (config/strategies.yaml missing)")
+        print("Continuing without registry - strategies will use hardcoded configuration")
+        registry = None
+        print()
+
     iteration = 0
     while True:
         iteration += 1
@@ -660,6 +673,15 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         print(f"{'=' * 80}\n")
 
         try:
+            # Check and activate pending strategy configuration changes (next-tick activation)
+            if registry is not None:
+                activated = registry.check_and_activate_pending()
+                if activated:
+                    print("Strategy configuration changes activated:")
+                    for strategy_id, old_version, new_version in activated:
+                        print(f"  {strategy_id}: v{old_version} → v{new_version}")
+                    print()
+
             # Run the appropriate mode
             if mode == "shadow":
                 result = run_shadow_mode()

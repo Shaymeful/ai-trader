@@ -112,6 +112,9 @@ class Order(BaseModel):
     filled_at: datetime | None = None
     filled_price: Decimal | None = None
     rejected_reason: str | None = None
+    # Strategy attribution (optional, for multi-strategy tracking)
+    strategy_id: str | None = None
+    strategy_version: int | None = None
 
 
 class Position(BaseModel):
@@ -146,6 +149,9 @@ class TradeRecord(BaseModel):
     slippage_abs: Decimal | None = None
     slippage_bps: Decimal | None = None
     spread_bps_at_submit: Decimal | None = None
+    # Strategy attribution (optional)
+    strategy_id: str | None = None
+    strategy_version: int | None = None
 
     def to_csv_row(self) -> str:
         """Convert to CSV row."""
@@ -156,11 +162,14 @@ class TradeRecord(BaseModel):
         spread_bps_str = (
             str(self.spread_bps_at_submit) if self.spread_bps_at_submit is not None else ""
         )
+        strategy_id_str = self.strategy_id if self.strategy_id else ""
+        strategy_version_str = str(self.strategy_version) if self.strategy_version else ""
 
         return (
             f"{self.timestamp.isoformat()},{self.symbol},{self.side},{self.quantity},"
             f"{self.price},{self.order_id},{self.client_order_id},{self.run_id},{self.reason},"
-            f"{expected_price_str},{slippage_abs_str},{slippage_bps_str},{spread_bps_str}"
+            f"{expected_price_str},{slippage_abs_str},{slippage_bps_str},{spread_bps_str},"
+            f"{strategy_id_str},{strategy_version_str}"
         )
 
     @staticmethod
@@ -168,7 +177,8 @@ class TradeRecord(BaseModel):
         """Return CSV header."""
         return (
             "timestamp,symbol,side,quantity,price,order_id,client_order_id,run_id,reason,"
-            "expected_price,slippage_abs,slippage_bps,spread_bps_at_submit"
+            "expected_price,slippage_abs,slippage_bps,spread_bps_at_submit,"
+            "strategy_id,strategy_version"
         )
 
 
@@ -185,16 +195,21 @@ class OrderRecord(BaseModel):
     broker_order_id: str
     run_id: str
     status: str
+    # Strategy attribution (optional)
+    strategy_id: str | None = None
+    strategy_version: int | None = None
 
     def to_csv_row(self) -> str:
         """Convert to CSV row."""
         limit_price_str = str(self.limit_price) if self.limit_price else ""
-        return f"{self.timestamp.isoformat()},{self.symbol},{self.side},{self.quantity},{self.order_type},{limit_price_str},{self.client_order_id},{self.broker_order_id},{self.run_id},{self.status}"
+        strategy_id_str = self.strategy_id if self.strategy_id else ""
+        strategy_version_str = str(self.strategy_version) if self.strategy_version else ""
+        return f"{self.timestamp.isoformat()},{self.symbol},{self.side},{self.quantity},{self.order_type},{limit_price_str},{self.client_order_id},{self.broker_order_id},{self.run_id},{self.status},{strategy_id_str},{strategy_version_str}"
 
     @staticmethod
     def csv_header() -> str:
         """Return CSV header."""
-        return "timestamp,symbol,side,quantity,order_type,limit_price,client_order_id,broker_order_id,run_id,status"
+        return "timestamp,symbol,side,quantity,order_type,limit_price,client_order_id,broker_order_id,run_id,status,strategy_id,strategy_version"
 
 
 class FillRecord(BaseModel):
@@ -213,6 +228,9 @@ class FillRecord(BaseModel):
     slippage_abs: Decimal | None = None
     slippage_bps: Decimal | None = None
     spread_bps_at_submit: Decimal | None = None
+    # Strategy attribution (optional)
+    strategy_id: str | None = None
+    strategy_version: int | None = None
 
     def to_csv_row(self) -> str:
         """Convert to CSV row."""
@@ -223,11 +241,14 @@ class FillRecord(BaseModel):
         spread_bps_str = (
             str(self.spread_bps_at_submit) if self.spread_bps_at_submit is not None else ""
         )
+        strategy_id_str = self.strategy_id if self.strategy_id else ""
+        strategy_version_str = str(self.strategy_version) if self.strategy_version else ""
 
         return (
             f"{self.timestamp.isoformat()},{self.symbol},{self.side},{self.quantity},"
             f"{self.price},{self.client_order_id},{self.broker_order_id},{self.run_id},"
-            f"{expected_price_str},{slippage_abs_str},{slippage_bps_str},{spread_bps_str}"
+            f"{expected_price_str},{slippage_abs_str},{slippage_bps_str},{spread_bps_str},"
+            f"{strategy_id_str},{strategy_version_str}"
         )
 
     @staticmethod
@@ -235,5 +256,6 @@ class FillRecord(BaseModel):
         """Return CSV header."""
         return (
             "timestamp,symbol,side,quantity,price,client_order_id,broker_order_id,run_id,"
-            "expected_price,slippage_abs,slippage_bps,spread_bps_at_submit"
+            "expected_price,slippage_abs,slippage_bps,spread_bps_at_submit,"
+            "strategy_id,strategy_version"
         )
