@@ -389,4 +389,3 @@ async def serve_dashboard():
             content="<h1>Dashboard not found</h1><p>dashboard.html is missing</p>",
             status_code=404,
         )
-
