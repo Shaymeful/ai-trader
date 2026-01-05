@@ -584,6 +584,10 @@ async def detailed_health():
         except Exception:
             pass
 
+    # Check if trading is paused
+    pause_file = Path("state/pause_trading.flag")
+    trading_paused = pause_file.exists()
+
     return DetailedHealthResponse(
         status="ok",
         timestamp=datetime.now(UTC).isoformat(),
@@ -594,7 +598,7 @@ async def detailed_health():
         registry_loaded=registry is not None and registry.state is not None,
         ledger_available=ledger is not None,
         single_instance_ok=True,  # Would require checking mutex
-        trading_paused=False,  # Would require state file
+        trading_paused=trading_paused,
     )
 
 
