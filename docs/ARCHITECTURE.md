@@ -384,6 +384,21 @@ python -m src.app --mode live --i-understand-live-trading \
   --replace-order-id abc-123 --limit-price 150.50
 ```
 
+### Utility Commands
+
+**Selector Module:**
+- `python -m src.app.selector.run_once` - Run RSS selector once and generate candidates
+  - Fetches RSS feeds from `config/selector.yaml`
+  - Generates candidates → `out/selector/snapshot.json`
+  - Logs events → `out/selector/events.jsonl`
+  - Outputs summary to console (candidates count by action and sector)
+  - Use for manual candidate generation or testing RSS feed configuration
+  - Can be scheduled via Windows Task Scheduler (see `tools/windows/run_selector.ps1`)
+
+**Dashboard API:**
+- `GET /selector/status` - Returns selector status including last run time, candidate counts, and errors
+- Dashboard provides monitoring UI at `http://localhost:8000` when running
+
 ### Flag Aliases
 - `--iterations` works identically to `--max-iterations`
 - Both flags accept an integer value and control the number of trading loop iterations
@@ -2116,6 +2131,90 @@ The candidate system implements a multi-layer architecture that separates **cand
 │  - Enables full attribution analysis                        │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### RSS Selector Implementation
+
+**Location:** `src/app/selector/`
+
+The RSS Selector is a rules-based candidate generator targeting automation and energy sectors. It monitors RSS feeds, classifies headlines, extracts symbols, and maps sentiment to trading actions.
+
+**Key Features:**
+- **Targeted sectors**: Automation and Energy
+- **Conservative symbol extraction**: Only explicit patterns `(SYMBOL)`, `SYMBOL:`, `$SYMBOL`
+- **Sentiment analysis**: Maps headlines to BUY/SELL/WATCH based on keywords
+- **Confidence scoring**: Quantifies signal strength (0.60-0.90)
+- **Safety**: Selector NEVER places orders - only generates candidates
+
+**Configuration:** `config/selector.yaml`
+```yaml
+sectors_enabled: [automation, energy]
+rss_feeds:
+  - https://example.com/automation
+  - https://example.com/energy
+
+keyword_rules:
+  automation:
+    keywords: [automation, robot, robotics, warehouse, PLC, ...]
+  energy:
+    keywords: [energy, oil, gas, solar, wind, battery, ...]
+
+action_keywords:
+  buy: [beats, raises guidance, upgrades, contract, ...]
+  sell: [misses, cuts guidance, lawsuit, bankruptcy, ...]
+
+confidence_modifiers:
+  base_confidence: 0.55
+  strong_keyword_bonus: 0.10  # Per keyword match
+  max_confidence: 0.90
+  uncertain_symbol_penalty: 0.15
+```
+
+**Execution:**
+- **CLI**: `python -m src.app.selector.run_once`
+- **Scheduled**: Windows Task Scheduler via `tools/windows/run_selector.ps1`
+- **Frequency**: Every 15 minutes during market hours (8:50 AM - 4:10 PM ET)
+
+**Output Files:**
+- **Snapshot**: `out/selector/snapshot.json` - Current candidates with schema matching Candidate model
+- **Events**: `out/selector/events.jsonl` - JSONL event log for processing history
+
+**Dashboard API:** `GET /selector/status`
+```json
+{
+  "last_run": "2026-01-05T10:00:00-05:00",
+  "candidates_count": 5,
+  "candidates_by_action": {"buy": 2, "sell": 1, "watch": 2},
+  "last_error": null
+}
+```
+
+**Processing Pipeline:**
+1. Fetch RSS feeds from configured URLs
+2. Parse RSS XML (title + description)
+3. Classify sector via keyword matching (automation vs energy)
+4. Extract symbol using regex: `\(([A-Z]{1,5})\)|([A-Z]{1,5}):|\$([A-Z]{1,5})\b`
+5. Map action: sell keywords → SELL, buy keywords → BUY, else → WATCH
+6. Compute confidence: `base + (keyword_count × bonus) - (uncertainty_penalty if no symbol)`
+7. Create candidate with TTL (BUY: 180min, SELL: 120min, WATCH: 240min)
+8. Write to snapshot.json and append event to events.jsonl
+
+**Candidate Expiration (TTL):**
+- BUY candidates: 180 minutes (3 hours)
+- SELL candidates: 120 minutes (2 hours)
+- WATCH candidates: 240 minutes (4 hours)
+
+**Safety Controls:**
+- Max candidates per run: 50 (configurable)
+- Minimum confidence: 0.60 (configurable)
+- Symbol allowlist/denylist support
+- No network calls in tests (uses fixtures)
+
+**Testing:**
+- Unit tests: `tests/test_selector.py` (33 tests covering all modules)
+- Fixtures: `tests/fixtures/rss_automation.xml`, `tests/fixtures/rss_energy.xml`
+- Tests verify: sector classification, symbol extraction, action mapping, confidence scoring, snapshot writing
+
+**Documentation:** See `docs/SELECTOR.md` for detailed usage and configuration guide.
 
 ### Candidate Schema
 

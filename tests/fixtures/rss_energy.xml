@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Energy Sector News</title>
+    <link>https://example.com/energy</link>
+    <description>Latest energy, oil, gas, and renewable news</description>
+
+    <item>
+      <title>NextEra Energy (NEE) raises guidance on strong solar and wind growth</title>
+      <description><![CDATA[NextEra Energy reported exceptional renewable energy portfolio performance with record installations across solar and wind projects.]]></description>
+      <pubDate>Mon, 05 Jan 2026 10:15:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>ExxonMobil (XOM) beats Q4 earnings with record oil production</title>
+      <description><![CDATA[ExxonMobil exceeded analyst expectations with strong crude oil and natural gas output from Permian Basin operations.]]></description>
+      <pubDate>Mon, 05 Jan 2026 09:45:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Tesla battery technology breakthrough for grid energy storage</title>
+      <description><![CDATA[Tesla announces major advancement in utility-scale battery technology for renewable energy grid integration.]]></description>
+      <pubDate>Mon, 05 Jan 2026 09:00:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Chevron misses guidance, cuts capital spending on oil projects</title>
+      <description><![CDATA[Chevron Corporation reported disappointing quarter with reduced investments in upstream oil and gas drilling operations.]]></description>
+      <pubDate>Mon, 05 Jan 2026 08:30:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Duke Energy: New nuclear plant receives regulatory approval</title>
+      <description><![CDATA[Duke Energy secures permits for advanced nuclear power facility to meet growing electricity demand.]]></description>
+      <pubDate>Sun, 04 Jan 2026 17:00:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Global LNG demand drives pipeline infrastructure expansion</title>
+      <description><![CDATA[Industry report shows increased investment in liquefied natural gas terminals and pipeline networks to support energy transition.]]></description>
+      <pubDate>Sun, 04 Jan 2026 15:30:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Enphase Energy (ENPH) announces partnership for solar microinverters</title>
+      <description><![CDATA[Enphase Energy partners with major utility provider to deploy advanced solar microinverter technology across residential markets.]]></description>
+      <pubDate>Sun, 04 Jan 2026 14:00:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>ConocoPhillips: Crude oil refinery faces environmental lawsuit</title>
+      <description><![CDATA[ConocoPhillips petrochemical facility under investigation for alleged environmental violations at Texas refinery operations.]]></description>
+      <pubDate>Sun, 04 Jan 2026 12:00:00 EST</pubDate>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Industrial Automation News</title>
+    <link>https://example.com/automation</link>
+    <description>Latest automation and robotics news</description>
+
+    <item>
+      <title>Rockwell Automation (ROK) beats Q3 earnings with record revenue</title>
+      <description><![CDATA[Rockwell Automation reported strong quarterly results driven by factory automation and warehouse logistics solutions.]]></description>
+      <pubDate>Mon, 05 Jan 2026 10:00:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>ABB: New industrial robot line for manufacturing facilities</title>
+      <description><![CDATA[ABB announces breakthrough in industrial robotics with AI automation capabilities for sorting and conveyor systems.]]></description>
+      <pubDate>Mon, 05 Jan 2026 09:30:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Honeywell launches advanced PLC systems for warehouse automation</title>
+      <description><![CDATA[Honeywell International introduces new programmable logic controllers designed for automated warehouse operations.]]></description>
+      <pubDate>Mon, 05 Jan 2026 08:45:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Tesla expands factory automation with new robotics contract</title>
+      <description><![CDATA[Tesla awarded major contract for automated manufacturing systems at new facility.]]></description>
+      <pubDate>Mon, 05 Jan 2026 08:00:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>General Electric misses guidance, cuts factory automation spending</title>
+      <description><![CDATA[GE announces disappointing quarter with reduced investments in industrial automation projects.]]></description>
+      <pubDate>Sun, 04 Jan 2026 16:30:00 EST</pubDate>
+    </item>
+
+    <item>
+      <title>Automation sector sees strong growth in warehouse logistics</title>
+      <description><![CDATA[Industry report shows increased adoption of AGV and robotic sorting systems in logistics operations.]]></description>
+      <pubDate>Sun, 04 Jan 2026 15:00:00 EST</pubDate>
+    </item>
+  </channel>
+</rss>
