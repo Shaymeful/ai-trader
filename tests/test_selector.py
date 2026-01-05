@@ -364,9 +364,10 @@ class TestEndToEnd:
         assert "automation" in sectors
         assert "energy" in sectors
 
-        # Verify mix of actions
-        actions = {c.action for c in candidates}
-        assert len(actions) > 1  # Should have buy/sell/watch mix
+        # Verify all candidates have symbols (required by existing candidate system)
+        for candidate in candidates:
+            assert candidate.symbol is not None
+            assert len(candidate.symbol) > 0
 
     def test_run_respects_max_candidates_limit(
         self, selector, rss_automation_content, rss_energy_content

@@ -1,5 +1,7 @@
 """RSS-based candidate selector for automation and energy sectors."""
 
+from __future__ import annotations
+
 import json
 import re
 from datetime import datetime, timedelta
@@ -30,7 +32,7 @@ class Candidate(BaseModel):
     candidate_id: str
     created_at: str
     expires_at: str
-    symbol: str | None
+    symbol: str
     action: str  # buy, sell, watch
     confidence: float
     horizon: str
@@ -210,7 +212,7 @@ class RSSSelector:
 
     def create_candidate(
         self,
-        symbol: str | None,
+        symbol: str,
         action: str,
         confidence: float,
         sector: str | None,
@@ -219,7 +221,7 @@ class RSSSelector:
     ) -> Candidate:
         """Create candidate with expiration time."""
         now_et = datetime.now(self.eastern)
-        candidate_id = f"rss-{now_et.strftime('%Y%m%d%H%M%S')}-{symbol or 'UNKNOWN'}"
+        candidate_id = f"rss-{now_et.strftime('%Y%m%d%H%M%S')}-{symbol}"
 
         # Determine TTL based on action
         ttl_key = f"ttl_minutes_{action}"
@@ -273,6 +275,10 @@ class RSSSelector:
 
         # Extract symbol
         symbol, symbol_certain = self.extract_symbol(full_text)
+
+        # Skip candidates without symbols (existing candidate system requires symbols)
+        if not symbol:
+            return None, events
 
         # Map action
         action = self.map_action(full_text)
