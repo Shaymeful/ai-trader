@@ -91,6 +91,7 @@ class OrderPlacedEvent(LedgerEvent):
     quantity: str  # Decimal as string for JSON serialization
     order_type: str
     limit_price: str | None  # Decimal as string
+    candidate_id: str | None  # Candidate that triggered this order (if any)
 
     def __init__(
         self,
@@ -102,6 +103,7 @@ class OrderPlacedEvent(LedgerEvent):
         quantity: Decimal,
         order_type: str,
         limit_price: Decimal | None = None,
+        candidate_id: str | None = None,
     ):
         self.event_id = str(uuid.uuid4())
         self.timestamp = datetime.now(UTC).isoformat()
@@ -114,6 +116,7 @@ class OrderPlacedEvent(LedgerEvent):
         self.quantity = str(quantity)
         self.order_type = order_type
         self.limit_price = str(limit_price) if limit_price is not None else None
+        self.candidate_id = candidate_id
 
 
 @dataclass
@@ -185,6 +188,99 @@ class PositionUpdateEvent(LedgerEvent):
         self.avg_price = str(avg_price)
         self.current_price = str(current_price)
         self.unrealized_pnl = str(unrealized_pnl)
+
+
+@dataclass
+class CandidateLoadedEvent(LedgerEvent):
+    """Event: Candidates were loaded from snapshot."""
+
+    count_total: int
+    count_tradeable: int
+    symbols: list[str]  # List of tradeable symbols
+    snapshot_path: str
+
+    def __init__(
+        self,
+        count_total: int,
+        count_tradeable: int,
+        symbols: list[str],
+        snapshot_path: str,
+    ):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "candidate_loaded"
+        self.count_total = count_total
+        self.count_tradeable = count_tradeable
+        self.symbols = symbols
+        self.snapshot_path = snapshot_path
+
+
+@dataclass
+class CandidateSelectedEvent(LedgerEvent):
+    """Event: Candidate was selected for strategy evaluation."""
+
+    candidate_id: str
+    symbol: str
+    action: str  # buy/sell
+    confidence: float
+    horizon: str  # intraday/swing/long
+    strategy_id: str
+    reason: str  # Why this candidate was selected
+
+    def __init__(
+        self,
+        candidate_id: str,
+        symbol: str,
+        action: str,
+        confidence: float,
+        horizon: str,
+        strategy_id: str,
+        reason: str,
+    ):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "candidate_selected"
+        self.candidate_id = candidate_id
+        self.symbol = symbol
+        self.action = action
+        self.confidence = confidence
+        self.horizon = horizon
+        self.strategy_id = strategy_id
+        self.reason = reason
+
+
+@dataclass
+class StrategyIntentCreatedEvent(LedgerEvent):
+    """Event: Strategy created a position intent."""
+
+    strategy_id: str
+    version: int
+    symbol: str
+    target_quantity: int
+    conviction: float
+    reason: str
+    candidate_id: str | None  # Candidate that triggered this intent (if any)
+
+    def __init__(
+        self,
+        strategy_id: str,
+        version: int,
+        symbol: str,
+        target_quantity: int,
+        conviction: float,
+        reason: str,
+        candidate_id: str | None = None,
+    ):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "strategy_intent_created"
+        self.strategy_id = strategy_id
+        self.version = version
+        self.symbol = symbol
+        self.target_quantity = target_quantity
+        self.conviction = conviction
+        self.reason = reason
+        self.candidate_id = candidate_id
 
 
 class Ledger:
