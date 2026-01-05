@@ -39,6 +39,38 @@ powershell -ExecutionPolicy Bypass -File start_loop_mode.ps1 -SleepSeconds 1800
 powershell -ExecutionPolicy Bypass -File start_loop_mode.ps1 -DryRun
 ```
 
+**Fast tick testing** (dry-run with 60-second intervals for after-hours testing):
+```powershell
+powershell -ExecutionPolicy Bypass -File start_loop_mode.ps1 -DryRun -SleepSeconds 60
+```
+
+### After-Hours Testing with DryRun
+
+DryRun mode is ideal for testing the full trading pipeline when the market is closed:
+
+**What DryRun does:**
+- ✅ Loads candidates from snapshot
+- ✅ Computes strategy signals and intents
+- ✅ Runs allocation and position sizing logic
+- ✅ Validates through risk gates
+- ✅ Logs all events to ledger (JSONL)
+- ✅ Updates dashboard with live data
+- ❌ **Does NOT submit orders** (no broker API calls)
+
+**Market-hours behavior:**
+- In normal mode: Market-hours check blocks order submission when closed
+- In DryRun mode: Market-hours check is bypassed (orders never submitted anyway)
+- Result: Full pipeline validation possible even after 4:00 PM ET
+
+**Use case example:**
+```powershell
+# At 5:00 PM (after market close), test end-to-end pipeline every minute
+powershell -ExecutionPolicy Bypass -File tools/run_paper_dryrun.ps1 -SleepSeconds 60
+
+# Watch the status log in real-time
+Get-Content logs\loop_status.log -Tail 5 -Wait
+```
+
 ## What Happens in Loop Mode
 
 ### Each Hour, the Bot Will:
@@ -72,6 +104,58 @@ All runs are logged to timestamped files:
 | `logs/paper_run_YYYYMMDD_HHMMSS_ET.jsonl` | Full trade results (JSON lines) |
 
 ## Monitoring Loop Mode
+
+### Dashboard (Recommended)
+
+Start the web dashboard for visual monitoring and controls:
+
+```bash
+.venv/Scripts/python.exe -m uvicorn src.ui_api.app:app --host 127.0.0.1 --port 8000
+```
+
+Then open: http://localhost:8000
+
+**Dashboard Features:**
+- 📊 Real-time health status and market hours
+- 🎛️ Strategy configuration (weights, enable/disable)
+- 📈 Allocation details with normalized weights
+- 🔍 Candidate symbols inspector
+- ⏸️ **Pause Trading** toggle (emergency stop)
+- 📋 Recent activity feed
+
+### Pause Trading (Kill Switch)
+
+The dashboard provides a runtime kill switch to pause order submission without stopping the bot:
+
+**Via Dashboard UI:**
+1. Navigate to http://localhost:8000
+2. Toggle "Pause Trading" switch in health panel
+3. Warning banner appears when paused
+
+**Via API:**
+```bash
+# Pause trading
+curl -X POST http://127.0.0.1:8000/pause_trading \
+  -H "Content-Type: application/json" \
+  -d '{"paused": true}'
+
+# Resume trading
+curl -X POST http://127.0.0.1:8000/pause_trading \
+  -H "Content-Type: application/json" \
+  -d '{"paused": false}'
+```
+
+**What happens when paused:**
+- ✅ Loop continues to run
+- ✅ Signals are evaluated
+- ✅ Allocation is computed
+- ✅ Ledger logs all events
+- ❌ **Orders are NOT submitted**
+
+**Use cases:**
+- Emergency stop during unexpected market conditions
+- Pause before making significant configuration changes
+- Stop orders while investigating positions or logs
 
 ### View Real-Time Status
 
