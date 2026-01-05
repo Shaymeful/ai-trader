@@ -183,7 +183,7 @@ class StrategyRegistry:
                 strategy.params.update(override_data["params"])
             if "pending_version" in override_data:
                 strategy.pending_version = override_data["pending_version"]
-            if "last_modified" in override_data:
+            if "last_modified" in override_data and override_data["last_modified"] is not None:
                 strategy.last_modified = datetime.fromisoformat(override_data["last_modified"])
 
     def get_strategy(self, strategy_id: str) -> StrategyConfig | None:

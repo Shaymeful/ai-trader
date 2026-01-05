@@ -338,8 +338,8 @@ def net_intents_by_symbol(
             # Negative qty → negative notional (sell)
             intent_notional = intent.target_quantity * price
 
-            # Get strategy ID for attribution
-            strategy_id = strategy_map.get(intent) if strategy_map else None
+            # Get strategy ID for attribution (using id() since intent is not hashable)
+            strategy_id = strategy_map.get(id(intent)) if strategy_map else None
 
             contributing_intents.append(
                 {

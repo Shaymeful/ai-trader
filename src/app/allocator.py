@@ -197,12 +197,12 @@ class Allocator:
 
         # 4. Flatten all intents and convert to market_data format for netting
         all_intents = []
-        strategy_map = {}  # Map intent -> strategy_id for attribution
+        strategy_map = {}  # Map intent id() -> strategy_id for attribution
 
         for strategy_name, intents in strategy_intents.items():
             for intent in intents:
                 all_intents.append(intent)
-                strategy_map[intent] = strategy_name
+                strategy_map[id(intent)] = strategy_name
 
         # Convert current_prices to market_data format expected by netting function
         market_data = {symbol: {"price": float(price)} for symbol, price in current_prices.items()}
