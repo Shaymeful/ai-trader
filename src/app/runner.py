@@ -39,6 +39,7 @@ from .config import load_config_with_yaml, validate_alpaca_credentials
 from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .execution import AlpacaExecutor
+from .ledger import CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
 from .strategies import MeanReversionStrategy, TrendStrategy
 from .strategy_registry import StrategyRegistry
 
@@ -92,6 +93,9 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     print(f"Max Gross Exposure USD: ${config.max_positions_notional}")
     print()
 
+    # Initialize ledger for event tracking
+    ledger = Ledger()
+
     # Load candidates from snapshot (if available)
     print("Loading candidates...")
     raw_candidates = load_candidates()
@@ -102,6 +106,17 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
     )
 
     print(f"  Loaded {len(raw_candidates)} candidates, {len(tradeable_candidates)} tradeable")
+
+    # Emit candidate_loaded event
+    if raw_candidates:
+        ledger.append(
+            CandidateLoadedEvent(
+                count_total=len(raw_candidates),
+                count_tradeable=len(tradeable_candidates),
+                symbols=[c.symbol for c in tradeable_candidates],
+                snapshot_path="out/selector/snapshot.json",
+            )
+        )
 
     # Build universe from candidates (if available), otherwise use config
     if tradeable_candidates:
@@ -189,8 +204,22 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
         # Store intents for allocator and shadow PnL
         strategy_intents[strategy.name] = intents
 
-        # Collect results for JSONL logging
+        # Emit strategy_intent_created events and collect results for JSONL logging
         for intent in intents:
+            # Emit ledger event for intent creation
+            ledger.append(
+                StrategyIntentCreatedEvent(
+                    strategy_id=strategy.name,
+                    version=1,  # TODO: Get from strategy registry when available
+                    symbol=intent.symbol,
+                    target_quantity=intent.target_quantity,
+                    conviction=intent.conviction,
+                    reason=intent.reason,
+                    candidate_id=intent.candidate_id,
+                )
+            )
+
+            # Collect for JSONL logging
             all_results.append(
                 {
                     "timestamp": datetime.now(UTC).isoformat(),
@@ -383,6 +412,9 @@ def run_paper_mode(
             print(error_msg)
             sys.exit(1)
 
+    # Initialize ledger for event tracking
+    ledger = Ledger()
+
     # Load candidates from snapshot (if available)
     print("Loading candidates...")
     raw_candidates = load_candidates()
@@ -393,6 +425,17 @@ def run_paper_mode(
     )
 
     print(f"  Loaded {len(raw_candidates)} candidates, {len(tradeable_candidates)} tradeable")
+
+    # Emit candidate_loaded event
+    if raw_candidates:
+        ledger.append(
+            CandidateLoadedEvent(
+                count_total=len(raw_candidates),
+                count_tradeable=len(tradeable_candidates),
+                symbols=[c.symbol for c in tradeable_candidates],
+                snapshot_path="out/selector/snapshot.json",
+            )
+        )
 
     # Build universe from candidates (if available), otherwise use config
     if tradeable_candidates:
@@ -499,6 +542,20 @@ def run_paper_mode(
 
         print()
         strategy_intents[strategy.name] = intents
+
+        # Emit strategy_intent_created events
+        for intent in intents:
+            ledger.append(
+                StrategyIntentCreatedEvent(
+                    strategy_id=strategy.name,
+                    version=1,  # TODO: Get from strategy registry when available
+                    symbol=intent.symbol,
+                    target_quantity=intent.target_quantity,
+                    conviction=intent.conviction,
+                    reason=intent.reason,
+                    candidate_id=intent.candidate_id,
+                )
+            )
 
     # Allocate capital across strategies
     print("Allocating capital across strategies...")
