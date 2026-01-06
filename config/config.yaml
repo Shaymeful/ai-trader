@@ -57,13 +57,13 @@ universe:
 # LLM Universe Advisor Configuration
 llm:
   # Provider mode: primary_fallback | ensemble | openai_only | anthropic_only
-  mode: "primary_fallback"
+  mode: "openai_only"
 
   # Primary provider (for primary_fallback mode)
   primary: "openai"  # openai | anthropic
 
   # Model specifications
-  openai_model: "gpt-4-turbo-preview"
+  openai_model: "gpt-4o-mini"
   anthropic_model: "claude-3-5-sonnet-20241022"
 
   # API timeouts

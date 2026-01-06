@@ -815,9 +815,9 @@ async def get_proposals():
 @app.post("/universe/proposals/generate", response_model=ChangeResponse)
 async def generate_proposals_endpoint(request: GenerateRequest):
     """Generate new proposals manually."""
-    from src.app.config import load_config_with_yaml
+    from src.app.config import load_config_with_yaml, load_yaml_config
     from src.app.data_providers.hourly_provider import HourlyMarketDataProvider
-    from src.app.universe import load_universe_config, load_yaml_config
+    from src.app.universe import load_universe_config
     from src.app.universe_advisor.generate import (
         generate_proposals,
         load_recent_rss_events,
@@ -844,7 +844,10 @@ async def generate_proposals_endpoint(request: GenerateRequest):
                     )
 
         # Detect regime
-        provider = HourlyMarketDataProvider(config)
+        provider = HourlyMarketDataProvider(
+            api_key=config.alpaca_api_key,
+            secret_key=config.alpaca_secret_key,
+        )
         regime = detect_market_regime(provider)
 
         # Load RSS events

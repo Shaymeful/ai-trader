@@ -442,4 +442,34 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
             if "max_samples" in performance:
                 config.performance_max_samples = int(performance["max_samples"])
 
+        # Apply LLM parameters from YAML
+        if "llm" in yaml_config:
+            llm = yaml_config["llm"]
+            if "mode" in llm:
+                config.llm_mode = llm["mode"]
+            if "primary" in llm:
+                config.llm_primary = llm["primary"]
+            if "openai_model" in llm:
+                config.llm_openai_model = llm["openai_model"]
+            if "anthropic_model" in llm:
+                config.llm_anthropic_model = llm["anthropic_model"]
+            if "timeout_seconds" in llm:
+                config.llm_timeout = int(llm["timeout_seconds"])
+            if "min_confidence" in llm:
+                config.llm_min_confidence = float(llm["min_confidence"])
+            if "proposal_ttl_minutes" in llm:
+                config.llm_proposal_ttl_minutes = int(llm["proposal_ttl_minutes"])
+            if "max_sector_toggles_per_day" in llm:
+                config.llm_max_sector_toggles_per_day = int(llm["max_sector_toggles_per_day"])
+            if "cooldown_days" in llm:
+                config.llm_cooldown_days = int(llm["cooldown_days"])
+            if "rss_lookback_hours" in llm:
+                config.llm_rss_lookback_hours = int(llm["rss_lookback_hours"])
+            if "rss_max_headlines" in llm:
+                config.llm_rss_max_headlines = int(llm["rss_max_headlines"])
+            if "auto_generate_enabled" in llm:
+                config.llm_auto_generate_enabled = bool(llm["auto_generate_enabled"])
+            if "auto_generate_interval_hours" in llm:
+                config.llm_auto_generate_interval_hours = int(llm["auto_generate_interval_hours"])
+
     return config
