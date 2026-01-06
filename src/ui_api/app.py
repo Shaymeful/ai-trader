@@ -7,6 +7,7 @@ and activated at the start of the next trading loop tick.
 IMPORTANT: This service is optional. The bot runs normally if the API is never started.
 """
 
+import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -313,6 +314,42 @@ class GenerateRequest(BaseModel):
     force: bool = Field(default=False, description="Force generation even if recently generated")
 
 
+class UpdateTickersRequest(BaseModel):
+    """Request to update sector tickers."""
+
+    add: list[str] = Field(default_factory=list, description="Tickers to add")
+    remove: list[str] = Field(default_factory=list, description="Tickers to remove")
+
+
+class AccountSummaryUpdateRequest(BaseModel):
+    """Request to update account summary settings."""
+
+    total_capital: float | None = Field(
+        default=None, ge=1000.0, description="Total capital (>= $1000)"
+    )
+    max_daily_loss: float | None = Field(
+        default=None, ge=100.0, description="Max daily loss (>= $100)"
+    )
+    max_total_positions: int | None = Field(
+        default=None, ge=1, le=50, description="Max positions (1-50)"
+    )
+
+
+class AccountPerformanceResponse(BaseModel):
+    """Account performance metrics."""
+
+    equity: float | None = None
+    last_equity: float | None = None
+    cash: float | None = None
+    buying_power: float | None = None
+    day_pl: float | None = None
+    day_pl_pct: float | None = None
+    total_pl: float | None = None
+    total_pl_pct: float | None = None
+    data_source: str = "unavailable"
+    message: str | None = None
+
+
 # ============================================================================
 # GET Endpoints (Read-Only)
 # ============================================================================
@@ -339,6 +376,7 @@ async def get_account_summary():
     Get account summary.
 
     Returns overall account configuration and strategy counts.
+    Priority: out/account_summary.json > registry config defaults.
     """
     if registry is None or registry.state is None:
         raise HTTPException(status_code=503, detail="Registry not loaded")
@@ -346,14 +384,35 @@ async def get_account_summary():
     state = registry.get_state()
     enabled_count = len([s for s in state.strategies.values() if s.enabled])
 
-    # Calculate total capital from global max positions notional
-    # This is a proxy - in production you'd fetch from broker
-    total_capital = state.global_config.max_total_positions * 1000.0  # Placeholder
+    # Load from account_summary.json if exists, otherwise use config defaults
+    settings_file = Path("out/account_summary.json")
+    if settings_file.exists():
+        try:
+            with open(settings_file, encoding="utf-8") as f:
+                settings = json.load(f)
+
+            total_capital = settings.get(
+                "total_capital", state.global_config.max_total_positions * 1000.0
+            )
+            max_daily_loss = settings.get("max_daily_loss", state.global_config.max_daily_loss)
+            max_total_positions = settings.get(
+                "max_total_positions", state.global_config.max_total_positions
+            )
+        except Exception:
+            # Fall back to config defaults on error
+            total_capital = state.global_config.max_total_positions * 1000.0
+            max_daily_loss = state.global_config.max_daily_loss
+            max_total_positions = state.global_config.max_total_positions
+    else:
+        # Use config defaults
+        total_capital = state.global_config.max_total_positions * 1000.0
+        max_daily_loss = state.global_config.max_daily_loss
+        max_total_positions = state.global_config.max_total_positions
 
     return AccountSummaryResponse(
         total_capital=total_capital,
-        max_daily_loss=state.global_config.max_daily_loss,
-        max_total_positions=state.global_config.max_total_positions,
+        max_daily_loss=max_daily_loss,
+        max_total_positions=max_total_positions,
         enabled_strategies_count=enabled_count,
         total_strategies_count=len(state.strategies),
     )
@@ -1264,6 +1323,269 @@ async def pause_trading(request: PauseRequest):
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update pause state: {e}") from e
+
+
+@app.post("/universe/sectors/{sector_name}/tickers", response_model=ChangeResponse)
+async def update_sector_tickers(sector_name: str, request: UpdateTickersRequest):
+    """
+    Manually add or remove tickers from a sector.
+
+    This is an operator-gated action that stages changes via UniverseRegistry.
+    Changes require activation (pending_version increment).
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    if ledger is None:
+        raise HTTPException(status_code=503, detail="Ledger not available")
+
+    # Validate sector exists
+    if sector_name not in universe_registry.sectors:
+        raise HTTPException(status_code=404, detail=f"Sector not found: {sector_name}")
+
+    # Validate request has at least one action
+    if not request.add and not request.remove:
+        raise HTTPException(status_code=400, detail="Must specify tickers to add or remove")
+
+    # Normalize tickers (uppercase, dedupe)
+    add_tickers = list(set(t.upper().strip() for t in request.add if t.strip()))
+    remove_tickers = list(set(t.upper().strip() for t in request.remove if t.strip()))
+
+    # Check for overlap
+    overlap = set(add_tickers) & set(remove_tickers)
+    if overlap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot add and remove same tickers: {', '.join(overlap)}",
+        )
+
+    try:
+        # Stage changes - add first, then remove
+        warnings = []
+        pending_version = None
+
+        if add_tickers:
+            pending_version = universe_registry.stage_constituent_change(
+                sector_name, "add", add_tickers
+            )
+
+        if remove_tickers:
+            pending_version = universe_registry.stage_constituent_change(
+                sector_name, "remove", remove_tickers
+            )
+
+        # Log to ledger
+        ledger.append(
+            {
+                "event_type": "manual_sector_tickers_staged",
+                "sector_name": sector_name,
+                "add": add_tickers,
+                "remove": remove_tickers,
+                "pending_version": pending_version,
+                "actor": "operator_ui",
+            }
+        )
+
+        # Check tradability (best effort - warn if unavailable)
+        try:
+            from src.app.config import load_config_with_yaml
+            from src.broker.base import AlpacaBroker
+
+            config = load_config_with_yaml()
+            if config.mode == "paper":
+                broker = AlpacaBroker(
+                    key_id=config.alpaca_paper_key_id or "",
+                    secret_key=config.alpaca_paper_secret_key or "",
+                    is_paper=True,
+                )
+            else:
+                broker = AlpacaBroker(
+                    key_id=config.alpaca_live_key_id or "",
+                    secret_key=config.alpaca_live_secret_key or "",
+                    is_paper=False,
+                )
+
+            for ticker in add_tickers:
+                if not broker.is_asset_tradable(ticker):
+                    warnings.append(f"{ticker} may not be tradable")
+        except Exception as e:
+            warnings.append(f"Could not verify tradability: {e}")
+
+        # Build message
+        msg_parts = []
+        if add_tickers:
+            msg_parts.append(f"Added {len(add_tickers)} ticker(s)")
+        if remove_tickers:
+            msg_parts.append(f"Removed {len(remove_tickers)} ticker(s)")
+        msg = f"{', '.join(msg_parts)} to {sector_name}. Changes staged (v{pending_version})."
+
+        if warnings:
+            msg += f" Warnings: {'; '.join(warnings)}"
+
+        return ChangeResponse(
+            success=True,
+            message=msg,
+            pending_version=pending_version,
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update tickers: {e}") from e
+
+
+@app.post("/account/summary", response_model=ChangeResponse)
+async def update_account_summary(request: AccountSummaryUpdateRequest):
+    """
+    Update account summary settings (total capital, max daily loss, max positions).
+
+    Settings are persisted to out/account_summary.json.
+    """
+    if ledger is None:
+        raise HTTPException(status_code=503, detail="Ledger not available")
+
+    # Load existing settings
+    settings_file = Path("out/account_summary.json")
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+    if settings_file.exists():
+        try:
+            with open(settings_file, encoding="utf-8") as f:
+                current_settings = json.load(f)
+        except Exception:
+            current_settings = {}
+    else:
+        current_settings = {}
+
+    # Apply updates (only non-None fields)
+    old_settings = current_settings.copy()
+    updated_fields = []
+
+    if request.total_capital is not None:
+        current_settings["total_capital"] = request.total_capital
+        updated_fields.append("total_capital")
+
+    if request.max_daily_loss is not None:
+        current_settings["max_daily_loss"] = request.max_daily_loss
+        updated_fields.append("max_daily_loss")
+
+    if request.max_total_positions is not None:
+        current_settings["max_total_positions"] = request.max_total_positions
+        updated_fields.append("max_total_positions")
+
+    if not updated_fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Save atomically
+    try:
+        from tempfile import NamedTemporaryFile
+
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=settings_file.parent,
+            delete=False,
+            suffix=".tmp",
+        ) as tmp_file:
+            json.dump(current_settings, tmp_file, indent=2)
+            tmp_path = Path(tmp_file.name)
+
+        tmp_path.replace(settings_file)
+
+        # Log to ledger
+        ledger.append(
+            {
+                "event_type": "account_summary_updated",
+                "old_settings": old_settings,
+                "new_settings": current_settings,
+                "updated_fields": updated_fields,
+                "actor": "operator_ui",
+            }
+        )
+
+        return ChangeResponse(
+            success=True,
+            message=f"Updated {', '.join(updated_fields)}",
+            pending_version=None,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}") from e
+
+
+@app.get("/account/performance", response_model=AccountPerformanceResponse)
+async def get_account_performance():
+    """
+    Get account performance metrics from broker (if available).
+
+    Returns P&L data for current day and overall totals.
+    """
+    try:
+        from src.app.config import load_config_with_yaml
+
+        config = load_config_with_yaml()
+
+        # Try to fetch from Alpaca
+        # Get broker instance (AlpacaBroker works for both paper and live)
+        from src.broker.base import AlpacaBroker
+
+        if config.mode == "paper":
+            broker = AlpacaBroker(
+                key_id=config.alpaca_paper_key_id or "",
+                secret_key=config.alpaca_paper_secret_key or "",
+                is_paper=True,
+            )
+        else:
+            broker = AlpacaBroker(
+                key_id=config.alpaca_live_key_id or "",
+                secret_key=config.alpaca_live_secret_key or "",
+                is_paper=False,
+            )
+
+        # Get account info
+        account = broker.get_account()
+
+        equity = float(account.equity)
+        last_equity = float(account.last_equity)
+        cash = float(account.cash)
+        buying_power = float(account.buying_power)
+
+        # Calculate day P&L
+        day_pl = equity - last_equity
+        day_pl_pct = (day_pl / last_equity * 100) if last_equity > 0 else 0.0
+
+        # Total P&L (if initial equity known, else just show current equity)
+        # For now, we don't track initial equity, so total_pl is unavailable
+        total_pl = None
+        total_pl_pct = None
+
+        return AccountPerformanceResponse(
+            equity=equity,
+            last_equity=last_equity,
+            cash=cash,
+            buying_power=buying_power,
+            day_pl=day_pl,
+            day_pl_pct=day_pl_pct,
+            total_pl=total_pl,
+            total_pl_pct=total_pl_pct,
+            data_source=config.mode,
+            message=None,
+        )
+
+    except Exception as e:
+        # Return placeholder data if broker unavailable
+        return AccountPerformanceResponse(
+            equity=None,
+            last_equity=None,
+            cash=None,
+            buying_power=None,
+            day_pl=None,
+            day_pl_pct=None,
+            total_pl=None,
+            total_pl_pct=None,
+            data_source="unavailable",
+            message=f"Broker data unavailable: {e}",
+        )
 
 
 # ============================================================================

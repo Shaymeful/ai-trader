@@ -951,6 +951,211 @@
             height: 100%;
             background: linear-gradient(90deg, #3b82f6, #10b981);
         }
+
+        /* Performance Section */
+        .performance-section {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .performance-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .performance-card {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid #334155;
+        }
+
+        .performance-label {
+            font-size: 0.875rem;
+            color: #94a3b8;
+            margin-bottom: 0.5rem;
+        }
+
+        .performance-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #f8fafc;
+        }
+
+        .performance-pct {
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .performance-pct.positive {
+            color: #10b981;
+        }
+
+        .performance-pct.negative {
+            color: #ef4444;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 2rem;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            border: 1px solid #334155;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+            color: #f8fafc;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-close:hover {
+            color: #f8fafc;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #f8fafc;
+            font-size: 1rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+            margin-top: 2rem;
+        }
+
+        .ticker-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #0f172a;
+            border-radius: 6px;
+            min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .ticker-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            background: #334155;
+            border-radius: 6px;
+            color: #f8fafc;
+            font-size: 0.875rem;
+        }
+
+        .ticker-pill button {
+            background: none;
+            border: none;
+            color: #ef4444;
+            cursor: pointer;
+            padding: 0;
+            font-size: 1rem;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .ticker-pill button:hover {
+            color: #dc2626;
+        }
+
+        .ticker-input-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .ticker-input-group input {
+            flex: 1;
+        }
+
+        .btn-view-edit {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        .btn-view-edit:hover {
+            background: #2563eb;
+        }
     </style>
 </head>
 <body>
@@ -1011,7 +1216,12 @@
         </div>
 
         <div class="account-summary">
-            <h2>Account Summary</h2>
+            <div class="section-header">
+                <h2>Account Summary</h2>
+                <button class="btn-secondary" onclick="openAccountSummaryEditor()" title="Edit account settings">
+                    Edit
+                </button>
+            </div>
             <div class="account-grid">
                 <div class="account-stat">
                     <div class="account-stat-label">Total Capital</div>
@@ -1030,6 +1240,31 @@
                     <div class="account-stat-value" id="enabled-strategies">0</div>
                 </div>
             </div>
+        </div>
+
+        <!-- Performance Section -->
+        <div class="performance-section">
+            <h2>Performance</h2>
+            <div class="performance-grid">
+                <div class="performance-card">
+                    <div class="performance-label">Day P&L</div>
+                    <div class="performance-value" id="day-pl">--</div>
+                    <div class="performance-pct" id="day-pl-pct">--</div>
+                </div>
+                <div class="performance-card">
+                    <div class="performance-label">Equity</div>
+                    <div class="performance-value" id="equity">--</div>
+                </div>
+                <div class="performance-card">
+                    <div class="performance-label">Cash</div>
+                    <div class="performance-value" id="cash">--</div>
+                </div>
+                <div class="performance-card">
+                    <div class="performance-label">Buying Power</div>
+                    <div class="performance-value" id="buying-power">--</div>
+                </div>
+            </div>
+            <div id="performance-message" class="text-muted" style="margin-top: 1rem; display: none;"></div>
         </div>
 
         <!-- Universe Sectors Section -->
@@ -1193,6 +1428,64 @@
         </div>
     </div>
 
+    <!-- Account Summary Editor Modal -->
+    <div id="account-summary-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Account Summary</h3>
+                <button class="modal-close" onclick="closeAccountSummaryEditor()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="edit-total-capital">Total Capital ($)</label>
+                <input type="number" id="edit-total-capital" min="1000" step="100">
+            </div>
+            <div class="form-group">
+                <label for="edit-max-daily-loss">Max Daily Loss ($)</label>
+                <input type="number" id="edit-max-daily-loss" min="100" step="10">
+            </div>
+            <div class="form-group">
+                <label for="edit-max-positions">Max Total Positions</label>
+                <input type="number" id="edit-max-positions" min="1" max="50" step="1">
+            </div>
+            <div class="form-actions">
+                <button class="btn-secondary" onclick="closeAccountSummaryEditor()">Cancel</button>
+                <button class="btn-primary" onclick="saveAccountSummary()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sector Editor Modal -->
+    <div id="sector-editor-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="sector-editor-title">Edit Sector</h3>
+                <button class="modal-close" onclick="closeSectorEditor()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label>Current Tickers (<span id="sector-ticker-count">0</span>)</label>
+                <div id="sector-ticker-list" class="ticker-list"></div>
+            </div>
+            <div class="form-group">
+                <label for="add-tickers-input">Add Tickers (comma or space separated)</label>
+                <div class="ticker-input-group">
+                    <input type="text" id="add-tickers-input" placeholder="AAPL, MSFT, GOOGL">
+                    <button class="btn-primary" onclick="addTickers()">Add</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="remove-tickers-input">Remove Tickers (comma or space separated)</label>
+                <div class="ticker-input-group">
+                    <input type="text" id="remove-tickers-input" placeholder="TSLA, AMZN">
+                    <button class="btn-secondary" onclick="removeTickers()">Remove</button>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn-secondary" onclick="closeSectorEditor()">Close</button>
+                <button class="btn-primary" onclick="saveSectorChanges()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let strategiesData = [];
         let allocationData = null;
@@ -1239,6 +1532,11 @@
                             <div class="sector-details">
                                 ${sector.symbol_count} symbols | ${sector.description}
                             </div>
+                            <button class="btn-view-edit"
+                                    onclick="openSectorEditor('${sector.sector_name}', ${JSON.stringify(sector.symbols)})"
+                                    style="margin-top: 0.5rem;">
+                                View / Edit Tickers
+                            </button>
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox"
@@ -1400,6 +1698,9 @@
                 const accountResponse = await fetch('/account/summary');
                 const accountData = await accountResponse.json();
                 updateAccountSummary(accountData);
+
+                // Load performance
+                await loadPerformance();
 
                 // Load allocation
                 const allocationResponse = await fetch('/allocation');
@@ -1910,6 +2211,230 @@
             const container = document.getElementById('error-container');
             container.innerHTML = `<div class="success-message">${message}</div>`;
             setTimeout(() => container.innerHTML = '', 3000);
+        }
+
+        // Performance Section
+        async function loadPerformance() {
+            try {
+                const response = await fetch('/account/performance');
+                const data = await response.json();
+
+                if (data.data_source === 'unavailable') {
+                    document.getElementById('day-pl').textContent = '--';
+                    document.getElementById('day-pl-pct').textContent = '';
+                    document.getElementById('equity').textContent = '--';
+                    document.getElementById('cash').textContent = '--';
+                    document.getElementById('buying-power').textContent = '--';
+                    const msgEl = document.getElementById('performance-message');
+                    msgEl.textContent = data.message || 'Performance data unavailable';
+                    msgEl.style.display = 'block';
+                } else {
+                    const dayPL = data.day_pl || 0;
+                    const dayPLPct = data.day_pl_pct || 0;
+                    document.getElementById('day-pl').textContent = '$' + dayPL.toFixed(2);
+                    const pctEl = document.getElementById('day-pl-pct');
+                    pctEl.textContent = (dayPLPct >= 0 ? '+' : '') + dayPLPct.toFixed(2) + '%';
+                    pctEl.className = 'performance-pct ' + (dayPLPct >= 0 ? 'positive' : 'negative');
+
+                    document.getElementById('equity').textContent = '$' + (data.equity || 0).toFixed(2);
+                    document.getElementById('cash').textContent = '$' + (data.cash || 0).toFixed(2);
+                    document.getElementById('buying-power').textContent = '$' + (data.buying_power || 0).toFixed(2);
+                    document.getElementById('performance-message').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error loading performance:', error);
+            }
+        }
+
+        // Account Summary Editor
+        function openAccountSummaryEditor() {
+            const totalCapital = document.getElementById('total-capital').textContent.replace(/[$,]/g, '');
+            const maxDailyLoss = document.getElementById('max-daily-loss').textContent.replace(/[$,]/g, '');
+            const maxPositions = document.getElementById('max-positions').textContent;
+
+            document.getElementById('edit-total-capital').value = totalCapital;
+            document.getElementById('edit-max-daily-loss').value = maxDailyLoss;
+            document.getElementById('edit-max-positions').value = maxPositions;
+
+            document.getElementById('account-summary-modal').classList.add('active');
+        }
+
+        function closeAccountSummaryEditor() {
+            document.getElementById('account-summary-modal').classList.remove('active');
+        }
+
+        async function saveAccountSummary() {
+            const totalCapital = parseFloat(document.getElementById('edit-total-capital').value);
+            const maxDailyLoss = parseFloat(document.getElementById('edit-max-daily-loss').value);
+            const maxPositions = parseInt(document.getElementById('edit-max-positions').value);
+
+            if (!totalCapital || !maxDailyLoss || !maxPositions) {
+                showError('All fields are required');
+                return;
+            }
+
+            if (!confirm('Update account settings? This will affect risk limits.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/account/summary', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        total_capital: totalCapital,
+                        max_daily_loss: maxDailyLoss,
+                        max_total_positions: maxPositions
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    closeAccountSummaryEditor();
+                    setTimeout(() => loadDashboard(), 500);
+                } else {
+                    showError(result.detail || 'Failed to update settings');
+                }
+            } catch (error) {
+                console.error('Error saving account summary:', error);
+                showError('Failed to update settings');
+            }
+        }
+
+        // Sector Editor
+        let currentSector = null;
+        let currentTickers = [];
+        let tickersToAdd = [];
+        let tickersToRemove = [];
+
+        function openSectorEditor(sectorName, tickers) {
+            currentSector = sectorName;
+            currentTickers = [...tickers];
+            tickersToAdd = [];
+            tickersToRemove = [];
+
+            document.getElementById('sector-editor-title').textContent = 'Edit ' + sectorName;
+            renderTickerList();
+
+            document.getElementById('add-tickers-input').value = '';
+            document.getElementById('remove-tickers-input').value = '';
+
+            document.getElementById('sector-editor-modal').classList.add('active');
+        }
+
+        function closeSectorEditor() {
+            document.getElementById('sector-editor-modal').classList.remove('active');
+            currentSector = null;
+        }
+
+        function renderTickerList() {
+            const listEl = document.getElementById('sector-ticker-list');
+            const countEl = document.getElementById('sector-ticker-count');
+
+            countEl.textContent = currentTickers.length;
+
+            listEl.innerHTML = currentTickers.map(ticker => `
+                <div class="ticker-pill">
+                    ${ticker}
+                    <button onclick="removeTicker('${ticker}')" title="Remove ${ticker}">&times;</button>
+                </div>
+            `).join('');
+        }
+
+        function removeTicker(ticker) {
+            if (!currentTickers.includes(ticker)) return;
+
+            currentTickers = currentTickers.filter(t => t !== ticker);
+            if (!tickersToRemove.includes(ticker)) {
+                tickersToRemove.push(ticker);
+            }
+            // Remove from add list if it was just added
+            tickersToAdd = tickersToAdd.filter(t => t !== ticker);
+
+            renderTickerList();
+        }
+
+        function addTickers() {
+            const input = document.getElementById('add-tickers-input').value.trim();
+            if (!input) return;
+
+            const tickers = input.split(/[,\s]+/).map(t => t.toUpperCase().trim()).filter(t => t);
+
+            for (const ticker of tickers) {
+                if (!currentTickers.includes(ticker)) {
+                    currentTickers.push(ticker);
+                    if (!tickersToAdd.includes(ticker)) {
+                        tickersToAdd.push(ticker);
+                    }
+                    // Remove from remove list if it was marked for removal
+                    tickersToRemove = tickersToRemove.filter(t => t !== ticker);
+                }
+            }
+
+            document.getElementById('add-tickers-input').value = '';
+            renderTickerList();
+        }
+
+        function removeTickers() {
+            const input = document.getElementById('remove-tickers-input').value.trim();
+            if (!input) return;
+
+            const tickers = input.split(/[,\s]+/).map(t => t.toUpperCase().trim()).filter(t => t);
+
+            for (const ticker of tickers) {
+                if (currentTickers.includes(ticker)) {
+                    currentTickers = currentTickers.filter(t => t !== ticker);
+                    if (!tickersToRemove.includes(ticker)) {
+                        tickersToRemove.push(ticker);
+                    }
+                    // Remove from add list if it was just added
+                    tickersToAdd = tickersToAdd.filter(t => t !== ticker);
+                }
+            }
+
+            document.getElementById('remove-tickers-input').value = '';
+            renderTickerList();
+        }
+
+        async function saveSectorChanges() {
+            if (tickersToAdd.length === 0 && tickersToRemove.length === 0) {
+                showError('No changes to save');
+                return;
+            }
+
+            const msg = [];
+            if (tickersToAdd.length > 0) msg.push(`Add ${tickersToAdd.length} ticker(s)`);
+            if (tickersToRemove.length > 0) msg.push(`Remove ${tickersToRemove.length} ticker(s)`);
+
+            if (!confirm(`${msg.join(' and ')} for ${currentSector}? Changes will be staged.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/universe/sectors/${currentSector}/tickers`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        add: tickersToAdd,
+                        remove: tickersToRemove
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    closeSectorEditor();
+                    setTimeout(() => loadUniverseSectors(), 500);
+                } else {
+                    showError(result.detail || 'Failed to update tickers');
+                }
+            } catch (error) {
+                console.error('Error saving sector changes:', error);
+                showError('Failed to update tickers');
+            }
         }
 
         // Auto-refresh every 30 seconds

@@ -259,7 +259,12 @@ def generate_proposals(
         )
 
         # Load candidates from events file or use provided candidates_file
-        if candidates_file and candidates_file.exists() or isinstance(candidates_file, PathType) and candidates_file.exists():
+        if (
+            candidates_file
+            and candidates_file.exists()
+            or isinstance(candidates_file, PathType)
+            and candidates_file.exists()
+        ):
             candidates = load_recent_candidates(
                 candidates_file,
                 lookback_hours=full_config.get("llm_rss_lookback_hours", 24),
