@@ -13,6 +13,8 @@ Key features:
 - Time-ordered event stream
 """
 
+from __future__ import annotations
+
 import json
 import uuid
 from dataclasses import asdict, dataclass

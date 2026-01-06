@@ -1,0 +1,125 @@
+# RSS Selector Configuration
+# Targets: Automation and Energy sectors
+
+sectors_enabled:
+  - automation
+  - energy
+
+# RSS Feed URLs (add your preferred feeds here)
+rss_feeds:
+  # Test fixtures (used by unit tests)
+  - https://example.com/automation
+  - https://example.com/energy
+  # Real RSS feed examples (uncomment and add your preferred feeds):
+  # - https://seekingalpha.com/sector/industrials.xml
+  # - https://feeds.finance.yahoo.com/rss/2.0/category-energy
+  # - https://www.investing.com/rss/news_25.rss  # Technology news
+  # - https://www.oilprice.com/rss/main  # Energy news
+
+# Keyword rules for sector classification
+keyword_rules:
+  automation:
+    tags:
+      - automation
+    keywords:
+      - automation
+      - robot
+      - robotics
+      - warehouse
+      - logistics
+      - PLC
+      - industrial
+      - manufacturing
+      - factory
+      - sorting
+      - conveyor
+      - AI automation
+      - automated
+      - AGV
+      - SCADA
+      - IoT manufacturing
+
+  energy:
+    tags:
+      - energy
+    keywords:
+      - energy
+      - oil
+      - gas
+      - lng
+      - solar
+      - wind
+      - nuclear
+      - battery
+      - grid
+      - power
+      - utility
+      - utilities
+      - renewable
+      - pipeline
+      - crude
+      - refinery
+      - petrochemical
+      - drilling
+
+# Action mapping keywords (for buy/sell/watch classification)
+action_keywords:
+  buy:
+    - beats
+    - beat
+    - raises guidance
+    - raised guidance
+    - upgrades
+    - upgraded
+    - contract
+    - award
+    - awarded
+    - record revenue
+    - record profit
+    - exceeds
+    - exceeded
+    - strong quarter
+    - outperforms
+    - acquisition
+    - partnership
+    - breakthrough
+
+  sell:
+    - misses
+    - missed
+    - cuts guidance
+    - cut guidance
+    - downgrades
+    - downgraded
+    - investigation
+    - bankruptcy
+    - layoffs
+    - lawsuit
+    - recall
+    - warning
+    - slump
+    - plunge
+    - tumbles
+
+# Confidence scoring modifiers
+confidence_modifiers:
+  strong_keyword_bonus: 0.10
+  base_confidence: 0.55
+  max_confidence: 0.90
+  uncertain_symbol_penalty: 0.15
+
+# Defaults for candidate expiration and behavior
+defaults:
+  min_confidence: 0.60
+  ttl_minutes_buy: 180      # 3 hours for buy signals
+  ttl_minutes_sell: 120     # 2 hours for sell signals
+  ttl_minutes_watch: 240    # 4 hours for watch signals
+  horizon_default: intraday
+
+# Safety constraints
+safety:
+  action_default_when_uncertain: watch
+  max_candidates_per_run: 50
+  require_symbol_allowlist: false
+  symbol_allowlist: []
+  symbol_denylist: []

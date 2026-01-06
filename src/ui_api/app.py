@@ -202,6 +202,15 @@ class PauseRequest(BaseModel):
     paused: bool
 
 
+class SelectorStatusResponse(BaseModel):
+    """Selector status response."""
+
+    last_run: str | None
+    candidates_count: int
+    candidates_by_action: dict[str, int]
+    last_error: str | None
+
+
 # ============================================================================
 # GET Endpoints (Read-Only)
 # ============================================================================
@@ -531,6 +540,62 @@ async def get_candidates():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load candidates: {e}") from e
+
+
+@app.get("/selector/status", response_model=SelectorStatusResponse)
+async def get_selector_status():
+    """Get selector status including last run time and candidate counts."""
+    import json
+
+    snapshot_path = Path("out/selector/snapshot.json")
+    events_path = Path("out/selector/events.jsonl")
+
+    last_run = None
+    candidates_count = 0
+    candidates_by_action = {"buy": 0, "sell": 0, "watch": 0}
+    last_error = None
+
+    # Read snapshot for candidate counts
+    if snapshot_path.exists():
+        try:
+            with open(snapshot_path, encoding="utf-8") as f:
+                data = json.load(f)
+
+            last_run = data.get("generated_at")
+            candidates_count = data.get("count", 0)
+
+            # Count by action
+            for candidate in data.get("candidates", []):
+                action = candidate.get("action", "watch")
+                if action in candidates_by_action:
+                    candidates_by_action[action] += 1
+
+        except Exception:
+            pass
+
+    # Check for last error in events
+    if events_path.exists():
+        try:
+            with open(events_path, encoding="utf-8") as f:
+                # Read last 10 lines to find most recent error
+                lines = f.readlines()
+                for line in reversed(lines[-10:]):
+                    try:
+                        event = json.loads(line)
+                        if event.get("event_type") == "error":
+                            last_error = event.get("error", "Unknown error")[:200]
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            pass
+
+    return SelectorStatusResponse(
+        last_run=last_run,
+        candidates_count=candidates_count,
+        candidates_by_action=candidates_by_action,
+        last_error=last_error,
+    )
 
 
 @app.get("/health/detailed", response_model=DetailedHealthResponse)
