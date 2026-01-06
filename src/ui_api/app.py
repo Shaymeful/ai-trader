@@ -1559,6 +1559,18 @@ async def get_account_performance():
         total_pl = None
         total_pl_pct = None
 
+        # Capture equity snapshot (best-effort)
+        try:
+            from src.app.equity_capture import capture_equity_snapshot
+
+            capture_equity_snapshot(
+                equity=equity,
+                cash=cash,
+                mode=config.mode,
+            )
+        except Exception as e:
+            print(f"WARNING: Failed to capture equity snapshot: {e}")
+
         return AccountPerformanceResponse(
             equity=equity,
             last_equity=last_equity,
@@ -1586,6 +1598,34 @@ async def get_account_performance():
             data_source="unavailable",
             message=f"Broker data unavailable: {e}",
         )
+
+
+@app.get("/account/performance/series")
+async def get_equity_series(hours: int = 24):
+    """
+    Get equity time series for the last N hours.
+
+    Args:
+        hours: Time window in hours (default: 24, max: 720 = 30 days)
+
+    Returns:
+        List of equity snapshots with timestamp, equity, cash, mode
+    """
+    from pathlib import Path
+
+    from src.app.equity_capture import load_equity_series
+
+    # Cap hours at 30 days
+    hours = min(hours, 720)
+
+    equity_file = Path("out/perf/equity.jsonl")
+    points = load_equity_series(equity_file, hours=hours)
+
+    return {
+        "points": points,
+        "count": len(points),
+        "hours": hours,
+    }
 
 
 # ============================================================================

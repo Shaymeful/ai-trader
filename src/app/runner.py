@@ -1016,6 +1016,39 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             with open(status_log, "a") as f:
                 f.write(status_line)
 
+            # Capture equity snapshot (best-effort)
+            if not dry_run:
+                try:
+                    from src.app.equity_capture import capture_equity_snapshot
+                    from src.broker.base import AlpacaBroker
+
+                    # Get current equity from broker
+                    if config.mode == "paper":
+                        broker = AlpacaBroker(
+                            key_id=config.alpaca_paper_key_id or "",
+                            secret_key=config.alpaca_paper_secret_key or "",
+                            is_paper=True,
+                        )
+                    else:
+                        broker = AlpacaBroker(
+                            key_id=config.alpaca_live_key_id or "",
+                            secret_key=config.alpaca_live_secret_key or "",
+                            is_paper=False,
+                        )
+
+                    account = broker.get_account()
+                    equity = float(account.equity)
+                    cash = float(account.cash)
+
+                    capture_equity_snapshot(
+                        equity=equity,
+                        cash=cash,
+                        mode=config.mode,
+                    )
+
+                except Exception as e:
+                    print(f"WARNING: Failed to capture equity snapshot: {e}")
+
             print(f"\n{'=' * 80}")
             print(f"ITERATION {iteration} COMPLETE")
             print(f"Status logged to: {status_log}")

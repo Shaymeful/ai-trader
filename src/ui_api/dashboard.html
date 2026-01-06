@@ -1000,6 +1000,54 @@
             color: #ef4444;
         }
 
+        /* Equity Curve */
+        .equity-curve-section {
+            margin-top: 1.5rem;
+        }
+
+        .equity-table-container {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #0f172a;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
+
+        .equity-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .equity-table thead {
+            position: sticky;
+            top: 0;
+            background: #1e293b;
+            z-index: 10;
+        }
+
+        .equity-table th {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #94a3b8;
+            border-bottom: 2px solid #334155;
+        }
+
+        .equity-table td {
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            border-bottom: 1px solid #334155;
+        }
+
+        .equity-table tbody tr:hover {
+            background: #1e293b;
+        }
+
+        .equity-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
         /* Modal Styles */
         .modal {
             display: none;
@@ -1265,6 +1313,33 @@
                 </div>
             </div>
             <div id="performance-message" class="text-muted" style="margin-top: 1rem; display: none;"></div>
+
+            <!-- Equity Curve -->
+            <div class="equity-curve-section">
+                <div class="section-header" style="margin-bottom: 1rem;">
+                    <h3>Equity Curve (Last 24 Hours)</h3>
+                    <button class="btn-secondary" onclick="loadEquitySeries()" title="Refresh equity data">
+                        Refresh
+                    </button>
+                </div>
+                <div class="equity-table-container" id="equity-table-container">
+                    <table class="equity-table" id="equity-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Equity</th>
+                                <th>Cash</th>
+                                <th>Mode</th>
+                            </tr>
+                        </thead>
+                        <tbody id="equity-table-body">
+                            <tr>
+                                <td colspan="4" class="text-muted">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
 
         <!-- Universe Sectors Section -->
@@ -1701,6 +1776,9 @@
 
                 // Load performance
                 await loadPerformance();
+
+                // Load equity series
+                await loadEquitySeries();
 
                 // Load allocation
                 const allocationResponse = await fetch('/allocation');
@@ -2243,6 +2321,51 @@
                 }
             } catch (error) {
                 console.error('Error loading performance:', error);
+            }
+        }
+
+        // Equity Series
+        async function loadEquitySeries(hours = 24) {
+            try {
+                const response = await fetch(`/account/performance/series?hours=${hours}`);
+                const data = await response.json();
+
+                const tbody = document.getElementById('equity-table-body');
+
+                if (!data.points || data.points.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No equity data available</td></tr>';
+                    return;
+                }
+
+                // Show last 20 points, most recent first
+                const points = data.points.slice(-20).reverse();
+
+                tbody.innerHTML = points.map(point => {
+                    const timestamp = new Date(point.timestamp);
+                    const timeStr = timestamp.toLocaleString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+
+                    const equityStr = '$' + (point.equity || 0).toFixed(2);
+                    const cashStr = '$' + (point.cash || 0).toFixed(2);
+                    const modeStr = point.mode || 'unknown';
+
+                    return `
+                        <tr>
+                            <td>${timeStr}</td>
+                            <td>${equityStr}</td>
+                            <td>${cashStr}</td>
+                            <td><span class="badge">${modeStr}</span></td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Error loading equity series:', error);
+                const tbody = document.getElementById('equity-table-body');
+                tbody.innerHTML = '<tr><td colspan="4" class="text-muted">Failed to load equity data</td></tr>';
             }
         }
 
