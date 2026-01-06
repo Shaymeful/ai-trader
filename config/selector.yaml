@@ -7,14 +7,24 @@ sectors_enabled:
 
 # RSS Feed URLs (add your preferred feeds here)
 rss_feeds:
-  # Test fixtures (used by unit tests)
+  # Test fixtures (used by unit tests - keep for testing)
   - https://example.com/automation
   - https://example.com/energy
-  # Real RSS feed examples (uncomment and add your preferred feeds):
-  # - https://seekingalpha.com/sector/industrials.xml
-  # - https://feeds.finance.yahoo.com/rss/2.0/category-energy
-  # - https://www.investing.com/rss/news_25.rss  # Technology news
-  # - https://www.oilprice.com/rss/main  # Energy news
+
+  # Real RSS feeds for automation/industrials sector
+  - https://roboticsandautomationnews.com/feed/  # Robotics & Automation News
+  - https://www.investing.com/rss/news_25.rss  # Stock Market News (includes industrials)
+
+  # Real RSS feeds for energy sector
+  - https://www.investing.com/rss/commodities_Energy.rss  # Energy Analysis & News
+  - https://www.investing.com/rss/news_11.rss  # Commodities & Futures News
+  - https://energywatch.com/service/rss  # Energy, Oil & Gas, Renewables News
+
+  # Additional options (uncomment as needed):
+  # - https://renewablesnow.com/feed/  # Renewable Energy News
+  # - https://www.roboticstomorrow.com/rss.xml  # Robotics & Automation
+  # - https://www.investing.com/rss/stock.rss  # Stock Markets Analysis
+  # - https://seekingalpha.com/feed.xml  # Seeking Alpha All Articles
 
 # Keyword rules for sector classification
 keyword_rules:
