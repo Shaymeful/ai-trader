@@ -1,9 +1,11 @@
 """Tests for configuration module."""
 
 import os
+import tempfile
 from decimal import Decimal
+from pathlib import Path
 
-from src.app.config import Config, load_config
+from src.app.config import Config, load_config, load_config_with_yaml
 
 
 def test_config_default_values():
@@ -63,3 +65,64 @@ def test_load_config_defaults_without_env():
 
     assert config.mode == "mock"
     assert config.max_positions > 0
+
+
+def test_load_config_with_yaml_sector_universe(monkeypatch):
+    """Test that sector-based universe is resolved correctly."""
+    monkeypatch.setenv("MODE", "mock")
+
+    yaml_content = """
+timeframe: "1h"
+universe:
+  fallback_mode: "preserve_order"
+  sectors:
+    core_index:
+      enabled: true
+      symbols:
+        - SPY
+        - QQQ
+    tech:
+      enabled: true
+      symbols:
+        - AAPL
+        - MSFT
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        temp_path = Path(f.name)
+
+    try:
+        config = load_config_with_yaml(temp_path)
+
+        assert config.universe_symbols == ["SPY", "QQQ", "AAPL", "MSFT"]
+        assert config.timeframe == "1h"
+    finally:
+        temp_path.unlink()
+
+
+def test_load_config_backward_compatibility(monkeypatch):
+    """Test that old core.symbols format still works."""
+    monkeypatch.setenv("MODE", "mock")
+
+    yaml_content = """
+timeframe: "1h"
+universe:
+  core:
+    symbols:
+      - SPY
+      - QQQ
+      - AAPL
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        temp_path = Path(f.name)
+
+    try:
+        config = load_config_with_yaml(temp_path)
+
+        assert config.universe_symbols == ["SPY", "QQQ", "AAPL"]
+        assert config.timeframe == "1h"
+    finally:
+        temp_path.unlink()

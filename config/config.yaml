@@ -19,19 +19,37 @@ performance:
   min_samples: 20   # Minimum samples required before strategy weight updates
   max_samples: 200  # Maximum rolling return samples to keep per strategy
 
-# Trading universe
+# Trading universe - Sector-based configuration
 universe:
-  core:
-    symbols:
-      - SPY
-      - QQQ
-      - AAPL
-      - MSFT
-      - NVDA
-      - AMD
-      - META
-      - GOOGL
-      - TSLA
-      - XLF
-      - XLE
-      - XLV
+  # Fallback behavior when resolving symbols
+  # Options: "preserve_order" (default), "alphabetical"
+  fallback_mode: "preserve_order"
+
+  # Sector groups
+  sectors:
+    core_index:
+      enabled: true
+      description: "Major market index ETFs"
+      symbols:
+        - SPY
+        - QQQ
+
+    mega_cap_tech:
+      enabled: true
+      description: "Mega-cap technology stocks"
+      symbols:
+        - AAPL
+        - MSFT
+        - NVDA
+        - AMD
+        - META
+        - GOOGL
+        - TSLA
+
+    us_sector_etfs:
+      enabled: true
+      description: "US sector rotation ETFs"
+      symbols:
+        - XLF
+        - XLE
+        - XLV

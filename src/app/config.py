@@ -372,10 +372,22 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
             config.timeframe = yaml_config["timeframe"]
 
         # Apply universe symbols from YAML
-        if "universe" in yaml_config and "core" in yaml_config["universe"]:
-            core_symbols = yaml_config["universe"]["core"].get("symbols", [])
-            if core_symbols:
-                config.universe_symbols = core_symbols
+        if "universe" in yaml_config:
+            from src.app.universe import resolve_universe
+
+            resolution = resolve_universe(yaml_config)
+
+            # Log warnings
+            if resolution.warnings:
+                import logging
+
+                logger = logging.getLogger("ai-trader")
+                for warning in resolution.warnings:
+                    logger.warning(f"Universe resolution: {warning}")
+
+            # Set resolved symbols
+            if resolution.symbols:
+                config.universe_symbols = resolution.symbols
 
         # Apply risk parameters from YAML (override existing if present)
         if "risk" in yaml_config:
