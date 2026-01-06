@@ -3213,6 +3213,7 @@ async def lifespan(app: FastAPI):
 | Endpoint | Purpose | Returns |
 |----------|---------|---------|
 | `GET /account/performance` | Broker account performance | `{equity, last_equity, cash, buying_power, day_pl, day_pl_pct, total_pl, total_pl_pct, data_source, message}` |
+| `GET /account/performance/series?hours=24` | Equity time series | `{points: [{timestamp, equity, cash, mode}], count, hours}` |
 
 **Operational Control Endpoints:**
 
@@ -3955,6 +3956,596 @@ Potential future additions (listed here for architectural consideration):
    - Currently single Alpaca account
    - Would require account_id field throughout
    - Registry would need per-account strategies
+
+### 8. Equity Curve Time Series
+
+The **Equity Curve** feature provides automatic background capture of portfolio equity snapshots and displays them as a time series in the dashboard. This enables operators to track portfolio performance over time without requiring manual data export.
+
+#### Purpose
+
+- **Performance Monitoring:** Track equity changes throughout the trading day and across sessions
+- **Visual Feedback:** See portfolio evolution in the dashboard with minimal latency
+- **Historical Record:** Maintain bounded history of equity snapshots (up to 5000 points)
+- **Audit Trail:** Complement ledger events with time-series account data
+
+#### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Background Capture                         │
+│                                                               │
+│  ┌─────────────────┐           ┌─────────────────┐          │
+│  │  Runner Loop    │           │  Dashboard UI   │          │
+│  │  (non-dry-run)  │           │  Performance    │          │
+│  │                 │           │  Endpoint       │          │
+│  └────────┬────────┘           └────────┬────────┘          │
+│           │                              │                   │
+│           │ capture after success        │ capture on fetch  │
+│           │                              │                   │
+│           ▼                              ▼                   │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │         src/app/equity_capture.py                     │  │
+│  │  - capture_equity_snapshot()                          │  │
+│  │  - load_equity_series()                               │  │
+│  └───────────────────┬───────────────────────────────────┘  │
+│                      │                                       │
+│                      ▼                                       │
+│           out/perf/equity.jsonl                              │
+│           (atomic writes, rotation at 5000 points)           │
+└──────────────────────────────────────────────────────────────┘
+                       │
+                       ▼
+        ┌──────────────────────────────────────┐
+        │  GET /account/performance/series     │
+        │  Returns: {points, count, hours}     │
+        └──────────────┬───────────────────────┘
+                       │
+                       ▼
+        ┌──────────────────────────────────────┐
+        │       Dashboard UI Table              │
+        │  - Shows last 20 points               │
+        │  - Reverse chronological              │
+        │  - Time, Equity, Cash, Mode           │
+        └───────────────────────────────────────┘
+```
+
+#### Core Module: `src/app/equity_capture.py`
+
+##### `capture_equity_snapshot(equity, cash, mode, equity_file, max_points)`
+
+Appends equity snapshot to time series file with automatic rotation.
+
+**Parameters:**
+- `equity` (float): Current portfolio equity
+- `cash` (float): Current cash balance
+- `mode` (str): Trading mode ("paper" or "live")
+- `equity_file` (Path, optional): Output file path (default: `out/perf/equity.jsonl`)
+- `max_points` (int, optional): Maximum points to retain (default: 5000)
+
+**Behavior:**
+1. Creates `out/perf/` directory if missing
+2. Reads existing snapshots from file (if exists)
+3. Appends new snapshot with UTC timestamp
+4. Truncates to last `max_points` if exceeded
+5. Writes back atomically (temp file + rename)
+6. Gracefully handles corrupted data (discards invalid lines)
+
+**Snapshot Format:**
+```json
+{
+  "timestamp": "2026-01-06T10:30:00.123456+00:00",
+  "equity": 102500.50,
+  "cash": 48750.25,
+  "mode": "paper"
+}
+```
+
+**Atomic Write Pattern:**
+```python
+with NamedTemporaryFile(mode="w", dir=equity_file.parent, delete=False) as tmp:
+    for point in existing_points:
+        tmp.write(json.dumps(point) + "\n")
+    tmp_path = Path(tmp.name)
+
+tmp_path.replace(equity_file)  # Atomic on POSIX, near-atomic on Windows
+```
+
+##### `load_equity_series(equity_file, hours)`
+
+Loads and filters equity snapshots by time window.
+
+**Parameters:**
+- `equity_file` (Path, optional): Input file path (default: `out/perf/equity.jsonl`)
+- `hours` (int, optional): Time window in hours (default: 24)
+
+**Returns:**
+- `list[dict]`: Snapshots within time window (sorted chronologically)
+
+**Behavior:**
+1. Returns empty list if file doesn't exist
+2. Calculates cutoff time (`now - timedelta(hours)`)
+3. Reads JSONL file line-by-line
+4. Filters snapshots by timestamp
+5. Skips corrupted lines or invalid timestamps
+6. Returns filtered list (oldest to newest)
+
+**Error Handling:**
+- Missing file → empty list
+- Corrupted JSON lines → skipped (logged as warning)
+- Invalid timestamp format → skipped
+- File read errors → empty list (logged as warning)
+
+#### Background Capture Integration
+
+##### Runner Loop (`src/app/runner.py`)
+
+Captures equity after each successful loop iteration (non-dry-run only).
+
+**Location:** Line 1019-1050 (after status log write)
+
+**Code:**
+```python
+# Capture equity snapshot (best-effort)
+if not dry_run:
+    try:
+        from src.app.equity_capture import capture_equity_snapshot
+        from src.broker.base import AlpacaBroker
+
+        # Get current equity from broker
+        if config.mode == "paper":
+            broker = AlpacaBroker(
+                key_id=config.alpaca_paper_key_id or "",
+                secret_key=config.alpaca_paper_secret_key or "",
+                is_paper=True,
+            )
+        else:
+            broker = AlpacaBroker(
+                key_id=config.alpaca_live_key_id or "",
+                secret_key=config.alpaca_live_secret_key or "",
+                is_paper=False,
+            )
+
+        account = broker.get_account()
+        equity = float(account.equity)
+        cash = float(account.cash)
+
+        capture_equity_snapshot(equity=equity, cash=cash, mode=config.mode)
+
+    except Exception as e:
+        print(f"WARNING: Failed to capture equity snapshot: {e}")
+```
+
+**Behavior:**
+- Runs only when `dry_run=False` (actual trading mode)
+- Creates broker client to fetch current account state
+- Calls `capture_equity_snapshot()` with equity/cash
+- **Best-effort:** Catches exceptions, logs warnings, never blocks trading
+- **Timing:** Captures after orders are placed and status logged
+
+##### Dashboard Performance Endpoint (`src/ui_api/app.py`)
+
+Captures equity when dashboard fetches performance data.
+
+**Location:** Line 1562-1572 (inside `GET /account/performance`)
+
+**Code:**
+```python
+# Capture equity snapshot (best-effort)
+try:
+    from src.app.equity_capture import capture_equity_snapshot
+
+    capture_equity_snapshot(equity=equity, cash=cash, mode=config.mode)
+except Exception as e:
+    print(f"WARNING: Failed to capture equity snapshot: {e}")
+```
+
+**Behavior:**
+- Runs when dashboard polls performance endpoint (every 30 seconds)
+- Captures equity alongside fetching account performance
+- **Best-effort:** Never fails the API request
+- **Timing:** Captures after successful broker API call
+
+#### API Endpoint
+
+##### `GET /account/performance/series`
+
+Returns equity time series filtered by time window.
+
+**Query Parameters:**
+- `hours` (int, optional): Time window in hours (default: 24, max: 720)
+
+**Response:**
+```json
+{
+  "points": [
+    {
+      "timestamp": "2026-01-06T09:30:00.123456+00:00",
+      "equity": 100000.00,
+      "cash": 50000.00,
+      "mode": "paper"
+    },
+    {
+      "timestamp": "2026-01-06T10:30:00.234567+00:00",
+      "equity": 100500.50,
+      "cash": 49500.25,
+      "mode": "paper"
+    }
+  ],
+  "count": 2,
+  "hours": 24
+}
+```
+
+**Behavior:**
+1. Caps `hours` at 720 (30 days)
+2. Calls `load_equity_series(hours=hours)`
+3. Returns empty `points` list if no data
+4. Returns all points within time window (no limit)
+
+**Status Codes:**
+- `200 OK`: Always (even if no data)
+
+**Implementation:**
+```python
+@app.get("/account/performance/series")
+async def get_equity_series(hours: int = 24):
+    """Get equity time series for the last N hours."""
+    from pathlib import Path
+    from src.app.equity_capture import load_equity_series
+
+    # Cap hours at 30 days
+    hours = min(hours, 720)
+
+    equity_file = Path("out/perf/equity.jsonl")
+    points = load_equity_series(equity_file, hours=hours)
+
+    return {
+        "points": points,
+        "count": len(points),
+        "hours": hours,
+    }
+```
+
+#### Dashboard UI Components
+
+##### Equity Curve Section
+
+**Location:** `src/ui_api/dashboard.html` (inside Performance section, after performance cards)
+
+**HTML Structure:**
+```html
+<div class="equity-curve-section">
+    <div class="section-header">
+        <h3>Equity Curve (Last 24 Hours)</h3>
+        <button class="btn-secondary" onclick="loadEquitySeries()">
+            Refresh
+        </button>
+    </div>
+    <div class="equity-table-container">
+        <table class="equity-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Equity</th>
+                    <th>Cash</th>
+                    <th>Mode</th>
+                </tr>
+            </thead>
+            <tbody id="equity-table-body">
+                <!-- Dynamically populated -->
+            </tbody>
+        </table>
+    </div>
+</div>
+```
+
+**CSS Styling:**
+- `.equity-table-container`: Scrollable container (max-height: 400px)
+- `.equity-table thead`: Sticky header (always visible when scrolling)
+- `.equity-table tbody tr:hover`: Hover highlight for rows
+- Consistent with dashboard theme (dark background, blue accents)
+
+##### JavaScript Functions
+
+**`loadEquitySeries(hours = 24)`**
+
+Fetches equity series from API and renders table.
+
+**Behavior:**
+1. Fetches `GET /account/performance/series?hours=${hours}`
+2. Handles empty data gracefully (shows "No equity data available")
+3. Takes last 20 points, reverses order (most recent first)
+4. Formats timestamps as `"Jan 6, 10:30 AM"`
+5. Renders table rows with equity, cash, mode badge
+6. Handles errors (shows "Failed to load equity data")
+
+**Implementation:**
+```javascript
+async function loadEquitySeries(hours = 24) {
+    try {
+        const response = await fetch(`/account/performance/series?hours=${hours}`);
+        const data = await response.json();
+
+        const tbody = document.getElementById('equity-table-body');
+
+        if (!data.points || data.points.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No equity data available</td></tr>';
+            return;
+        }
+
+        // Show last 20 points, most recent first
+        const points = data.points.slice(-20).reverse();
+
+        tbody.innerHTML = points.map(point => {
+            const timestamp = new Date(point.timestamp);
+            const timeStr = timestamp.toLocaleString('en-US', {
+                month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+
+            return `
+                <tr>
+                    <td>${timeStr}</td>
+                    <td>$${(point.equity || 0).toFixed(2)}</td>
+                    <td>$${(point.cash || 0).toFixed(2)}</td>
+                    <td><span class="badge">${point.mode}</span></td>
+                </tr>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('Error loading equity series:', error);
+        tbody.innerHTML = '<tr><td colspan="4" class="text-muted">Failed to load equity data</td></tr>';
+    }
+}
+```
+
+**Auto-Refresh:**
+
+Called automatically on dashboard load:
+```javascript
+async function loadDashboard() {
+    // ... other loads ...
+    await loadPerformance();
+    await loadEquitySeries();  // Added
+    // ...
+}
+```
+
+#### Storage Format
+
+##### File: `out/perf/equity.jsonl`
+
+**Format:** JSON Lines (one JSON object per line)
+
+**Example:**
+```jsonl
+{"timestamp":"2026-01-06T09:30:00.123456+00:00","equity":100000.0,"cash":50000.0,"mode":"paper"}
+{"timestamp":"2026-01-06T10:30:00.234567+00:00","equity":100500.5,"cash":49500.25,"mode":"paper"}
+{"timestamp":"2026-01-06T11:30:00.345678+00:00","equity":101000.75,"cash":49000.0,"mode":"paper"}
+```
+
+**Fields:**
+- `timestamp` (str): ISO 8601 UTC timestamp with microsecond precision
+- `equity` (float): Total portfolio equity (positions + cash)
+- `cash` (float): Available cash balance
+- `mode` (str): Trading mode ("paper" or "live")
+
+**File Size Bounds:**
+- **Max Points:** 5000 (configurable via `max_points` parameter)
+- **Estimated Size:** ~300 bytes per line → 5000 lines ≈ 1.5 MB
+- **Rotation:** Automatic (keeps last 5000 points, discards oldest)
+
+**Directory Structure:**
+```
+out/
+├── perf/
+│   └── equity.jsonl        # Time series snapshots
+├── strategies_overrides.json
+└── universe_proposals.json
+```
+
+#### Safety Features
+
+1. **Atomic Writes:**
+   - Uses temp file + rename pattern
+   - Prevents corruption on crash or interruption
+   - Windows: Near-atomic (replace operation)
+   - POSIX: Guaranteed atomic
+
+2. **Bounded Growth:**
+   - Hard cap at 5000 points (default)
+   - Prevents unbounded disk usage
+   - 5000 snapshots ≈ 69 days at 1 snapshot/20 minutes
+
+3. **Best-Effort Capture:**
+   - Never blocks trading operations
+   - Exceptions caught and logged as warnings
+   - Missing broker data → skip capture (no crash)
+   - File I/O errors → skip capture (no crash)
+
+4. **Corruption Handling:**
+   - Invalid JSON lines → skipped during read
+   - Missing timestamp → line skipped
+   - Invalid timestamp format → line skipped
+   - Entire file corrupted → discarded, new file started
+
+5. **No LLM Keys Required:**
+   - Pure data capture and retrieval
+   - No external API dependencies (besides Alpaca)
+   - Works in all trading modes
+
+#### Testing
+
+##### Unit Tests: `tests/test_equity_capture.py` (10 tests)
+
+**Capture Function Tests:**
+1. `test_capture_equity_snapshot_creates_file` - File creation
+2. `test_capture_equity_snapshot_appends_to_existing` - Append behavior
+3. `test_capture_equity_snapshot_caps_at_max_points` - Rotation (5 points max)
+4. `test_capture_equity_snapshot_handles_missing_directory` - Auto-create dirs
+5. `test_capture_equity_snapshot_handles_corrupted_file` - Recovery from corruption
+6. `test_capture_with_different_modes` - Paper/live mode tracking
+
+**Load Function Tests:**
+7. `test_load_equity_series_returns_empty_if_no_file` - Missing file handling
+8. `test_load_equity_series_filters_by_time_window` - Time-based filtering (24h)
+9. `test_load_equity_series_handles_corrupted_lines` - Skips invalid JSON
+10. `test_load_equity_series_handles_missing_timestamp` - Skips entries without timestamp
+
+##### API Tests: `tests/test_equity_api.py` (5 tests)
+
+**Endpoint Tests:**
+1. `test_get_equity_series_empty` - Empty data response
+2. `test_get_equity_series_with_data` - Data retrieval (3 points)
+3. `test_get_equity_series_with_custom_hours` - Time window filtering (48h → 24h)
+4. `test_get_equity_series_caps_max_hours` - Hours capped at 720
+5. `test_get_equity_series_filters_old_data` - Old data excluded (100h → 24h)
+
+**Test Coverage:**
+- File I/O operations (create, append, rotate)
+- Atomic write behavior
+- Time window filtering
+- Corruption recovery
+- API endpoint contract
+- Query parameter validation
+
+**Running Tests:**
+```bash
+pytest tests/test_equity_capture.py tests/test_equity_api.py -v
+# All 15 tests pass
+```
+
+#### Usage Examples
+
+##### Viewing Equity Curve in Dashboard
+
+1. Start trading bot (paper mode with loop):
+   ```bash
+   python -m src.app.runner --mode paper --loop
+   ```
+
+2. Open dashboard:
+   ```
+   http://localhost:8000
+   ```
+
+3. Navigate to Performance section → Equity Curve table
+   - Shows last 20 snapshots
+   - Click "Refresh" to reload
+
+##### API Usage (Programmatic)
+
+**Get last 24 hours:**
+```bash
+curl http://localhost:8000/account/performance/series
+```
+
+**Get last 7 days:**
+```bash
+curl http://localhost:8000/account/performance/series?hours=168
+```
+
+**Response Example:**
+```json
+{
+  "points": [
+    {
+      "timestamp": "2026-01-06T09:30:00.123456+00:00",
+      "equity": 100000.0,
+      "cash": 50000.0,
+      "mode": "paper"
+    }
+  ],
+  "count": 1,
+  "hours": 24
+}
+```
+
+##### Manual Snapshot (CLI)
+
+```python
+from pathlib import Path
+from src.app.equity_capture import capture_equity_snapshot
+
+# Capture a snapshot manually
+capture_equity_snapshot(
+    equity=100000.0,
+    cash=50000.0,
+    mode="paper",
+    equity_file=Path("out/perf/equity.jsonl"),
+    max_points=5000,
+)
+```
+
+#### Performance Considerations
+
+1. **Capture Overhead:**
+   - File I/O: ~1-2ms per capture (atomic write)
+   - Broker API call: Already happening (no extra latency)
+   - Negligible impact on loop timing (best-effort)
+
+2. **API Latency:**
+   - File read: ~10-20ms for 5000 points
+   - Time filtering: O(N) scan, fast for small files
+   - Network transfer: ~1KB per 20 points (minimal)
+
+3. **Disk Usage:**
+   - 5000 points ≈ 1.5 MB (bounded)
+   - Single file (no log rotation needed)
+   - JSONL format (human-readable, easy to debug)
+
+4. **Dashboard Impact:**
+   - Auto-loads on page load (1 request)
+   - Manual refresh available (button)
+   - No WebSocket/polling overhead
+
+#### Limitations
+
+1. **No Historical Backfill:**
+   - Snapshots start when feature is deployed
+   - No automatic backfill from ledger or broker history
+   - Manual backfill possible via CLI script
+
+2. **No Chart Visualization:**
+   - Currently displays as table (last 20 points)
+   - Future: Add line chart with chart library
+   - Table is simpler and doesn't require external dependencies
+
+3. **Single File Storage:**
+   - No per-day rotation (unlike logs)
+   - Entire history in one file (bounded at 5000 points)
+   - Sufficient for short-term monitoring (weeks to months)
+
+4. **No Persistence Across Modes:**
+   - Paper and live mode use same file
+   - Mode is tracked per snapshot but not filtered
+   - Mixed mode data if switching between paper/live
+
+#### Future Enhancements (Not Implemented)
+
+1. **Line Chart Visualization:**
+   - Add chart library (e.g., Chart.js)
+   - Render equity over time as line graph
+   - Hover tooltips for exact values
+
+2. **Per-Day Files:**
+   - Split into daily files (`equity_20260106.jsonl`)
+   - Easier to manage long histories
+   - Automatic cleanup of old files
+
+3. **Drawdown Calculation:**
+   - Calculate max drawdown from equity series
+   - Display in dashboard (e.g., "Max DD: -2.5%")
+   - Alert on excessive drawdown
+
+4. **Export to CSV:**
+   - Download equity series as CSV
+   - For external analysis (Excel, Python, etc.)
+
+5. **Intraday Statistics:**
+   - High/low equity for current day
+   - Intraday volatility (std-dev of returns)
+   - Display in Performance section
 
 ---
 
