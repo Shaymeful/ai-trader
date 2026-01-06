@@ -1529,21 +1529,14 @@ async def get_account_performance():
         # Get broker instance (AlpacaBroker works for both paper and live)
         from src.broker.base import AlpacaBroker
 
-        if config.mode == "paper":
-            broker = AlpacaBroker(
-                key_id=config.alpaca_paper_key_id or "",
-                secret_key=config.alpaca_paper_secret_key or "",
-                is_paper=True,
-            )
-        else:
-            broker = AlpacaBroker(
-                key_id=config.alpaca_live_key_id or "",
-                secret_key=config.alpaca_live_secret_key or "",
-                is_paper=False,
-            )
+        broker = AlpacaBroker(
+            api_key=config.alpaca_api_key,
+            secret_key=config.alpaca_secret_key,
+            trading_base_url=config.alpaca_trading_base_url,
+        )
 
-        # Get account info
-        account = broker.get_account()
+        # Get account info from Alpaca API
+        account = broker.client.get_account()
 
         equity = float(account.equity)
         last_equity = float(account.last_equity)

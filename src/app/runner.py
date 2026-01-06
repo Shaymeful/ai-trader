@@ -1017,26 +1017,19 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                 f.write(status_line)
 
             # Capture equity snapshot (best-effort)
-            if not dry_run:
+            if not dry_run and config.alpaca_api_key:
                 try:
                     from src.app.equity_capture import capture_equity_snapshot
                     from src.broker.base import AlpacaBroker
 
                     # Get current equity from broker
-                    if config.mode == "paper":
-                        broker = AlpacaBroker(
-                            key_id=config.alpaca_paper_key_id or "",
-                            secret_key=config.alpaca_paper_secret_key or "",
-                            is_paper=True,
-                        )
-                    else:
-                        broker = AlpacaBroker(
-                            key_id=config.alpaca_live_key_id or "",
-                            secret_key=config.alpaca_live_secret_key or "",
-                            is_paper=False,
-                        )
+                    broker = AlpacaBroker(
+                        api_key=config.alpaca_api_key,
+                        secret_key=config.alpaca_secret_key,
+                        trading_base_url=config.alpaca_trading_base_url,
+                    )
 
-                    account = broker.get_account()
+                    account = broker.client.get_account()
                     equity = float(account.equity)
                     cash = float(account.cash)
 
