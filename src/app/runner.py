@@ -759,13 +759,7 @@ def run_paper_mode(
     )
 
 
-def run_loop(
-    mode: str,
-    dry_run: bool,
-    sleep_seconds: int,
-    cancel_open_orders: bool = False,
-    log_dir: Path | None = None,
-):
+def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: bool = False):
     """
     Run in loop mode: execute strategy runner repeatedly with sleep intervals.
 
@@ -777,11 +771,9 @@ def run_loop(
         dry_run: Whether to run paper mode in dry-run
         sleep_seconds: Seconds to sleep between iterations
         cancel_open_orders: Whether to cancel open orders before each run
-        log_dir: Directory for log files (default: Path("logs"))
     """
     # Ensure logs directory exists
-    if log_dir is None:
-        log_dir = Path("logs")
+    log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
     status_log = log_dir / "loop_status.log"
