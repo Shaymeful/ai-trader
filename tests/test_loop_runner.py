@@ -33,18 +33,15 @@ def test_run_loop_executes_multiple_iterations(monkeypatch, tmp_path):
 
     call_count = [0]
 
-    def mock_run_shadow():
+    def mock_run_shadow(provider=None, universe_registry=None):
         call_count[0] += 1
         return mock_result
 
     monkeypatch.setattr("src.app.runner.run_shadow_mode", mock_run_shadow)
 
-    # Use tmp_path for logs
-    monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
-
     # Run loop (will stop after 3 iterations due to mock_sleep)
     with pytest.raises(SystemExit):  # KeyboardInterrupt causes sys.exit(0)
-        run_loop(mode="shadow", dry_run=False, sleep_seconds=10)
+        run_loop(mode="shadow", dry_run=False, sleep_seconds=10, log_dir=tmp_path)
 
     # Verify run_shadow_mode was called 3 times
     assert call_count[0] == 3
@@ -73,14 +70,11 @@ def test_run_loop_logs_success_to_status_log(monkeypatch, tmp_path):
         timestamp="2025-12-30T10:00:00+00:00",
     )
 
-    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda: mock_result)
-
-    # Use tmp_path for logs
-    monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
+    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda provider=None, universe_registry=None: mock_result)
 
     # Run loop
     with pytest.raises(SystemExit):
-        run_loop(mode="shadow", dry_run=False, sleep_seconds=10)
+        run_loop(mode="shadow", dry_run=False, sleep_seconds=10, log_dir=tmp_path)
 
     # Check status log was created
     status_log = tmp_path / "loop_status.log"
@@ -112,7 +106,7 @@ def test_run_loop_catches_exceptions_and_continues(monkeypatch, tmp_path):
     # Mock run_shadow_mode to fail on first call, succeed on others
     call_count = [0]
 
-    def mock_run_shadow():
+    def mock_run_shadow(provider=None, universe_registry=None):
         call_count[0] += 1
         if call_count[0] == 1:
             raise ValueError("Simulated error")
@@ -127,12 +121,9 @@ def test_run_loop_catches_exceptions_and_continues(monkeypatch, tmp_path):
 
     monkeypatch.setattr("src.app.runner.run_shadow_mode", mock_run_shadow)
 
-    # Use tmp_path for logs
-    monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
-
     # Run loop
     with pytest.raises(SystemExit):
-        run_loop(mode="shadow", dry_run=False, sleep_seconds=10)
+        run_loop(mode="shadow", dry_run=False, sleep_seconds=10, log_dir=tmp_path)
 
     # Verify run_shadow_mode was called 3 times (despite first failure)
     assert call_count[0] == 3
@@ -188,15 +179,12 @@ def test_run_loop_paper_mode_with_dry_run(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "src.app.runner.run_paper_mode",
-        lambda dry_run, cancel_open_orders=False, registry=None: mock_result,
+        lambda dry_run, cancel_open_orders=False, registry=None, provider=None, universe_registry=None: mock_result,
     )
-
-    # Use tmp_path for logs
-    monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
 
     # Run loop in paper mode with dry-run
     with pytest.raises(SystemExit):
-        run_loop(mode="paper", dry_run=True, sleep_seconds=3600)
+        run_loop(mode="paper", dry_run=True, sleep_seconds=3600, log_dir=tmp_path)
 
     # Check status log
     status_log = tmp_path / "loop_status.log"
@@ -252,15 +240,12 @@ def test_run_loop_handles_empty_strategy_weights(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "src.app.runner.run_paper_mode",
-        lambda dry_run, cancel_open_orders=False, registry=None: mock_result,
+        lambda dry_run, cancel_open_orders=False, registry=None, provider=None, universe_registry=None: mock_result,
     )
-
-    # Use tmp_path for logs
-    monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
 
     # Run loop
     with pytest.raises(SystemExit):
-        run_loop(mode="paper", dry_run=False, sleep_seconds=10)
+        run_loop(mode="paper", dry_run=False, sleep_seconds=10, log_dir=tmp_path)
 
     # Check status log
     status_log = tmp_path / "loop_status.log"
@@ -290,14 +275,11 @@ def test_run_loop_keyboard_interrupt_exits_cleanly(monkeypatch, tmp_path, capsys
         timestamp=datetime.now(UTC).isoformat(),
     )
 
-    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda: mock_result)
-
-    # Use tmp_path for logs
-    monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
+    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda provider=None, universe_registry=None: mock_result)
 
     # Run loop - should exit cleanly
     with pytest.raises(SystemExit) as exc_info:
-        run_loop(mode="shadow", dry_run=False, sleep_seconds=10)
+        run_loop(mode="shadow", dry_run=False, sleep_seconds=10, log_dir=tmp_path)
 
     # Verify it exits with code 0 (clean shutdown)
     assert exc_info.value.code == 0
