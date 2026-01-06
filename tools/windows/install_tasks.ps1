@@ -267,9 +267,9 @@ try {
 
     # Create trigger: Daily at 8:50 AM, repeat every 15 minutes for 7 hours 20 minutes (until 4:10 PM)
     $Trigger = New-ScheduledTaskTrigger -Daily -At "08:50AM"
-    $Trigger.Repetition = [CimInstance]::new("MSFT_TaskRepetitionPattern")
-    $Trigger.Repetition.Interval = "PT15M"  # Every 15 minutes
-    $Trigger.Repetition.Duration = "PT7H20M"  # For 7 hours 20 minutes (8:50 AM to 4:10 PM)
+    # Create repetition pattern using proper CIM class instantiation
+    $Repetition = (New-ScheduledTaskTrigger -Once -At "08:50AM" -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Hours 7 -Minutes 20)).Repetition
+    $Trigger.Repetition = $Repetition
 
     $Settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -321,9 +321,9 @@ try {
 
     # Create trigger: Daily at 9:00 AM, repeat every 1 hour for 23.5 hours
     $Trigger = New-ScheduledTaskTrigger -Daily -At "09:00AM"
-    $Trigger.Repetition = [CimInstance]::new("MSFT_TaskRepetitionPattern")
-    $Trigger.Repetition.Interval = "PT1H"  # Every 1 hour
-    $Trigger.Repetition.Duration = "PT23H30M"  # For 23.5 hours (resets next day)
+    # Create repetition pattern using proper CIM class instantiation
+    $Repetition = (New-ScheduledTaskTrigger -Once -At "09:00AM" -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 23 -Minutes 30)).Repetition
+    $Trigger.Repetition = $Repetition
 
     $Settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
