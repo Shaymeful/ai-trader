@@ -409,3 +409,186 @@ class TestEndToEnd:
         # Basic sanity check
         assert isinstance(candidates, list)
         assert isinstance(events, list)
+
+
+class TestLiquidityFloor:
+    """Test liquidity floor screening."""
+
+    def test_liquidity_check_passes_with_sufficient_volume(self, selector):
+        """Test that candidates with volume >= floor pass."""
+        # $25M volume >= $20M floor
+        assert selector.check_liquidity(25_000_000) is True
+
+    def test_liquidity_check_passes_at_exact_floor(self, selector):
+        """Test that candidates at exact floor pass."""
+        # $20M volume == $20M floor
+        assert selector.check_liquidity(20_000_000) is True
+
+    def test_liquidity_check_fails_below_floor(self, selector):
+        """Test that candidates below floor are rejected."""
+        # $15M volume < $20M floor
+        assert selector.check_liquidity(15_000_000) is False
+
+    def test_liquidity_check_passes_with_none(self, selector):
+        """Test that candidates with no data are allowed through."""
+        # No data available - should not block
+        assert selector.check_liquidity(None) is True
+
+    def test_liquidity_check_fails_with_very_low_volume(self, selector):
+        """Test that penny stocks are rejected."""
+        # $100K volume << $20M floor
+        assert selector.check_liquidity(100_000) is False
+
+
+class TestVaguenessPenalty:
+    """Test vagueness penalty for speculative headlines."""
+
+    def test_vagueness_penalty_applied_without_hard_actions(self, selector):
+        """Test penalty applied for speculative words without hard action keywords."""
+        # "may announce" is speculative, no hard action keywords
+        text = "Company (XYZ) may announce new product"
+        action = "watch"
+        symbol_certain = True
+        confidence = selector.compute_confidence(text, action, symbol_certain)
+
+        # Base 0.55 - vagueness_penalty 0.10 = 0.45, clamped to min 0.60
+        assert confidence == 0.60
+
+    def test_no_vagueness_penalty_with_hard_actions(self, selector):
+        """Test no penalty when hard action keywords present."""
+        # "beats earnings" has hard action keyword
+        text = "Company (XYZ) may beat earnings"
+        action = "buy"
+        symbol_certain = True
+        confidence = selector.compute_confidence(text, action, symbol_certain)
+
+        # Base 0.55 + bonus 0.10 (beat) = 0.65 (no vagueness penalty)
+        assert confidence == 0.65
+
+    def test_no_vagueness_penalty_without_speculative_words(self, selector):
+        """Test no penalty when no speculative words present."""
+        # No speculative words, just neutral headline
+        text = "Company (XYZ) announces product"
+        action = "watch"
+        symbol_certain = True
+        confidence = selector.compute_confidence(text, action, symbol_certain)
+
+        # Base 0.55, clamped to min 0.60
+        assert confidence == 0.60
+
+    def test_vagueness_with_explores_keyword(self, selector):
+        """Test penalty for 'explores' keyword."""
+        text = "Company (ABC) explores merger options"
+        action = "watch"
+        symbol_certain = True
+        confidence = selector.compute_confidence(text, action, symbol_certain)
+
+        # Base 0.55 - vagueness 0.10 = 0.45, clamped to 0.60
+        assert confidence == 0.60
+
+    def test_vagueness_with_considers_keyword(self, selector):
+        """Test penalty for 'considers' keyword."""
+        text = "Firm (DEF) considers acquisition strategy"
+        action = "watch"
+        symbol_certain = True
+        confidence = selector.compute_confidence(text, action, symbol_certain)
+
+        # Base 0.55 - vagueness 0.10 = 0.45, clamped to 0.60
+        assert confidence == 0.60
+
+
+class TestDuplicateSuppression:
+    """Test duplicate candidate suppression."""
+
+    def test_first_candidate_not_duplicate(self, selector):
+        """Test first candidate for symbol+action is not duplicate."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        eastern = ZoneInfo("America/New_York")
+        now = datetime(2026, 1, 6, 10, 0, 0, tzinfo=eastern)
+
+        # First time seeing XYZ+buy
+        assert selector.is_duplicate("XYZ", "buy", now) is False
+
+    def test_immediate_duplicate_is_suppressed(self, selector):
+        """Test duplicate within 60 min window is suppressed."""
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        eastern = ZoneInfo("America/New_York")
+        now = datetime(2026, 1, 6, 10, 0, 0, tzinfo=eastern)
+
+        # First candidate
+        selector.is_duplicate("XYZ", "buy", now)
+
+        # Same symbol+action 10 minutes later
+        later = now + timedelta(minutes=10)
+        assert selector.is_duplicate("XYZ", "buy", later) is True
+
+    def test_duplicate_after_window_allowed(self, selector):
+        """Test duplicate after 60 min window is allowed."""
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        eastern = ZoneInfo("America/New_York")
+        now = datetime(2026, 1, 6, 10, 0, 0, tzinfo=eastern)
+
+        # First candidate
+        selector.is_duplicate("XYZ", "buy", now)
+
+        # Same symbol+action 65 minutes later (outside window)
+        later = now + timedelta(minutes=65)
+        assert selector.is_duplicate("XYZ", "buy", later) is False
+
+    def test_different_action_not_duplicate(self, selector):
+        """Test same symbol with different action is not duplicate."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        eastern = ZoneInfo("America/New_York")
+        now = datetime(2026, 1, 6, 10, 0, 0, tzinfo=eastern)
+
+        # XYZ+buy
+        selector.is_duplicate("XYZ", "buy", now)
+
+        # XYZ+sell is different action
+        assert selector.is_duplicate("XYZ", "sell", now) is False
+
+    def test_different_symbol_not_duplicate(self, selector):
+        """Test different symbol with same action is not duplicate."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        eastern = ZoneInfo("America/New_York")
+        now = datetime(2026, 1, 6, 10, 0, 0, tzinfo=eastern)
+
+        # XYZ+buy
+        selector.is_duplicate("XYZ", "buy", now)
+
+        # ABC+buy is different symbol
+        assert selector.is_duplicate("ABC", "buy", now) is False
+
+    def test_duplicate_tracking_cleans_expired(self, selector):
+        """Test that expired entries are cleaned from tracking dict."""
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        eastern = ZoneInfo("America/New_York")
+        now = datetime(2026, 1, 6, 10, 0, 0, tzinfo=eastern)
+
+        # Add several candidates
+        selector.is_duplicate("XYZ", "buy", now)
+        selector.is_duplicate("ABC", "sell", now)
+        selector.is_duplicate("DEF", "watch", now)
+
+        # Initially 3 entries
+        assert len(selector.recent_candidates) == 3
+
+        # 70 minutes later, all should be cleaned
+        later = now + timedelta(minutes=70)
+        selector.is_duplicate("GHI", "buy", later)
+
+        # Only GHI should remain (old ones cleaned)
+        assert len(selector.recent_candidates) == 1
+        assert ("GHI", "buy") in selector.recent_candidates

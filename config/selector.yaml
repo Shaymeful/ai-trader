@@ -111,12 +111,24 @@ action_keywords:
     - plunge
     - tumbles
 
+# Speculative words that trigger vagueness penalty
+speculative_words:
+  - may
+  - could
+  - explores
+  - considers
+  - plans
+  - might
+  - potentially
+  - looking at
+
 # Confidence scoring modifiers
 confidence_modifiers:
   strong_keyword_bonus: 0.10
   base_confidence: 0.55
   max_confidence: 0.90
   uncertain_symbol_penalty: 0.15
+  vagueness_penalty: 0.10  # Subtract if speculative words without hard actions
 
 # Defaults for candidate expiration and behavior
 defaults:
@@ -133,3 +145,8 @@ safety:
   require_symbol_allowlist: false
   symbol_allowlist: []
   symbol_denylist: []
+
+# Screening quality controls
+screening:
+  liquidity_floor_usd: 20000000  # $20M minimum avg daily dollar volume (if available)
+  duplicate_suppression_minutes: 60  # Suppress same symbol+action within 60 minutes

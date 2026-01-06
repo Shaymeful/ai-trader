@@ -21,9 +21,11 @@ class SelectorConfig(BaseModel):
     rss_feeds: list[str]
     keyword_rules: dict[str, dict[str, Any]]
     action_keywords: dict[str, list[str]]
+    speculative_words: list[str]
     confidence_modifiers: dict[str, float]
     defaults: dict[str, Any]
     safety: dict[str, Any]
+    screening: dict[str, Any]
 
 
 class Candidate(BaseModel):
@@ -69,6 +71,9 @@ class RSSSelector:
 
         # Symbol extraction pattern: (SYMBOL) or SYMBOL: or $SYMBOL
         self.symbol_pattern = re.compile(r"\(([A-Z]{1,5})\)|([A-Z]{1,5}):|\$([A-Z]{1,5})\b")
+
+        # Duplicate suppression tracking: (symbol, action) -> timestamp
+        self.recent_candidates: dict[tuple[str, str], datetime] = {}
 
     def _load_config(self) -> SelectorConfig:
         """Load selector configuration from YAML."""
@@ -185,12 +190,13 @@ class RSSSelector:
         """
         Compute confidence score for candidate.
 
-        Base confidence + keyword bonus - uncertainty penalty.
+        Base confidence + keyword bonus - uncertainty penalty - vagueness penalty.
         """
         base = self.config.confidence_modifiers["base_confidence"]
         bonus = self.config.confidence_modifiers["strong_keyword_bonus"]
         max_conf = self.config.confidence_modifiers["max_confidence"]
         penalty = self.config.confidence_modifiers["uncertain_symbol_penalty"]
+        vagueness_penalty = self.config.confidence_modifiers["vagueness_penalty"]
 
         text_lower = text.lower()
 
@@ -203,6 +209,12 @@ class RSSSelector:
         # Apply symbol uncertainty penalty
         if not symbol_certain:
             confidence -= penalty
+
+        # Apply vagueness penalty: if speculative words present without hard action keywords
+        has_speculative = any(word in text_lower for word in self.config.speculative_words)
+        has_hard_action = keyword_count > 0  # Has strong buy/sell keywords
+        if has_speculative and not has_hard_action:
+            confidence -= vagueness_penalty
 
         # Clamp to [min_confidence, max_confidence]
         confidence = max(self.config.defaults["min_confidence"], confidence)
@@ -218,6 +230,7 @@ class RSSSelector:
         sector: str | None,
         reason: str,
         tags: list[str],
+        avg_dollar_volume: float | None = None,
     ) -> Candidate:
         """Create candidate with expiration time."""
         now_et = datetime.now(self.eastern)
@@ -240,8 +253,62 @@ class RSSSelector:
             event_type="rss_headline",
             tags=tags,
             reason=reason[:200],  # Limit reason length
-            avg_dollar_volume=None,  # Not available from RSS
+            avg_dollar_volume=avg_dollar_volume,  # May be None if not available
         )
+
+    def check_liquidity(self, avg_dollar_volume: float | None) -> bool:
+        """
+        Check if candidate meets liquidity floor.
+
+        Args:
+            avg_dollar_volume: Average daily dollar volume, or None if not available
+
+        Returns:
+            True if candidate passes (meets floor or data not available), False otherwise
+        """
+        # If no data available, allow candidate through (don't block on missing data)
+        if avg_dollar_volume is None:
+            return True
+
+        liquidity_floor = self.config.screening["liquidity_floor_usd"]
+        return avg_dollar_volume >= liquidity_floor
+
+    def is_duplicate(self, symbol: str, action: str, now: datetime | None = None) -> bool:
+        """
+        Check if candidate is a duplicate of recent candidate.
+
+        Suppresses candidates with same symbol+action generated within
+        duplicate_suppression_minutes window.
+
+        Args:
+            symbol: Stock symbol
+            action: Action (buy, sell, watch)
+            now: Current time (for testing), defaults to datetime.now(eastern)
+
+        Returns:
+            True if duplicate (should suppress), False otherwise
+        """
+        if now is None:
+            now = datetime.now(self.eastern)
+
+        key = (symbol, action)
+        suppression_minutes = self.config.screening["duplicate_suppression_minutes"]
+
+        # Clean up expired entries (older than suppression window)
+        cutoff = now - timedelta(minutes=suppression_minutes)
+        expired_keys = [k for k, ts in self.recent_candidates.items() if ts < cutoff]
+        for k in expired_keys:
+            del self.recent_candidates[k]
+
+        # Check if duplicate
+        if key in self.recent_candidates:
+            last_time = self.recent_candidates[key]
+            if now - last_time < timedelta(minutes=suppression_minutes):
+                return True  # Duplicate within window
+
+        # Not duplicate, track this candidate
+        self.recent_candidates[key] = now
+        return False
 
     def process_headline(
         self, headline: dict[str, str], feed_url: str
@@ -300,6 +367,18 @@ class RSSSelector:
         if symbol and symbol in denylist:
             return None, events
 
+        # Check for duplicates (suppress same symbol+action within time window)
+        if self.is_duplicate(symbol, action):
+            return None, events
+
+        # Note: avg_dollar_volume not available from RSS feeds
+        # Liquidity check would happen here if we had market data
+        avg_dollar_volume = None
+
+        # Check liquidity floor (will pass if data not available)
+        if not self.check_liquidity(avg_dollar_volume):
+            return None, events
+
         # Get sector tags
         tags = []
         if sector in self.config.keyword_rules:
@@ -313,6 +392,7 @@ class RSSSelector:
             sector=sector,
             reason=title,
             tags=tags,
+            avg_dollar_volume=avg_dollar_volume,
         )
 
         # Log candidate creation
