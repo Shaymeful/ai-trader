@@ -2162,11 +2162,18 @@ action_keywords:
   buy: [beats, raises guidance, upgrades, contract, ...]
   sell: [misses, cuts guidance, lawsuit, bankruptcy, ...]
 
+speculative_words: [may, could, explores, considers, plans, might, potentially, looking at]
+
 confidence_modifiers:
   base_confidence: 0.55
   strong_keyword_bonus: 0.10  # Per keyword match
   max_confidence: 0.90
   uncertain_symbol_penalty: 0.15
+  vagueness_penalty: 0.10  # Subtract if speculative words without hard actions
+
+screening:
+  liquidity_floor_usd: 20000000  # $20M minimum avg daily dollar volume (if available)
+  duplicate_suppression_minutes: 60  # Suppress same symbol+action within 60 minutes
 ```
 
 **Execution:**
@@ -2194,9 +2201,13 @@ confidence_modifiers:
 3. Classify sector via keyword matching (automation vs energy)
 4. Extract symbol using regex: `\(([A-Z]{1,5})\)|([A-Z]{1,5}):|\$([A-Z]{1,5})\b`
 5. Map action: sell keywords → SELL, buy keywords → BUY, else → WATCH
-6. Compute confidence: `base + (keyword_count × bonus) - (uncertainty_penalty if no symbol)`
-7. Create candidate with TTL (BUY: 180min, SELL: 120min, WATCH: 240min)
-8. Write to snapshot.json and append event to events.jsonl
+6. Compute confidence: `base + (keyword_count × bonus) - (uncertainty_penalty if no symbol) - (vagueness_penalty if speculative)`
+7. Apply screening filters:
+   - **Liquidity floor**: Reject if avg_dollar_volume < $20M (if data available)
+   - **Duplicate suppression**: Reject if same symbol+action within 60 minutes
+   - **Vagueness filter**: Already applied via confidence penalty in step 6
+8. Create candidate with TTL (BUY: 180min, SELL: 120min, WATCH: 240min)
+9. Write to snapshot.json and append event to events.jsonl
 
 **Candidate Expiration (TTL):**
 - BUY candidates: 180 minutes (3 hours)
@@ -2209,10 +2220,33 @@ confidence_modifiers:
 - Symbol allowlist/denylist support
 - No network calls in tests (uses fixtures)
 
+**Screening Quality Controls:**
+- **Liquidity Floor**: Rejects candidates with avg_dollar_volume < $20M (if data available)
+  - Graceful degradation: Allows candidates through when market data unavailable
+  - Prevents illiquid penny stocks from entering the pipeline
+  - Configurable via `screening.liquidity_floor_usd`
+- **Vagueness Penalty**: Subtracts 0.10 confidence for speculative headlines
+  - Applied when headline contains speculative words (may, could, explores, plans, etc.)
+  - Only triggers if no hard action keywords present (beats, raises guidance, etc.)
+  - Prevents weak speculation from generating candidates
+  - Configurable via `confidence_modifiers.vagueness_penalty`
+- **Duplicate Suppression**: Prevents same symbol+action within 60-minute window
+  - Tracks recent candidates with automatic cleanup of expired entries
+  - Prevents duplicate candidates from repeated RSS headlines
+  - Configurable via `screening.duplicate_suppression_minutes`
+
 **Testing:**
-- Unit tests: `tests/test_selector.py` (33 tests covering all modules)
+- Unit tests: `tests/test_selector.py` (49 tests covering all modules)
 - Fixtures: `tests/fixtures/rss_automation.xml`, `tests/fixtures/rss_energy.xml`
-- Tests verify: sector classification, symbol extraction, action mapping, confidence scoring, snapshot writing
+- Tests verify: sector classification, symbol extraction, action mapping, confidence scoring, liquidity filtering, vagueness penalty, duplicate suppression, snapshot writing
+- Test coverage:
+  - 13 tests for core selector functionality
+  - 10 tests for sector classification
+  - 7 tests for confidence scoring
+  - 5 tests for liquidity floor screening
+  - 5 tests for vagueness penalty
+  - 6 tests for duplicate suppression
+  - 3 tests for end-to-end integration
 
 **Documentation:** See `docs/SELECTOR.md` for detailed usage and configuration guide.
 
