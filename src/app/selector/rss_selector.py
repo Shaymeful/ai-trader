@@ -49,7 +49,7 @@ class SelectorEvent(BaseModel):
     """Event log entry for selector runs."""
 
     timestamp: str
-    event_type: str  # headline_processed, candidate_created, error
+    event_type: str  # headline_processed, candidate_created, candidate_rejected, error
     headline: str | None = None
     feed_url: str | None = None
     symbol: str | None = None
@@ -57,6 +57,7 @@ class SelectorEvent(BaseModel):
     sector: str | None = None
     confidence: float | None = None
     reason: str | None = None
+    rejection_reason: str | None = None  # no_symbol, no_sector, low_confidence, allowlist, denylist, duplicate, liquidity_floor
     error: str | None = None
 
 
@@ -338,6 +339,15 @@ class RSSSelector:
         sector = self.classify_sector(full_text)
         if not sector:
             # Skip headlines that don't match our sectors
+            events.append(
+                SelectorEvent(
+                    timestamp=datetime.now(self.eastern).isoformat(),
+                    event_type="candidate_rejected",
+                    headline=title,
+                    feed_url=feed_url,
+                    rejection_reason="no_sector",
+                )
+            )
             return None, events
 
         # Extract symbol
@@ -345,6 +355,16 @@ class RSSSelector:
 
         # Skip candidates without symbols (existing candidate system requires symbols)
         if not symbol:
+            events.append(
+                SelectorEvent(
+                    timestamp=datetime.now(self.eastern).isoformat(),
+                    event_type="candidate_rejected",
+                    headline=title,
+                    feed_url=feed_url,
+                    sector=sector,
+                    rejection_reason="no_symbol",
+                )
+            )
             return None, events
 
         # Map action
@@ -355,20 +375,72 @@ class RSSSelector:
 
         # Check if meets minimum confidence
         if confidence < self.config.defaults["min_confidence"]:
+            events.append(
+                SelectorEvent(
+                    timestamp=datetime.now(self.eastern).isoformat(),
+                    event_type="candidate_rejected",
+                    headline=title,
+                    feed_url=feed_url,
+                    symbol=symbol,
+                    action=action,
+                    sector=sector,
+                    confidence=confidence,
+                    rejection_reason="low_confidence",
+                )
+            )
             return None, events
 
         # Apply allowlist/denylist
         if self.config.safety["require_symbol_allowlist"]:
             allowlist = self.config.safety["symbol_allowlist"]
             if symbol and symbol not in allowlist:
+                events.append(
+                    SelectorEvent(
+                        timestamp=datetime.now(self.eastern).isoformat(),
+                        event_type="candidate_rejected",
+                        headline=title,
+                        feed_url=feed_url,
+                        symbol=symbol,
+                        action=action,
+                        sector=sector,
+                        confidence=confidence,
+                        rejection_reason="allowlist",
+                    )
+                )
                 return None, events
 
         denylist = self.config.safety["symbol_denylist"]
         if symbol and symbol in denylist:
+            events.append(
+                SelectorEvent(
+                    timestamp=datetime.now(self.eastern).isoformat(),
+                    event_type="candidate_rejected",
+                    headline=title,
+                    feed_url=feed_url,
+                    symbol=symbol,
+                    action=action,
+                    sector=sector,
+                    confidence=confidence,
+                    rejection_reason="denylist",
+                )
+            )
             return None, events
 
         # Check for duplicates (suppress same symbol+action within time window)
         if self.is_duplicate(symbol, action):
+            events.append(
+                SelectorEvent(
+                    timestamp=datetime.now(self.eastern).isoformat(),
+                    event_type="candidate_rejected",
+                    headline=title,
+                    feed_url=feed_url,
+                    symbol=symbol,
+                    action=action,
+                    sector=sector,
+                    confidence=confidence,
+                    rejection_reason="duplicate",
+                )
+            )
             return None, events
 
         # Note: avg_dollar_volume not available from RSS feeds
@@ -377,6 +449,19 @@ class RSSSelector:
 
         # Check liquidity floor (will pass if data not available)
         if not self.check_liquidity(avg_dollar_volume):
+            events.append(
+                SelectorEvent(
+                    timestamp=datetime.now(self.eastern).isoformat(),
+                    event_type="candidate_rejected",
+                    headline=title,
+                    feed_url=feed_url,
+                    symbol=symbol,
+                    action=action,
+                    sector=sector,
+                    confidence=confidence,
+                    rejection_reason="liquidity_floor",
+                )
+            )
             return None, events
 
         # Get sector tags
@@ -517,3 +602,43 @@ class RSSSelector:
         with open(events_file, "a", encoding="utf-8") as f:
             for event in events:
                 f.write(event.model_dump_json() + "\n")
+
+    @staticmethod
+    def compute_stats(events: list[SelectorEvent]) -> dict[str, int]:
+        """
+        Compute statistics from events.
+
+        Returns:
+            dict with keys: headlines_processed, symbols_extracted, candidates_created,
+            rejected_no_symbol, rejected_no_sector, rejected_low_confidence,
+            rejected_duplicate, rejected_liquidity_floor, rejected_allowlist, rejected_denylist
+        """
+        stats = {
+            "headlines_processed": 0,
+            "symbols_extracted": 0,
+            "candidates_created": 0,
+            "rejected_no_symbol": 0,
+            "rejected_no_sector": 0,
+            "rejected_low_confidence": 0,
+            "rejected_duplicate": 0,
+            "rejected_liquidity_floor": 0,
+            "rejected_allowlist": 0,
+            "rejected_denylist": 0,
+        }
+
+        for event in events:
+            if event.event_type == "headline_processed":
+                stats["headlines_processed"] += 1
+            elif event.event_type == "candidate_created":
+                stats["candidates_created"] += 1
+            elif event.event_type == "candidate_rejected":
+                if event.rejection_reason:
+                    key = f"rejected_{event.rejection_reason}"
+                    if key in stats:
+                        stats[key] += 1
+
+            # Track symbols extracted (any event with symbol field set)
+            if event.symbol:
+                stats["symbols_extracted"] += 1
+
+        return stats
