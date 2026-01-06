@@ -978,18 +978,9 @@ async def approve_proposal(proposal_id: str):
 @app.post("/universe/proposals/{proposal_id}/reject", response_model=ChangeResponse)
 async def reject_proposal(proposal_id: str):
     """Reject a proposal."""
-    from src.app.universe_advisor.models import (
-        Disagreement,
-        MarketRegime,
-        Proposal,
-        ProposalSet,
-        RegimeData,
-    )
-    from src.app.universe_advisor.storage import (
-        append_to_history,
-        load_proposals,
-        save_proposals,
-    )
+    from src.app.universe_advisor.apply import _save_proposals_dict
+    from src.app.universe_advisor.models import Proposal
+    from src.app.universe_advisor.storage import append_to_history, load_proposals
 
     try:
         proposals_file = Path("out/universe_proposals.json")
@@ -1011,33 +1002,8 @@ async def reject_proposal(proposal_id: str):
         if not found:
             raise HTTPException(status_code=404, detail="Proposal not found")
 
-        # Reconstruct ProposalSet for save
-        regime_data = data.get("regime", {})
-        regime = RegimeData(
-            regime=MarketRegime(regime_data.get("regime", "unknown")),
-            spy_price=regime_data.get("spy_price", 0.0),
-            spy_ma50=regime_data.get("spy_ma50", 0.0),
-            trend=regime_data.get("trend", "bear"),
-            volatility=regime_data.get("volatility", "high"),
-            volatility_value=regime_data.get("volatility_value", 0.0),
-            confidence=regime_data.get("confidence", 0.0),
-            timestamp=regime_data.get("timestamp", datetime.now(UTC).isoformat()),
-        )
-
-        proposals_list = [Proposal(**p) for p in data.get("proposals", [])]
-        disagreements_list = [Disagreement(**d) for d in data.get("disagreements", [])]
-
-        updated_set = ProposalSet(
-            generation_id=data.get("generation_id", ""),
-            proposals=proposals_list,
-            disagreements=disagreements_list,
-            regime=regime,
-            headline_count=data.get("headline_count", 0),
-            generated_at=data.get("generated_at", datetime.now(UTC).isoformat()),
-        )
-
-        # Save
-        save_proposals(updated_set, proposals_file)
+        # Save directly as dict (atomic write)
+        _save_proposals_dict(data, proposals_file)
 
         # Append to history
         proposal = Proposal(**proposal_data)

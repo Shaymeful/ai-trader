@@ -438,19 +438,22 @@ class Ledger:
         self.ledger_dir = Path(ledger_dir)
         self.ledger_dir.mkdir(parents=True, exist_ok=True)
 
-    def append(self, event: LedgerEvent) -> None:
+    def append(self, event: LedgerEvent | dict) -> None:
         """
         Append event to today's ledger file.
 
         Args:
-            event: Event to append
+            event: Event to append (LedgerEvent dataclass or dict)
         """
         # Determine today's file
         today = datetime.now(UTC).date()
         ledger_file = self.ledger_dir / f"{today.isoformat()}.jsonl"
 
-        # Convert event to dict
-        event_dict = asdict(event)
+        # Convert event to dict (if it's a dataclass)
+        if isinstance(event, dict):
+            event_dict = event
+        else:
+            event_dict = asdict(event)
 
         # Append to file (atomic write not needed for append-only)
         with open(ledger_file, "a") as f:

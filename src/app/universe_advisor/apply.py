@@ -3,11 +3,35 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from src.app.universe_registry import UniverseRegistry
 
 from .models import Proposal
-from .storage import append_to_history, load_proposals, save_proposals
+from .storage import append_to_history, load_proposals
+
+
+def _save_proposals_dict(data: dict, file_path: Path) -> None:
+    """Save proposals dict to JSON file with atomic write.
+
+    Args:
+        data: Proposals dict to save
+        file_path: Destination file path
+    """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Atomic write
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=file_path.parent,
+        delete=False,
+        suffix=".tmp",
+    ) as tmp_file:
+        json.dump(data, tmp_file, indent=2)
+        tmp_path = Path(tmp_file.name)
+
+    tmp_path.replace(file_path)
 
 
 def apply_proposal(
@@ -45,35 +69,8 @@ def apply_proposal(
             if p["proposal_id"] == proposal.proposal_id:
                 p["status"] = "APPROVED"
 
-        # Re-save (atomic write)
-        from .models import Disagreement, MarketRegime, ProposalSet, RegimeData
-
-        # Reconstruct ProposalSet for save
-        regime_data = proposal_set.get("regime", {})
-        regime = RegimeData(
-            regime=MarketRegime(regime_data.get("regime", "unknown")),
-            spy_price=regime_data.get("spy_price", 0.0),
-            spy_ma50=regime_data.get("spy_ma50", 0.0),
-            trend=regime_data.get("trend", "bear"),
-            volatility=regime_data.get("volatility", "high"),
-            volatility_value=regime_data.get("volatility_value", 0.0),
-            confidence=regime_data.get("confidence", 0.0),
-            timestamp=regime_data.get("timestamp", datetime.now(UTC).isoformat()),
-        )
-
-        proposals_list = [Proposal(**p) for p in proposal_set.get("proposals", [])]
-        disagreements_list = [Disagreement(**d) for d in proposal_set.get("disagreements", [])]
-
-        updated_set = ProposalSet(
-            generation_id=proposal_set.get("generation_id", ""),
-            proposals=proposals_list,
-            disagreements=disagreements_list,
-            regime=regime,
-            headline_count=proposal_set.get("headline_count", 0),
-            generated_at=proposal_set.get("generated_at", datetime.now(UTC).isoformat()),
-        )
-
-        save_proposals(updated_set, proposals_file)
+        # Save directly as dict (atomic write)
+        _save_proposals_dict(proposal_set, proposals_file)
 
     # Append to history
     append_to_history(proposal, "APPROVED", history_file)
@@ -124,30 +121,4 @@ def mark_applied(
 
     # Save updated proposals if any changes
     if updated:
-        from .models import Disagreement, MarketRegime, Proposal, ProposalSet, RegimeData
-
-        regime_data = proposal_set.get("regime", {})
-        regime = RegimeData(
-            regime=MarketRegime(regime_data.get("regime", "unknown")),
-            spy_price=regime_data.get("spy_price", 0.0),
-            spy_ma50=regime_data.get("spy_ma50", 0.0),
-            trend=regime_data.get("trend", "bear"),
-            volatility=regime_data.get("volatility", "high"),
-            volatility_value=regime_data.get("volatility_value", 0.0),
-            confidence=regime_data.get("confidence", 0.0),
-            timestamp=regime_data.get("timestamp", datetime.now(UTC).isoformat()),
-        )
-
-        proposals_list = [Proposal(**p) for p in proposal_set.get("proposals", [])]
-        disagreements_list = [Disagreement(**d) for d in proposal_set.get("disagreements", [])]
-
-        updated_set = ProposalSet(
-            generation_id=proposal_set.get("generation_id", ""),
-            proposals=proposals_list,
-            disagreements=disagreements_list,
-            regime=regime,
-            headline_count=proposal_set.get("headline_count", 0),
-            generated_at=proposal_set.get("generated_at", datetime.now(UTC).isoformat()),
-        )
-
-        save_proposals(updated_set, proposals_file)
+        _save_proposals_dict(proposal_set, proposals_file)
