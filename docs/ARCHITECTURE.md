@@ -2730,6 +2730,155 @@ universe = config.universe_symbols  # Resolved from sectors
 }
 ```
 
+### Operator Overrides
+
+**Implementation:** `src/app/universe_registry.py`
+
+Universe sector configuration can be modified at runtime via dashboard UI. Changes are staged immediately but activated at the start of the next trading loop tick (next-tick activation pattern).
+
+**Override File:** `out/universe_overrides.json`
+
+**Persistence Format:**
+```json
+{
+  "sectors": {
+    "mega_cap_tech": {
+      "enabled": false,
+      "active_version": 1,
+      "pending_version": 2,
+      "last_modified": "2026-01-06T16:30:00.123456+00:00"
+    },
+    "core_index": {
+      "enabled": true,
+      "active_version": 1,
+      "pending_version": null,
+      "last_modified": null
+    }
+  },
+  "registry_version": 1,
+  "last_saved": "2026-01-06T16:30:00.123456+00:00"
+}
+```
+
+**File Characteristics:**
+- Only stores overrides for **changed sectors** (not all sectors)
+- Atomic writes using temp file + rename pattern
+- Version tracking: `active_version` (current) vs `pending_version` (staged)
+- Timestamps in ISO 8601 format with UTC timezone
+
+**Activation Behavior:**
+
+1. **Stage Change** (Immediate):
+   - Operator toggles sector checkbox in dashboard
+   - POST request updates registry in-memory
+   - Override saved to `out/universe_overrides.json`
+   - `pending_version` incremented
+   - Dashboard shows orange "Pending" badge
+
+2. **Activate Change** (Next Loop Tick):
+   - Runner calls `universe_registry.check_and_activate_pending()`
+   - `pending_version` promoted to `active_version`
+   - Changes take effect for current loop iteration
+   - Pending badge removed from dashboard
+
+**API Endpoints:**
+
+**POST /universe/sectors/{sector_name}/enable**
+```bash
+# Disable mega_cap_tech sector
+curl -X POST http://localhost:8000/universe/sectors/mega_cap_tech/enable \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+
+# Response:
+{
+  "success": true,
+  "message": "Sector mega_cap_tech disabled. Change will activate on next loop tick.",
+  "pending_version": 2
+}
+```
+
+**POST /universe/reset**
+```bash
+# Reset all sectors to base config defaults
+curl -X POST http://localhost:8000/universe/reset \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Response:
+{
+  "success": true,
+  "message": "Universe reset to defaults. All sectors enabled.",
+  "pending_version": null
+}
+```
+
+**Dashboard UI:**
+
+Located in the Universe Sectors section (above Strategies):
+
+- **Per-sector toggle switches** - Enable/disable individual sectors
+- **Live stats** - Enabled sectors count and total symbols
+- **Pending indicators** - Orange border on cards with pending changes
+- **Reset button** - One-click restore to base config defaults
+
+**Runner Integration:**
+
+```python
+# In src/app/runner.py (loop mode):
+# Initialize registry at startup
+universe_registry = UniverseRegistry()
+
+# At start of each loop iteration (after strategy activation):
+activated = universe_registry.check_and_activate_pending()
+if activated:
+    print("Universe configuration changes activated:")
+    for sector_name, old_version, new_version in activated:
+        print(f"  {sector_name}: v{old_version} -> v{new_version}")
+
+# Use registry for universe resolution:
+if universe_registry is not None:
+    resolution = universe_registry.resolve()
+    universe = resolution.symbols
+else:
+    universe = config.universe_symbols  # Fallback to base config
+```
+
+**Rollback Strategy:**
+
+1. **Delete overrides file:**
+   ```bash
+   rm out/universe_overrides.json
+   ```
+
+2. **Restart bot:**
+   - Will use base config from `config/config.yaml`
+   - No code changes needed for rollback
+
+3. **Or use Reset button:**
+   - Click "Reset to Defaults" in dashboard
+   - Deletes overrides file and reloads
+   - Immediate rollback without restart
+
+**Safety Features:**
+
+- **Atomic writes** - Temp file + rename prevents corruption
+- **Version tracking** - Detects conflicts and ordering
+- **Next-tick activation** - Changes don't affect current iteration
+- **Backward compatible** - Works without overrides file
+- **Unknown sectors ignored** - Safely handles stale overrides
+
+**Example Workflow:**
+
+1. Operator disables `mega_cap_tech` sector via dashboard
+2. Dashboard shows orange "Pending" badge
+3. Current loop iteration completes with old universe
+4. Next loop iteration starts
+5. Runner activates pending change: `mega_cap_tech: v1 -> v2`
+6. Universe now excludes AAPL, MSFT, NVDA, AMD, META, GOOGL, TSLA
+7. Strategies trade only remaining sectors
+8. Pending badge removed from dashboard
+
 ### Backward Compatibility
 
 **Legacy Support:**
