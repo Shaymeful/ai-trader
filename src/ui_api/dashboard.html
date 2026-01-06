@@ -84,6 +84,126 @@
             font-weight: 600;
         }
 
+        /* Universe Sectors Section */
+        .universe-section {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .universe-section .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+            gap: 1rem;
+        }
+
+        .universe-section h2 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .universe-stats {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.875rem;
+            color: #94a3b8;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: baseline;
+            gap: 0.25rem;
+        }
+
+        .stat-value {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #10b981;
+        }
+
+        .stat-divider {
+            color: #475569;
+        }
+
+        .btn-secondary {
+            padding: 0.5rem 1rem;
+            background: #334155;
+            color: #e2e8f0;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+            border-color: #64748b;
+        }
+
+        .sector-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+
+        .sector-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem;
+            background: #0f172a;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            transition: border-color 0.2s;
+        }
+
+        .sector-item:hover {
+            border-color: #475569;
+        }
+
+        .sector-item.pending {
+            border-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .sector-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .sector-name {
+            font-weight: 500;
+            color: #e2e8f0;
+            margin-bottom: 0.25rem;
+        }
+
+        .sector-details {
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+
+        .sector-badge {
+            display: inline-block;
+            padding: 0.125rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.625rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 0.5rem;
+        }
+
+        .sector-badge.pending {
+            background: #f59e0b;
+            color: #000;
+        }
+
         /* Main Layout */
         .main-grid {
             display: grid;
@@ -811,6 +931,30 @@
             </div>
         </div>
 
+        <!-- Universe Sectors Section -->
+        <div class="universe-section">
+            <div class="section-header">
+                <h2>Universe Sectors</h2>
+                <div class="universe-stats">
+                    <span class="stat-item">
+                        <span id="enabled-sectors-count" class="stat-value">0</span>
+                        <span class="stat-label">sectors enabled</span>
+                    </span>
+                    <span class="stat-divider">|</span>
+                    <span class="stat-item">
+                        <span id="total-symbols-count" class="stat-value">0</span>
+                        <span class="stat-label">symbols</span>
+                    </span>
+                </div>
+                <button class="btn-secondary" onclick="resetUniverse()" title="Reset all sectors to defaults">
+                    Reset to Defaults
+                </button>
+            </div>
+            <div class="sector-grid" id="sector-grid">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+
         <div class="main-grid">
             <div class="strategies-section">
                 <h2>Strategies</h2>
@@ -915,6 +1059,111 @@
         let candidatesData = [];
         let currentEditStrategy = null;
 
+        // Universe Sectors Management
+
+        async function loadUniverseSectors() {
+            try {
+                const response = await fetch('/universe/sectors');
+                if (!response.ok) throw new Error('Failed to load universe sectors');
+
+                const data = await response.json();
+                renderUniverseSectors(data);
+            } catch (error) {
+                console.error('Error loading universe sectors:', error);
+                showError('Failed to load universe sectors');
+            }
+        }
+
+        function renderUniverseSectors(data) {
+            // Update stats
+            const enabledCount = data.sectors.filter(s => s.enabled).length;
+            document.getElementById('enabled-sectors-count').textContent = enabledCount;
+            document.getElementById('total-symbols-count').textContent = data.total_symbols;
+
+            // Render sector cards
+            const grid = document.getElementById('sector-grid');
+            if (!grid) return;
+
+            grid.innerHTML = data.sectors.map(sector => {
+                const hasPending = sector.pending_version !== null;
+                const pendingClass = hasPending ? 'pending' : '';
+                const pendingBadge = hasPending ? '<span class="sector-badge pending">Pending</span>' : '';
+
+                return `
+                    <div class="sector-item ${pendingClass}">
+                        <div class="sector-info">
+                            <div class="sector-name">
+                                ${sector.sector_name.replace(/_/g, ' ')}
+                                ${pendingBadge}
+                            </div>
+                            <div class="sector-details">
+                                ${sector.symbol_count} symbols | ${sector.description}
+                            </div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox"
+                                   id="sector-${sector.sector_name}"
+                                   ${sector.enabled ? 'checked' : ''}
+                                   onchange="toggleSector('${sector.sector_name}', this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function toggleSector(sectorName, enabled) {
+            try {
+                const response = await fetch(`/universe/sectors/${sectorName}/enable`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    // Reload after short delay to show pending state
+                    setTimeout(() => loadDashboard(), 300);
+                } else {
+                    showError(result.detail || 'Failed to update sector');
+                    // Reload to revert checkbox state
+                    loadDashboard();
+                }
+            } catch (error) {
+                console.error('Error toggling sector:', error);
+                showError('Failed to update sector');
+                loadDashboard();
+            }
+        }
+
+        async function resetUniverse() {
+            if (!confirm('Reset all sectors to default configuration? This will enable all sectors.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/universe/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    setTimeout(() => loadDashboard(), 500);
+                } else {
+                    showError(result.detail || 'Failed to reset universe');
+                }
+            } catch (error) {
+                console.error('Error resetting universe:', error);
+                showError('Failed to reset universe');
+            }
+        }
+
         async function loadDashboard() {
             try {
                 // Load health status
@@ -936,6 +1185,9 @@
                 const strategiesResult = await strategiesResponse.json();
                 strategiesData = strategiesResult.strategies;
                 renderStrategies(strategiesData);
+
+                // Load universe sectors
+                await loadUniverseSectors();
 
                 // Load candidates
                 const candidatesResponse = await fetch('/candidates');

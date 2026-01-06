@@ -57,7 +57,9 @@ class SelectorEvent(BaseModel):
     sector: str | None = None
     confidence: float | None = None
     reason: str | None = None
-    rejection_reason: str | None = None  # no_symbol, no_sector, low_confidence, allowlist, denylist, duplicate, liquidity_floor
+    rejection_reason: str | None = (
+        None  # no_symbol, no_sector, low_confidence, allowlist, denylist, duplicate, liquidity_floor
+    )
     error: str | None = None
 
 

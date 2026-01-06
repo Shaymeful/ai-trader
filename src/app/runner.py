@@ -69,7 +69,7 @@ class RunResult:
     timestamp: str  # ISO format
 
 
-def run_shadow_mode(provider: MarketDataProvider | None = None):
+def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registry=None):
     """
     Run strategies in shadow mode (no actual orders).
 
@@ -118,17 +118,24 @@ def run_shadow_mode(provider: MarketDataProvider | None = None):
             )
         )
 
-    # Build universe from candidates (if available), otherwise use config
+    # Build universe from candidates (if available), otherwise use registry/config
     if tradeable_candidates:
         # Use candidate symbols as universe
         universe = [c.symbol for c in tradeable_candidates]
         candidate_map = {c.symbol: c.candidate_id for c in tradeable_candidates}
         print(f"  Universe from candidates: {', '.join(universe)}")
     else:
-        # Fallback to config universe (backward compatibility)
-        universe = config.universe_symbols if config.universe_symbols else config.allowed_symbols
+        # Fallback to universe registry (with operator overrides) or base config
+        if universe_registry is not None:
+            resolution = universe_registry.resolve()
+            universe = resolution.symbols
+            print(f"  Universe from registry: {', '.join(universe)} ({resolution.source})")
+        else:
+            universe = (
+                config.universe_symbols if config.universe_symbols else config.allowed_symbols
+            )
+            print(f"  Universe from config: {', '.join(universe)}")
         candidate_map = {}
-        print(f"  No candidates found, using config universe: {', '.join(universe)}")
 
     if not universe:
         print(
@@ -370,6 +377,7 @@ def run_paper_mode(
     dry_run: bool = False,
     cancel_open_orders: bool = False,
     registry=None,
+    universe_registry=None,
 ):
     """
     Run strategies in paper execution mode (places orders to Alpaca paper).
@@ -438,17 +446,24 @@ def run_paper_mode(
             )
         )
 
-    # Build universe from candidates (if available), otherwise use config
+    # Build universe from candidates (if available), otherwise use registry/config
     if tradeable_candidates:
         # Use candidate symbols as universe
         universe = [c.symbol for c in tradeable_candidates]
         candidate_map = {c.symbol: c.candidate_id for c in tradeable_candidates}
         print(f"  Universe from candidates: {', '.join(universe)}")
     else:
-        # Fallback to config universe (backward compatibility)
-        universe = config.universe_symbols if config.universe_symbols else config.allowed_symbols
+        # Fallback to universe registry (with operator overrides) or base config
+        if universe_registry is not None:
+            resolution = universe_registry.resolve()
+            universe = resolution.symbols
+            print(f"  Universe from registry: {', '.join(universe)} ({resolution.source})")
+        else:
+            universe = (
+                config.universe_symbols if config.universe_symbols else config.allowed_symbols
+            )
+            print(f"  Universe from config: {', '.join(universe)}")
         candidate_map = {}
-        print(f"  No candidates found, using config universe: {', '.join(universe)}")
 
     if not universe:
         print(
@@ -788,6 +803,24 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         registry = None
         print()
 
+    # Initialize universe registry for next-tick activation
+    print("Initializing universe registry...")
+    try:
+        from src.app.universe_registry import UniverseRegistry
+
+        universe_registry = UniverseRegistry()
+        print(f"Universe registry loaded: {len(universe_registry.sectors)} sectors configured")
+        print()
+    except FileNotFoundError as e:
+        print(f"WARNING: Universe registry initialization failed: {e}")
+        print("Continuing with base universe configuration from config.yaml")
+        universe_registry = None
+        print()
+    except Exception as e:
+        print(f"ERROR: Failed to load universe registry: {e}")
+        universe_registry = None
+        print()
+
     iteration = 0
     while True:
         iteration += 1
@@ -809,12 +842,24 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                         print(f"  {strategy_id}: v{old_version} -> v{new_version}")
                     print()
 
+            # Check and activate pending universe configuration changes
+            if universe_registry is not None:
+                activated = universe_registry.check_and_activate_pending()
+                if activated:
+                    print("Universe configuration changes activated:")
+                    for sector_name, old_version, new_version in activated:
+                        print(f"  {sector_name}: v{old_version} -> v{new_version}")
+                    print()
+
             # Run the appropriate mode
             if mode == "shadow":
-                result = run_shadow_mode()
+                result = run_shadow_mode(universe_registry=universe_registry)
             elif mode == "paper":
                 result = run_paper_mode(
-                    dry_run=dry_run, cancel_open_orders=cancel_open_orders, registry=registry
+                    dry_run=dry_run,
+                    cancel_open_orders=cancel_open_orders,
+                    registry=registry,
+                    universe_registry=universe_registry,
                 )
             else:
                 raise ValueError(f"Invalid mode: {mode}")
@@ -1140,8 +1185,29 @@ def main():
             from src.app.strategy_registry import StrategyRegistry
 
             registry = StrategyRegistry()
+
+            # Initialize universe registry for next-tick activation
+            print("Initializing universe registry...")
+            try:
+                from src.app.universe_registry import UniverseRegistry
+
+                universe_registry = UniverseRegistry()
+                print(
+                    f"Universe registry loaded: {len(universe_registry.sectors)} sectors configured"
+                )
+            except FileNotFoundError as e:
+                print(f"WARNING: Universe registry initialization failed: {e}")
+                print("Continuing with base universe configuration from config.yaml")
+                universe_registry = None
+            except Exception as e:
+                print(f"ERROR: Failed to load universe registry: {e}")
+                universe_registry = None
+
             run_paper_mode(
-                dry_run=args.dry_run, cancel_open_orders=args.cancel_open_orders, registry=registry
+                dry_run=args.dry_run,
+                cancel_open_orders=args.cancel_open_orders,
+                registry=registry,
+                universe_registry=universe_registry,
             )
 
 

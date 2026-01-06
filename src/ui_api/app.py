@@ -18,16 +18,18 @@ from pydantic import BaseModel, Field
 
 from src.app.ledger import Ledger
 from src.app.strategy_registry import StrategyRegistry
+from src.app.universe_registry import UniverseRegistry
 
 # Global registry and ledger instances (initialized on startup)
 registry: StrategyRegistry | None = None
 ledger: Ledger | None = None
+universe_registry: UniverseRegistry | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize registry and ledger on startup."""
-    global registry, ledger
+    global registry, ledger, universe_registry
 
     try:
         registry = StrategyRegistry()
@@ -36,6 +38,18 @@ async def lifespan(app: FastAPI):
         # Registry or ledger not found - API will return errors
         print(f"WARNING: Failed to initialize registry or ledger: {e}")
         print("API endpoints will return errors until configuration is available")
+
+    # Initialize universe registry
+    try:
+        universe_registry = UniverseRegistry()
+        print(f"Universe registry loaded: {len(universe_registry.sectors)} sectors")
+    except FileNotFoundError as e:
+        print(f"WARNING: Universe registry initialization failed: {e}")
+        print("Universe endpoints will use base config only")
+        universe_registry = None
+    except Exception as e:
+        print(f"ERROR: Failed to load universe registry: {e}")
+        universe_registry = None
 
     yield
 
@@ -132,6 +146,12 @@ class ParamsRequest(BaseModel):
     params: dict[str, Any]
 
 
+class SectorEnableRequest(BaseModel):
+    """Request to enable/disable a sector."""
+
+    enabled: bool
+
+
 class ChangeResponse(BaseModel):
     """Response for configuration change."""
 
@@ -219,6 +239,7 @@ class SectorInfo(BaseModel):
     description: str
     symbols: list[str]
     symbol_count: int
+    pending_version: int | None = None
 
 
 class UniverseSectorsResponse(BaseModel):
@@ -625,30 +646,24 @@ async def get_universe_sectors():
     """
     Get universe sectors and resolved symbol list.
 
-    Returns sector configuration, resolved symbols, and deduplication info.
-    Read-only endpoint - no mutations supported yet.
+    Returns sector configuration with operator overrides applied,
+    resolved symbols, and deduplication info.
     """
-    from pathlib import Path
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
 
-    from src.app.config import load_yaml_config
-    from src.app.universe import load_universe_config, resolve_universe
+    # Resolve universe with current overrides
+    resolution = universe_registry.resolve()
 
-    # Load YAML config
-    repo_root = Path(__file__).resolve().parents[2]
-    config_path = repo_root / "config" / "config.yaml"
-
-    if not config_path.exists():
-        raise HTTPException(status_code=503, detail="Config file not found")
-
-    yaml_config = load_yaml_config(config_path)
-
-    # Resolve universe
-    resolution = resolve_universe(yaml_config)
-    universe_config = load_universe_config(yaml_config)
-
-    # Build sector list
+    # Build sector list with pending version indicators
     sectors_list = []
-    for sector_name, sector_config in universe_config.sectors.items():
+    for sector_name, sector_config in universe_registry.sectors.items():
+        # Check for pending version
+        pending_version = None
+        if sector_name in universe_registry.overrides:
+            override = universe_registry.overrides[sector_name]
+            pending_version = override.pending_version
+
         sectors_list.append(
             SectorInfo(
                 sector_name=sector_name,
@@ -656,6 +671,7 @@ async def get_universe_sectors():
                 description=sector_config.description,
                 symbols=sector_config.symbols,
                 symbol_count=len(sector_config.symbols),
+                pending_version=pending_version,
             )
         )
 
@@ -663,11 +679,59 @@ async def get_universe_sectors():
         sectors=sectors_list,
         resolved_symbols=resolution.symbols,
         total_symbols=len(resolution.symbols),
-        fallback_mode=universe_config.fallback_mode,
+        fallback_mode="preserve_order",
         deduplication_count=resolution.deduplication_count,
         warnings=resolution.warnings,
         source=resolution.source,
     )
+
+
+@app.post("/universe/sectors/{sector_name}/enable", response_model=ChangeResponse)
+async def update_sector_enabled(sector_name: str, request: SectorEnableRequest):
+    """
+    Enable or disable a sector.
+
+    Changes are staged and activate at the next loop tick.
+
+    Args:
+        sector_name: Sector name to modify
+        request: Enable/disable request
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    try:
+        new_version = universe_registry.stage_change(sector_name, request.enabled)
+        action = "enabled" if request.enabled else "disabled"
+        return ChangeResponse(
+            success=True,
+            message=f"Sector {sector_name} {action}. Change will activate on next loop tick.",
+            pending_version=new_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to stage change: {e}") from e
+
+
+@app.post("/universe/reset", response_model=ChangeResponse)
+async def reset_universe():
+    """Reset all sectors to default configuration.
+
+    Clears all operator overrides and restores base config.
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    try:
+        universe_registry.reset_to_defaults()
+        return ChangeResponse(
+            success=True,
+            message="Universe reset to defaults. All sectors enabled.",
+            pending_version=None,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset universe: {e}") from e
 
 
 @app.get("/health/detailed", response_model=DetailedHealthResponse)

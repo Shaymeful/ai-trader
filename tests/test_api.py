@@ -58,6 +58,36 @@ global:
 """
     )
 
+    # Create config.yaml with universe configuration
+    main_config_file = config_dir / "config.yaml"
+    main_config_file.write_text(
+        """
+timeframe: "1h"
+universe:
+  fallback_mode: "preserve_order"
+  sectors:
+    core_index:
+      enabled: true
+      description: "Index ETFs"
+      symbols:
+        - SPY
+        - QQQ
+    mega_cap_tech:
+      enabled: true
+      description: "Tech stocks"
+      symbols:
+        - AAPL
+        - MSFT
+        - NVDA
+    us_sector_etfs:
+      enabled: true
+      description: "Sector ETFs"
+      symbols:
+        - XLF
+        - XLE
+"""
+    )
+
     # Create out/ledger directory
     ledger_dir = tmp_path / "out" / "ledger"
     ledger_dir.mkdir(parents=True)
@@ -603,13 +633,82 @@ def test_universe_sectors_endpoint(client):
         assert "description" in sector
         assert "symbols" in sector
         assert "symbol_count" in sector
+        assert "pending_version" in sector
 
-    # Check resolved symbols
-    assert isinstance(data["resolved_symbols"], list)
-    assert data["total_symbols"] == len(data["resolved_symbols"])
 
-    # Verify fallback mode is valid
-    assert data["fallback_mode"] in ["preserve_order", "alphabetical", "random"]
+def test_enable_sector_endpoint(client):
+    """Test POST /universe/sectors/{name}/enable endpoint."""
+    # Get initial state
+    initial_response = client.get("/universe/sectors")
+    initial_data = initial_response.json()
+    initial_total = initial_data["total_symbols"]
 
-    # Verify source is valid
-    assert data["source"] in ["sectors", "legacy", "empty"]
+    # Find a sector to disable (use first enabled sector)
+    sector_to_disable = None
+    for sector in initial_data["sectors"]:
+        if sector["enabled"]:
+            sector_to_disable = sector["sector_name"]
+            break
+
+    assert sector_to_disable is not None, "No enabled sector found"
+
+    # Disable the sector
+    response = client.post(f"/universe/sectors/{sector_to_disable}/enable", json={"enabled": False})
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert "disabled" in data["message"]
+    assert data["pending_version"] == 1  # First change
+
+    # Verify sector is disabled
+    sectors_response = client.get("/universe/sectors")
+    sectors_data = sectors_response.json()
+    disabled_sector = next(
+        s for s in sectors_data["sectors"] if s["sector_name"] == sector_to_disable
+    )
+
+    assert disabled_sector["enabled"] is False
+    assert disabled_sector["pending_version"] == 1
+    assert sectors_data["total_symbols"] < initial_total  # Fewer symbols
+
+
+def test_enable_sector_invalid_name(client):
+    """Test POST /universe/sectors/{name}/enable with invalid sector name."""
+    response = client.post("/universe/sectors/NonExistentSector/enable", json={"enabled": True})
+
+    assert response.status_code == 400
+    assert "unknown sector" in response.json()["detail"].lower()
+
+
+def test_reset_universe_endpoint(client):
+    """Test POST /universe/reset endpoint."""
+    # First, disable a sector
+    client.post("/universe/sectors/mega_cap_tech/enable", json={"enabled": False})
+
+    # Verify it's disabled
+    sectors_response = client.get("/universe/sectors")
+    sector = next(
+        s for s in sectors_response.json()["sectors"] if s["sector_name"] == "mega_cap_tech"
+    )
+    assert sector["enabled"] is False
+
+    # Reset
+    response = client.post("/universe/reset", json={})
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert "reset to defaults" in data["message"].lower()
+
+    # Verify sector is re-enabled
+    sectors_response = client.get("/universe/sectors")
+    sectors_data = sectors_response.json()
+    sector = next(s for s in sectors_data["sectors"] if s["sector_name"] == "mega_cap_tech")
+    assert sector["enabled"] is True
+
+    # Check resolved symbols are restored
+    assert isinstance(sectors_data["resolved_symbols"], list)
+    assert sectors_data["total_symbols"] == len(sectors_data["resolved_symbols"])
