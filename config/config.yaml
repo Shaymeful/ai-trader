@@ -82,3 +82,13 @@ llm:
   # Auto-generation
   auto_generate_enabled: true
   auto_generate_interval_hours: 4
+
+  # Constituent change proposals
+  enable_constituent_proposals: true
+  allow_constituent_removals: false
+  max_add_per_run: 2
+  max_remove_per_run: 1
+  min_confidence_add: 0.80
+  min_confidence_remove: 0.85
+  cooldown_days_per_ticker: 7
+  ticker_blacklist: []

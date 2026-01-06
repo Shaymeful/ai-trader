@@ -1333,17 +1333,31 @@
             if (data.proposals.length === 0) {
                 proposalsList.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 2rem;">No proposals. Click Generate.</div>';
             } else {
-                proposalsList.innerHTML = data.proposals.map(p => `
-                    <div class="proposal-item">
-                        <div class="proposal-header">
-                            <div><strong>${p.sector_name}</strong> <span style="color: ${p.recommended_enabled ? '#10b981' : '#ef4444'}">${p.recommended_enabled ? 'Enable' : 'Disable'}</span> (${p.confidence.toFixed(2)}) - ${p.provider}</div>
-                            <div class="proposal-actions">
-                                ${p.status === 'NEW' ? `<button class="btn-approve" onclick="approveProposal('${p.proposal_id}')">Approve</button><button class="btn-reject" onclick="rejectProposal('${p.proposal_id}')">Reject</button>` : `<span>${p.status}</span>`}
+                proposalsList.innerHTML = data.proposals.map(p => {
+                    const proposalType = p.proposal_type || 'sector_toggle';
+                    let typeDisplay = '';
+
+                    if (proposalType === 'sector_toggle') {
+                        typeDisplay = `<span style="color: ${p.recommended_enabled ? '#10b981' : '#ef4444'}">${p.recommended_enabled ? 'Enable' : 'Disable'}</span>`;
+                    } else if (proposalType === 'constituent_change' && p.constituent_change) {
+                        const action = p.constituent_change.action.toUpperCase();
+                        const tickers = p.constituent_change.tickers.join(', ');
+                        const actionColor = action === 'ADD' ? '#10b981' : '#ef4444';
+                        typeDisplay = `<span style="color: ${actionColor}">${action}: ${tickers}</span>`;
+                    }
+
+                    return `
+                        <div class="proposal-item">
+                            <div class="proposal-header">
+                                <div><strong>${p.sector_name}</strong> ${typeDisplay} (${p.confidence.toFixed(2)}) - ${p.provider}</div>
+                                <div class="proposal-actions">
+                                    ${p.status === 'NEW' ? `<button class="btn-approve" onclick="approveProposal('${p.proposal_id}')">Approve</button><button class="btn-reject" onclick="rejectProposal('${p.proposal_id}')">Reject</button>` : `<span>${p.status}</span>`}
+                                </div>
                             </div>
+                            <div style="color: #cbd5e1; margin-top: 0.5rem; font-size: 0.875rem;">${p.rationale}</div>
                         </div>
-                        <div style="color: #cbd5e1; margin-top: 0.5rem; font-size: 0.875rem;">${p.rationale}</div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             }
 
             const disagreementsList = document.getElementById('disagreements-list');

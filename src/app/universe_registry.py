@@ -30,6 +30,8 @@ class SectorOverride:
     active_version: int
     pending_version: int | None
     last_modified: str | None
+    # Ticker overrides (None = use base config, [] = empty, [...] = custom list)
+    tickers: list[str] | None = None
 
 
 @dataclass
@@ -124,13 +126,20 @@ class UniverseRegistry:
                 active_version=override_data.get("active_version", 1),
                 pending_version=override_data.get("pending_version"),
                 last_modified=override_data.get("last_modified"),
+                tickers=override_data.get("tickers"),
             )
 
             # Apply to sector config
             self.sectors[sector_name].enabled = override.enabled
+            # Apply ticker overrides if present
+            if override.tickers is not None:
+                self.sectors[sector_name].symbols = override.tickers
             self.overrides[sector_name] = override
 
-            logger.debug(f"Applied override to '{sector_name}': enabled={override.enabled}")
+            logger.debug(
+                f"Applied override to '{sector_name}': enabled={override.enabled}, "
+                f"tickers={len(override.tickers) if override.tickers else 'base'}"
+            )
 
     def stage_change(self, sector_name: str, enabled: bool) -> int:
         """Stage a sector enable/disable change.
@@ -179,6 +188,73 @@ class UniverseRegistry:
 
         return override.pending_version
 
+    def stage_constituent_change(self, sector_name: str, action: str, tickers: list[str]) -> int:
+        """Stage a constituent add/remove change.
+
+        Args:
+            sector_name: Name of sector to modify
+            action: "add" or "remove"
+            tickers: List of tickers to add/remove
+
+        Returns:
+            New pending version number
+
+        Raises:
+            ValueError: If sector name is invalid or action is invalid
+        """
+        # 1. Validate sector exists
+        if sector_name not in self.sectors:
+            raise ValueError(f"Unknown sector: {sector_name}")
+
+        # 2. Validate action
+        if action not in ["add", "remove"]:
+            raise ValueError(f"Invalid action: {action}")
+
+        # 3. Get current ticker list (from override or base config)
+        if sector_name in self.overrides and self.overrides[sector_name].tickers is not None:
+            current_tickers = self.overrides[sector_name].tickers.copy()
+        else:
+            current_tickers = self.sectors[sector_name].symbols.copy()
+
+        # 4. Apply action
+        if action == "add":
+            for ticker in tickers:
+                if ticker not in current_tickers:
+                    current_tickers.append(ticker)
+        elif action == "remove":
+            current_tickers = [t for t in current_tickers if t not in tickers]
+
+        # 5. Update in-memory sector config
+        self.sectors[sector_name].symbols = current_tickers
+
+        # 6. Update or create override
+        if sector_name in self.overrides:
+            override = self.overrides[sector_name]
+            override.tickers = current_tickers
+            override.pending_version = (override.active_version or 0) + 1
+        else:
+            override = SectorOverride(
+                enabled=self.sectors[sector_name].enabled,
+                active_version=0,
+                pending_version=1,
+                last_modified=None,
+                tickers=current_tickers,
+            )
+            self.overrides[sector_name] = override
+
+        # 7. Update timestamp
+        override.last_modified = datetime.now(UTC).isoformat()
+
+        # 8. Save overrides atomically
+        self._save_overrides()
+
+        logger.info(
+            f"Staged constituent change for '{sector_name}': action={action}, "
+            f"tickers={tickers}, pending_version={override.pending_version}"
+        )
+
+        return override.pending_version
+
     def _save_overrides(self) -> None:
         """Save overrides to JSON atomically.
 
@@ -197,6 +273,7 @@ class UniverseRegistry:
                 "active_version": override.active_version,
                 "pending_version": override.pending_version,
                 "last_modified": override.last_modified,
+                "tickers": override.tickers,
             }
 
         # 2. Ensure output directory exists

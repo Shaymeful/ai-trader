@@ -254,12 +254,20 @@ class UniverseSectorsResponse(BaseModel):
     source: str
 
 
+class ConstituentChangeResponse(BaseModel):
+    """Constituent change details in a proposal."""
+
+    action: str  # "add" or "remove"
+    tickers: list[str]
+    reason: str
+    constraints_checked: dict[str, bool]
+
+
 class ProposalResponse(BaseModel):
     """Single proposal response."""
 
     proposal_id: str
     sector_name: str
-    recommended_enabled: bool
     confidence: float
     rationale: str
     supporting_headlines: list[str]
@@ -267,6 +275,11 @@ class ProposalResponse(BaseModel):
     created_at: str
     expires_at: str
     status: str
+    proposal_type: str = "sector_toggle"  # "sector_toggle" or "constituent_change"
+    # For SECTOR_TOGGLE proposals:
+    recommended_enabled: bool | None = None
+    # For CONSTITUENT_CHANGE proposals:
+    constituent_change: ConstituentChangeResponse | None = None
 
 
 class DisagreementResponse(BaseModel):
@@ -875,8 +888,36 @@ async def generate_proposals_endpoint(request: GenerateRequest):
             "timeout": config.llm_timeout,
         }
 
+        # Prepare full config dict for constituent proposals
+        full_config_dict = {
+            "llm_mode": config.llm_mode,
+            "llm_primary": config.llm_primary,
+            "llm_openai_model": config.llm_openai_model,
+            "llm_anthropic_model": config.llm_anthropic_model,
+            "llm_timeout": config.llm_timeout,
+            "llm_enable_constituent_proposals": config.llm_enable_constituent_proposals,
+            "llm_allow_constituent_removals": config.llm_allow_constituent_removals,
+            "llm_max_add_per_run": config.llm_max_add_per_run,
+            "llm_max_remove_per_run": config.llm_max_remove_per_run,
+            "llm_min_confidence_add": config.llm_min_confidence_add,
+            "llm_min_confidence_remove": config.llm_min_confidence_remove,
+            "llm_cooldown_days_per_ticker": config.llm_cooldown_days_per_ticker,
+            "llm_ticker_blacklist": config.llm_ticker_blacklist,
+            "llm_rss_lookback_hours": config.llm_rss_lookback_hours,
+        }
+
+        history_file = Path("out/universe_proposals_history.jsonl")
+        candidates_file = Path("out/selector/events.jsonl")
+
         proposal_set = generate_proposals(
-            llm_config, regime, events, sectors, config.llm_proposal_ttl_minutes
+            llm_config,
+            regime,
+            events,
+            sectors,
+            config.llm_proposal_ttl_minutes,
+            full_config=full_config_dict,
+            history_file=history_file,
+            candidates_file=candidates_file,
         )
 
         # Apply guardrails
@@ -885,7 +926,6 @@ async def generate_proposals_endpoint(request: GenerateRequest):
             "max_sector_toggles_per_day": config.llm_max_sector_toggles_per_day,
             "cooldown_days": config.llm_cooldown_days,
         }
-        history_file = Path("out/universe_proposals_history.jsonl")
         proposal_set = apply_guardrails(proposal_set, guardrails_config, history_file)
 
         # Save
@@ -948,27 +988,82 @@ async def approve_proposal(proposal_id: str):
             )
 
         # Convert to Proposal object
-        proposal = Proposal(**proposal_data)
+        from src.app.universe_advisor.models import (
+            ConstituentChange,
+            ConstituentChangeAction,
+            ProposalType,
+        )
+
+        # Handle constituent_change if present
+        constituent_change = None
+        if (
+            proposal_data.get("proposal_type") == "constituent_change"
+            and "constituent_change" in proposal_data
+        ):
+            cc_data = proposal_data["constituent_change"]
+            constituent_change = ConstituentChange(
+                action=ConstituentChangeAction(cc_data["action"]),
+                tickers=cc_data["tickers"],
+                reason=cc_data["reason"],
+                constraints_checked=cc_data["constraints_checked"],
+            )
+
+        proposal = Proposal(
+            proposal_id=proposal_data["proposal_id"],
+            sector_name=proposal_data["sector_name"],
+            confidence=proposal_data["confidence"],
+            rationale=proposal_data["rationale"],
+            supporting_headlines=proposal_data["supporting_headlines"],
+            provider=proposal_data["provider"],
+            created_at=proposal_data["created_at"],
+            expires_at=proposal_data["expires_at"],
+            status=proposal_data["status"],
+            proposal_type=ProposalType(proposal_data.get("proposal_type", "sector_toggle")),
+            recommended_enabled=proposal_data.get("recommended_enabled"),
+            constituent_change=constituent_change,
+        )
 
         # Apply (stages UniverseRegistry change)
         history_file = Path("out/universe_proposals_history.jsonl")
         new_version = apply_proposal(proposal, universe_registry, proposals_file, history_file)
 
+        # Build message based on proposal type
+        if proposal.proposal_type == ProposalType.SECTOR_TOGGLE:
+            message = f"Proposal approved. {proposal.sector_name} will be {'enabled' if proposal.recommended_enabled else 'disabled'} on next loop tick."
+        elif (
+            proposal.proposal_type == ProposalType.CONSTITUENT_CHANGE
+            and proposal.constituent_change
+        ):
+            action_str = proposal.constituent_change.action.value.upper()
+            tickers_str = ", ".join(proposal.constituent_change.tickers)
+            message = f"Proposal approved. Will {action_str} {tickers_str} to/from {proposal.sector_name} on next loop tick."
+        else:
+            message = "Proposal approved."
+
         # Log to ledger
         if ledger:
-            ledger.append(
-                {
-                    "event_type": "universe_proposal_approved",
-                    "proposal_id": proposal_id,
-                    "sector_name": proposal.sector_name,
-                    "recommended_enabled": proposal.recommended_enabled,
-                    "pending_version": new_version,
+            log_entry = {
+                "event_type": "universe_proposal_approved",
+                "proposal_id": proposal_id,
+                "sector_name": proposal.sector_name,
+                "proposal_type": proposal.proposal_type.value,
+                "pending_version": new_version,
+            }
+            if proposal.proposal_type == ProposalType.SECTOR_TOGGLE:
+                log_entry["recommended_enabled"] = proposal.recommended_enabled
+            elif (
+                proposal.proposal_type == ProposalType.CONSTITUENT_CHANGE
+                and proposal.constituent_change
+            ):
+                log_entry["constituent_change"] = {
+                    "action": proposal.constituent_change.action.value,
+                    "tickers": proposal.constituent_change.tickers,
                 }
-            )
+            ledger.append(log_entry)
 
         return ChangeResponse(
             success=True,
-            message=f"Proposal approved. {proposal.sector_name} will be {'enabled' if proposal.recommended_enabled else 'disabled'} on next loop tick.",
+            message=message,
             pending_version=new_version,
         )
 

@@ -5,7 +5,43 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from .models import Proposal, ProposalSet
+from .models import Proposal, ProposalSet, ProposalType
+
+
+def _serialize_proposal(p: Proposal) -> dict:
+    """Serialize a proposal to a dict for JSON storage.
+
+    Args:
+        p: Proposal to serialize
+
+    Returns:
+        Dict representation of proposal
+    """
+    proposal_dict = {
+        "proposal_id": p.proposal_id,
+        "sector_name": p.sector_name,
+        "confidence": p.confidence,
+        "rationale": p.rationale,
+        "supporting_headlines": p.supporting_headlines,
+        "provider": p.provider,
+        "created_at": p.created_at,
+        "expires_at": p.expires_at,
+        "status": p.status,
+        "proposal_type": p.proposal_type.value,
+    }
+
+    # Add type-specific fields
+    if p.proposal_type == ProposalType.SECTOR_TOGGLE:
+        proposal_dict["recommended_enabled"] = p.recommended_enabled
+    elif p.proposal_type == ProposalType.CONSTITUENT_CHANGE and p.constituent_change:
+        proposal_dict["constituent_change"] = {
+            "action": p.constituent_change.action.value,
+            "tickers": p.constituent_change.tickers,
+            "reason": p.constituent_change.reason,
+            "constraints_checked": p.constituent_change.constraints_checked,
+        }
+
+    return proposal_dict
 
 
 def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
@@ -31,21 +67,7 @@ def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
             "confidence": proposal_set.regime.confidence,
             "timestamp": proposal_set.regime.timestamp,
         },
-        "proposals": [
-            {
-                "proposal_id": p.proposal_id,
-                "sector_name": p.sector_name,
-                "recommended_enabled": p.recommended_enabled,
-                "confidence": p.confidence,
-                "rationale": p.rationale,
-                "supporting_headlines": p.supporting_headlines,
-                "provider": p.provider,
-                "created_at": p.created_at,
-                "expires_at": p.expires_at,
-                "status": p.status,
-            }
-            for p in proposal_set.proposals
-        ],
+        "proposals": [_serialize_proposal(p) for p in proposal_set.proposals],
         "disagreements": [
             {
                 "disagreement_id": d.disagreement_id,
@@ -116,11 +138,20 @@ def append_to_history(
         "action": action,
         "proposal_id": proposal.proposal_id,
         "sector_name": proposal.sector_name,
-        "recommended_enabled": proposal.recommended_enabled,
         "confidence": proposal.confidence,
         "provider": proposal.provider,
         "status": action,
+        "proposal_type": proposal.proposal_type.value,
     }
+
+    # Add type-specific fields
+    if proposal.proposal_type == ProposalType.SECTOR_TOGGLE:
+        entry["recommended_enabled"] = proposal.recommended_enabled
+    elif proposal.proposal_type == ProposalType.CONSTITUENT_CHANGE and proposal.constituent_change:
+        entry["constituent_change"] = {
+            "action": proposal.constituent_change.action.value,
+            "tickers": proposal.constituent_change.tickers,
+        }
 
     with open(history_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")

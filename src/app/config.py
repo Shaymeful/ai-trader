@@ -144,6 +144,27 @@ class Config(BaseModel):
     llm_auto_generate_interval_hours: int = Field(
         default=4, description="Auto-generation interval in hours"
     )
+    # Constituent change proposals
+    llm_enable_constituent_proposals: bool = Field(
+        default=True, description="Enable constituent change proposals"
+    )
+    llm_allow_constituent_removals: bool = Field(
+        default=False, description="Allow REMOVE constituent proposals"
+    )
+    llm_max_add_per_run: int = Field(default=2, description="Max ADD proposals per generation run")
+    llm_max_remove_per_run: int = Field(
+        default=1, description="Max REMOVE proposals per generation run"
+    )
+    llm_min_confidence_add: float = Field(
+        default=0.80, description="Min confidence for ADD proposals"
+    )
+    llm_min_confidence_remove: float = Field(
+        default=0.85, description="Min confidence for REMOVE proposals"
+    )
+    llm_cooldown_days_per_ticker: int = Field(
+        default=7, description="Cooldown days for ticker changes"
+    )
+    llm_ticker_blacklist: list[str] = Field(default_factory=list, description="Blacklisted tickers")
 
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
@@ -471,5 +492,22 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 config.llm_auto_generate_enabled = bool(llm["auto_generate_enabled"])
             if "auto_generate_interval_hours" in llm:
                 config.llm_auto_generate_interval_hours = int(llm["auto_generate_interval_hours"])
+            # Constituent change proposals
+            if "enable_constituent_proposals" in llm:
+                config.llm_enable_constituent_proposals = bool(llm["enable_constituent_proposals"])
+            if "allow_constituent_removals" in llm:
+                config.llm_allow_constituent_removals = bool(llm["allow_constituent_removals"])
+            if "max_add_per_run" in llm:
+                config.llm_max_add_per_run = int(llm["max_add_per_run"])
+            if "max_remove_per_run" in llm:
+                config.llm_max_remove_per_run = int(llm["max_remove_per_run"])
+            if "min_confidence_add" in llm:
+                config.llm_min_confidence_add = float(llm["min_confidence_add"])
+            if "min_confidence_remove" in llm:
+                config.llm_min_confidence_remove = float(llm["min_confidence_remove"])
+            if "cooldown_days_per_ticker" in llm:
+                config.llm_cooldown_days_per_ticker = int(llm["cooldown_days_per_ticker"])
+            if "ticker_blacklist" in llm:
+                config.llm_ticker_blacklist = list(llm["ticker_blacklist"])
 
     return config

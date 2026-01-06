@@ -161,6 +161,9 @@ def generate_proposals(
     events: list[dict],
     sectors: dict[str, dict],
     ttl_minutes: int = 120,
+    full_config: dict | None = None,  # Full config for constituent proposals
+    history_file: Path | None = None,  # History file for cooldown checks
+    candidates_file: Path | None = None,  # Candidates file path
 ) -> ProposalSet:
     """
     Generate proposals using configured LLM provider(s).
@@ -171,6 +174,9 @@ def generate_proposals(
         events: Recent RSS events
         sectors: Sector definitions
         ttl_minutes: Proposal time-to-live
+        full_config: Full config dict (for constituent proposals)
+        history_file: History file path (for constituent proposals)
+        candidates_file: Candidates file path (for constituent proposals)
 
     Returns:
         ProposalSet with proposals and disagreements
@@ -242,6 +248,47 @@ def generate_proposals(
         proposals, disagreements = _merge_ensemble_responses(
             openai_response, anthropic_response, events, now, expires_at
         )
+
+    # Generate constituent change proposals if enabled
+    if full_config and history_file:
+        from pathlib import Path as PathType
+
+        from .generate_constituents import (
+            generate_constituent_proposals,
+            load_recent_candidates,
+        )
+
+        # Load candidates from events file or use provided candidates_file
+        if candidates_file and candidates_file.exists() or isinstance(candidates_file, PathType) and candidates_file.exists():
+            candidates = load_recent_candidates(
+                candidates_file,
+                lookback_hours=full_config.get("llm_rss_lookback_hours", 24),
+                max_candidates=50,
+            )
+        else:
+            # Try default location
+            default_candidates = PathType("out/selector/events.jsonl")
+            if default_candidates.exists():
+                candidates = load_recent_candidates(
+                    default_candidates,
+                    lookback_hours=full_config.get("llm_rss_lookback_hours", 24),
+                    max_candidates=50,
+                )
+            else:
+                candidates = []
+
+        if candidates:
+            constituent_proposals = generate_constituent_proposals(
+                full_config,
+                regime,
+                candidates,
+                sectors,
+                history_file,
+                ttl_minutes,
+            )
+
+            # Add to proposals list
+            proposals.extend(constituent_proposals)
 
     return ProposalSet(
         generation_id=generation_id,

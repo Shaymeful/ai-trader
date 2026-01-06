@@ -15,6 +15,20 @@ class MarketRegime(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ProposalType(str, Enum):
+    """Type of proposal."""
+
+    SECTOR_TOGGLE = "sector_toggle"
+    CONSTITUENT_CHANGE = "constituent_change"
+
+
+class ConstituentChangeAction(str, Enum):
+    """Action type for constituent changes."""
+
+    ADD = "add"
+    REMOVE = "remove"
+
+
 @dataclass
 class RegimeData:
     """Market regime detection result."""
@@ -33,12 +47,21 @@ ProposalStatus = Literal["NEW", "APPROVED", "REJECTED", "APPLIED", "EXPIRED"]
 
 
 @dataclass
+class ConstituentChange:
+    """Details for a constituent change proposal."""
+
+    action: ConstituentChangeAction  # ADD or REMOVE
+    tickers: list[str]  # Tickers to add/remove
+    reason: str  # LLM rationale for the change
+    constraints_checked: dict[str, bool]  # Tradable, liquidity, blacklist, etc.
+
+
+@dataclass
 class Proposal:
-    """Single sector enable/disable proposal."""
+    """Single sector enable/disable or constituent change proposal."""
 
     proposal_id: str  # UUID
     sector_name: str
-    recommended_enabled: bool
     confidence: float  # 0.0-1.0
     rationale: str  # LLM explanation
     supporting_headlines: list[str]  # Top 3-5 headlines
@@ -46,6 +69,11 @@ class Proposal:
     created_at: str  # ISO timestamp
     expires_at: str  # ISO timestamp
     status: ProposalStatus
+    proposal_type: ProposalType = ProposalType.SECTOR_TOGGLE  # Backwards compatible
+    # For SECTOR_TOGGLE proposals:
+    recommended_enabled: bool | None = None
+    # For CONSTITUENT_CHANGE proposals:
+    constituent_change: ConstituentChange | None = None
 
 
 @dataclass
