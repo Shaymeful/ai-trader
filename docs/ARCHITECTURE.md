@@ -3205,6 +3205,14 @@ async def lifespan(app: FastAPI):
 | `POST /strategies/{id}/weight` | Update capital weight | `{weight: float}` | `{success, message, pending_version}` |
 | `POST /strategies/{id}/params` | Update parameters | `{params: dict}` | `{success, message, pending_version}` |
 | `POST /pause_trading` | Pause/resume order submission | `{paused: bool}` | `{success, message}` |
+| `POST /universe/sectors/{sector}/tickers` | Add/remove tickers manually | `{add: [str], remove: [str]}` | `{success, message, pending_version}` |
+| `POST /account/summary` | Update account settings | `{total_capital?, max_daily_loss?, max_total_positions?}` | `{success, message}` |
+
+**Read-Only Performance Endpoints:**
+
+| Endpoint | Purpose | Returns |
+|----------|---------|---------|
+| `GET /account/performance` | Broker account performance | `{equity, last_equity, cash, buying_power, day_pl, day_pl_pct, total_pl, total_pl_pct, data_source, message}` |
 
 **Operational Control Endpoints:**
 
@@ -3333,6 +3341,364 @@ async function toggleStrategy(strategyId, enabled) {
     loadDashboard();  // Refresh to show pending version
 }
 ```
+
+#### 7. Operator UI Enhancements (Manual Controls)
+
+**Purpose:** Three operator-gated features for manual intervention and monitoring: Sector Editor (manual ticker management), Account Summary Editor (risk settings), and P&L Section (real-time performance).
+
+##### Feature 1: Sector Editor (Manual Ticker Management)
+
+**Backend:** `POST /universe/sectors/{sector_name}/tickers`
+
+**Request Model:**
+```python
+class UpdateTickersRequest(BaseModel):
+    add: list[str] = Field(default_factory=list)      # Tickers to add (e.g., ["NVDA", "AMD"])
+    remove: list[str] = Field(default_factory=list)    # Tickers to remove (e.g., ["TSLA"])
+```
+
+**Endpoint Behavior:**
+1. Validates sector exists in UniverseRegistry
+2. Normalizes tickers (uppercase, dedupe)
+3. Checks for overlaps between add/remove lists (HTTP 400 if found)
+4. Stages changes via `universe_registry.stage_constituent_change()` (increments pending_version)
+5. Attempts tradability check via Alpaca broker (best-effort, warns if unavailable)
+6. Logs to ledger with event type `manual_sector_tickers_staged`
+7. Returns success with pending_version and warnings list
+
+**Validation:**
+- At least one of `add` or `remove` must be non-empty (HTTP 400 if both empty)
+- Sector must exist (HTTP 404 if not found)
+- No duplicate tickers across add/remove (HTTP 400 if overlap)
+- Uppercase normalization applied automatically
+- Deduplication within each list
+
+**Ledger Event:**
+```json
+{
+  "event_type": "manual_sector_tickers_staged",
+  "sector_name": "mega_cap_tech",
+  "add": ["NVDA", "AMD"],
+  "remove": ["TSLA"],
+  "pending_version": 3,
+  "actor": "operator_ui"
+}
+```
+
+**UI Components:**
+
+1. **"View / Edit Tickers" Button** on each sector card
+   - Opens sector editor modal
+   - Shows current tickers as removable pills
+   - Ticker count badge
+
+2. **Sector Editor Modal:**
+   - **Current Tickers List:**
+     - Displays all tickers as pills with X remove buttons
+     - Scrollable (max-height: 300px)
+     - Live count display
+   - **Add Tickers Input:**
+     - Text input accepting comma or space-separated tickers
+     - "Add" button to stage additions
+     - Normalizes to uppercase automatically
+   - **Remove Tickers Input:**
+     - Text input accepting comma or space-separated tickers
+     - "Remove" button to stage removals
+     - Alternative to clicking X on individual pills
+   - **Save Changes Button:**
+     - Shows confirmation dialog: "Add N ticker(s) and Remove M ticker(s) for {sector}? Changes will be staged."
+     - Calls POST endpoint with aggregated add/remove lists
+     - Displays success/error messages
+     - Closes modal and refreshes sector list on success
+
+**JavaScript Functions:**
+```javascript
+// State tracking for modal
+let currentSector = null;
+let currentTickers = [];      // Working copy of tickers
+let tickersToAdd = [];        // Accumulated additions
+let tickersToRemove = [];     // Accumulated removals
+
+function openSectorEditor(sectorName, tickers) {
+    // Initialize modal with sector data
+}
+
+function addTickers() {
+    // Parse input, add to currentTickers and tickersToAdd
+}
+
+function removeTickers() {
+    // Parse input, remove from currentTickers, add to tickersToRemove
+}
+
+async function saveSectorChanges() {
+    // POST aggregated changes, handle response
+}
+```
+
+**Activation Flow:**
+1. Operator clicks "View / Edit Tickers" on sector card
+2. Modal opens showing current ticker list
+3. Operator adds/removes tickers via input fields or pill buttons
+4. Changes tracked in modal state (not yet committed)
+5. Operator clicks "Save Changes"
+6. Confirmation dialog shown
+7. POST request sent with add/remove lists
+8. UniverseRegistry stages changes (pending_version++)
+9. Success message shown: "Added N ticker(s), Removed M ticker(s) to {sector}. Changes staged (vX)."
+10. Changes activate at next loop tick via `universe_registry.check_and_activate_pending()`
+
+##### Feature 2: Account Summary Editor
+
+**Backend:** `POST /account/summary` and updated `GET /account/summary`
+
+**Request Model:**
+```python
+class AccountSummaryUpdateRequest(BaseModel):
+    total_capital: float | None = Field(default=None, ge=1000.0)       # Min $1000
+    max_daily_loss: float | None = Field(default=None, ge=100.0)       # Min $100
+    max_total_positions: int | None = Field(default=None, ge=1, le=50) # Range 1-50
+```
+
+**Endpoint Behavior:**
+1. Loads existing settings from `out/account_summary.json` (if exists)
+2. Applies partial updates (only non-None fields)
+3. Validates updated values (Pydantic constraints)
+4. Saves atomically to `out/account_summary.json` (temp file + rename)
+5. Logs to ledger with event type `account_summary_updated` (includes old/new values)
+6. Returns success with list of updated fields
+
+**Persistence File:** `out/account_summary.json`
+```json
+{
+  "total_capital": 50000.0,
+  "max_daily_loss": 1500.0,
+  "max_total_positions": 15
+}
+```
+
+**Updated GET Endpoint:**
+The `GET /account/summary` endpoint now checks `out/account_summary.json` first:
+- If file exists: Load settings from file
+- If file missing or read error: Fall back to config defaults
+- Priority: persisted settings > config defaults
+- Backwards compatible: No breaking changes
+
+**Ledger Event:**
+```json
+{
+  "event_type": "account_summary_updated",
+  "old_settings": {"total_capital": 10000, "max_daily_loss": 1000, "max_total_positions": 10},
+  "new_settings": {"total_capital": 50000, "max_daily_loss": 1500, "max_total_positions": 15},
+  "updated_fields": ["total_capital", "max_daily_loss", "max_total_positions"],
+  "actor": "operator_ui"
+}
+```
+
+**UI Components:**
+
+1. **"Edit" Button** in Account Summary section header
+   - Opens account summary editor modal
+
+2. **Account Summary Editor Modal:**
+   - **Total Capital Input:**
+     - Number input, min $1000, step $100
+     - Pre-filled with current value
+   - **Max Daily Loss Input:**
+     - Number input, min $100, step $10
+     - Pre-filled with current value
+   - **Max Total Positions Input:**
+     - Number input, range 1-50, step 1
+     - Pre-filled with current value
+   - **Save Changes Button:**
+     - Validates all fields non-empty
+     - Shows confirmation: "Update account settings? This will affect risk limits."
+     - Calls POST endpoint
+     - Displays success/error messages
+     - Closes modal and refreshes dashboard on success
+
+**JavaScript Functions:**
+```javascript
+function openAccountSummaryEditor() {
+    // Load current values from DOM into modal inputs
+    document.getElementById('edit-total-capital').value = parseFloat(
+        document.getElementById('total-capital').textContent.replace(/[$,]/g, '')
+    );
+    // ... similar for other fields
+    document.getElementById('account-summary-modal').classList.add('active');
+}
+
+async function saveAccountSummary() {
+    const totalCapital = parseFloat(document.getElementById('edit-total-capital').value);
+    const maxDailyLoss = parseFloat(document.getElementById('edit-max-daily-loss').value);
+    const maxPositions = parseInt(document.getElementById('edit-max-positions').value);
+
+    if (!confirm('Update account settings? This will affect risk limits.')) return;
+
+    const response = await fetch('/account/summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            total_capital: totalCapital,
+            max_daily_loss: maxDailyLoss,
+            max_total_positions: maxPositions
+        })
+    });
+    // Handle response...
+}
+```
+
+**Backwards Compatibility:**
+- If `out/account_summary.json` doesn't exist, GET endpoint returns config defaults
+- No breaking changes to existing code
+- Persisted settings take priority when available
+- Existing config values still work as fallback
+
+##### Feature 3: P&L / Performance Section
+
+**Backend:** `GET /account/performance`
+
+**Response Model:**
+```python
+class AccountPerformanceResponse(BaseModel):
+    equity: float | None = None              # Current account equity
+    last_equity: float | None = None         # Previous day's closing equity
+    cash: float | None = None                # Available cash
+    buying_power: float | None = None        # Margin buying power
+    day_pl: float | None = None              # Day P&L ($)
+    day_pl_pct: float | None = None          # Day P&L (%)
+    total_pl: float | None = None            # Total P&L ($ - unavailable currently)
+    total_pl_pct: float | None = None        # Total P&L (% - unavailable currently)
+    data_source: str = "unavailable"         # "paper", "live", or "unavailable"
+    message: str | None = None               # Error message if unavailable
+```
+
+**Endpoint Behavior:**
+1. Loads config to determine mode (paper or live)
+2. Instantiates AlpacaBroker with appropriate credentials
+3. Calls `broker.get_account()` to fetch account data
+4. Calculates day P&L: `equity - last_equity`
+5. Calculates day P&L %: `(day_pl / last_equity) * 100`
+6. Returns performance metrics with `data_source` set to mode
+7. **Graceful Fallback:** If broker unavailable or error:
+   - Returns all metrics as `None`
+   - Sets `data_source = "unavailable"`
+   - Includes error message in `message` field
+   - Returns HTTP 200 (not an error response)
+
+**Data Sources:**
+- **Paper Mode:** Fetches from Alpaca Paper Trading API using `alpaca_paper_key_id` and `alpaca_paper_secret_key`
+- **Live Mode:** Fetches from Alpaca Live Trading API using `alpaca_live_key_id` and `alpaca_live_secret_key`
+- **Unavailable:** Returns placeholder data if broker connection fails
+
+**UI Components:**
+
+1. **Performance Section** (new dashboard section)
+   - Positioned between Account Summary and Universe Sectors
+   - Grid layout: 4 cards (responsive, min 200px per card)
+
+2. **Performance Cards:**
+   - **Day P&L Card:**
+     - Large value display ($ amount)
+     - Percentage display below (green if positive, red if negative)
+     - Color-coded: green text for gains, red for losses
+   - **Equity Card:**
+     - Current account equity ($)
+   - **Cash Card:**
+     - Available cash balance ($)
+   - **Buying Power Card:**
+     - Total margin buying power ($)
+
+3. **Unavailable State:**
+   - All values show "--" placeholder
+   - Message displayed below cards: "Broker data unavailable: {error message}"
+   - No error colors (neutral gray)
+
+**JavaScript Functions:**
+```javascript
+async function loadPerformance() {
+    try {
+        const response = await fetch('/account/performance');
+        const data = await response.json();
+
+        if (data.data_source === 'unavailable') {
+            // Show placeholders and message
+            document.getElementById('day-pl').textContent = '--';
+            document.getElementById('performance-message').textContent = data.message;
+            document.getElementById('performance-message').style.display = 'block';
+        } else {
+            // Update with real data
+            const dayPL = data.day_pl || 0;
+            const dayPLPct = data.day_pl_pct || 0;
+            document.getElementById('day-pl').textContent = '$' + dayPL.toFixed(2);
+
+            const pctEl = document.getElementById('day-pl-pct');
+            pctEl.textContent = (dayPLPct >= 0 ? '+' : '') + dayPLPct.toFixed(2) + '%';
+            pctEl.className = 'performance-pct ' + (dayPLPct >= 0 ? 'positive' : 'negative');
+
+            document.getElementById('equity').textContent = '$' + (data.equity || 0).toFixed(2);
+            document.getElementById('cash').textContent = '$' + (data.cash || 0).toFixed(2);
+            document.getElementById('buying-power').textContent = '$' + (data.buying_power || 0).toFixed(2);
+        }
+    } catch (error) {
+        console.error('Error loading performance:', error);
+    }
+}
+```
+
+**Auto-Refresh:**
+- Called by `loadDashboard()` every 30 seconds
+- Provides near-real-time P&L updates
+- No user interaction required
+
+**Future Enhancements:**
+- Total P&L tracking (requires storing initial equity)
+- Historical equity curve chart
+- Per-strategy P&L attribution
+- Intraday high/low watermarks
+
+##### Common Features (All Three Enhancements)
+
+**Operator Gating:**
+- All write operations require explicit user interaction
+- Confirmation dialogs before staging changes:
+  - Sector Editor: "Add N ticker(s) and Remove M ticker(s) for {sector}? Changes will be staged."
+  - Account Summary: "Update account settings? This will affect risk limits."
+- No automated changes without approval
+
+**Audit Logging:**
+- All changes emit ledger events with:
+  - Event type (e.g., `manual_sector_tickers_staged`, `account_summary_updated`)
+  - Actor: `"operator_ui"`
+  - Old/new values where applicable
+  - Timestamp (UTC)
+- Full audit trail for compliance and debugging
+
+**Error Handling:**
+- Validation errors shown inline (red text)
+- Network errors caught and displayed gracefully
+- HTTP 400: Invalid input (user-fixable)
+- HTTP 404: Resource not found
+- HTTP 500: Server error (logged)
+- HTTP 503: Service unavailable (registry/ledger not loaded)
+
+**No LLM Keys Required:**
+- All features work with config, registry, and broker only
+- No dependency on OpenAI or Anthropic API keys
+- Performance section gracefully handles broker unavailability
+
+**Backwards Compatibility:**
+- Account Summary: Falls back to config defaults if persisted file missing
+- No breaking changes to existing workflows
+- Existing proposal approve/reject flow unchanged
+- Zero impact on trading loop or execution logic
+
+**Testing:**
+- 7 comprehensive unit tests added (`tests/test_ui_api_enhancements.py`)
+- Mock broker for performance endpoint testing
+- Mock UniverseRegistry for sector editor testing
+- File I/O tests for account summary persistence
+- All tests passing
 
 ### Usage Examples
 
