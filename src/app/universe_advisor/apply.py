@@ -79,6 +79,7 @@ def apply_proposal(
         for p in proposal_set["proposals"]:
             if p["proposal_id"] == proposal.proposal_id:
                 p["status"] = "APPROVED"
+                break  # Stop after finding the matching proposal
 
         # Save directly as dict (atomic write)
         _save_proposals_dict(proposal_set, proposals_file)

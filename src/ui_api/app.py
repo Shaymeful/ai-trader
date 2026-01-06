@@ -1103,8 +1103,41 @@ async def reject_proposal(proposal_id: str):
         # Save directly as dict (atomic write)
         _save_proposals_dict(data, proposals_file)
 
-        # Append to history
-        proposal = Proposal(**proposal_data)
+        # Reconstruct Proposal object for history (with enum conversions)
+        from src.app.universe_advisor.models import (
+            ConstituentChange,
+            ConstituentChangeAction,
+            ProposalType,
+        )
+
+        constituent_change = None
+        if (
+            proposal_data.get("proposal_type") == "constituent_change"
+            and "constituent_change" in proposal_data
+        ):
+            cc_data = proposal_data["constituent_change"]
+            constituent_change = ConstituentChange(
+                action=ConstituentChangeAction(cc_data["action"]),
+                tickers=cc_data["tickers"],
+                reason=cc_data["reason"],
+                constraints_checked=cc_data["constraints_checked"],
+            )
+
+        proposal = Proposal(
+            proposal_id=proposal_data["proposal_id"],
+            sector_name=proposal_data["sector_name"],
+            confidence=proposal_data["confidence"],
+            rationale=proposal_data["rationale"],
+            supporting_headlines=proposal_data["supporting_headlines"],
+            provider=proposal_data["provider"],
+            created_at=proposal_data["created_at"],
+            expires_at=proposal_data["expires_at"],
+            status=proposal_data["status"],
+            proposal_type=ProposalType(proposal_data.get("proposal_type", "sector_toggle")),
+            recommended_enabled=proposal_data.get("recommended_enabled"),
+            constituent_change=constituent_change,
+        )
+
         history_file = Path("out/universe_proposals_history.jsonl")
         append_to_history(proposal, "REJECTED", history_file)
 
