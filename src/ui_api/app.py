@@ -1392,18 +1392,11 @@ async def update_sector_tickers(sector_name: str, request: UpdateTickersRequest)
             from src.broker.base import AlpacaBroker
 
             config = load_config_with_yaml()
-            if config.mode == "paper":
-                broker = AlpacaBroker(
-                    key_id=config.alpaca_paper_key_id or "",
-                    secret_key=config.alpaca_paper_secret_key or "",
-                    is_paper=True,
-                )
-            else:
-                broker = AlpacaBroker(
-                    key_id=config.alpaca_live_key_id or "",
-                    secret_key=config.alpaca_live_secret_key or "",
-                    is_paper=False,
-                )
+            broker = AlpacaBroker(
+                api_key=config.alpaca_api_key,
+                secret_key=config.alpaca_secret_key,
+                trading_base_url=config.alpaca_trading_base_url,
+            )
 
             for ticker in add_tickers:
                 if not broker.is_asset_tradable(ticker):
