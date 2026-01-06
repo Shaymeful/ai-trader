@@ -1005,6 +1005,18 @@
             margin-top: 1.5rem;
         }
 
+        .equity-chart-container {
+            background: #0f172a;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            padding: 1rem;
+            height: 400px;
+        }
+
+        .equity-chart-container canvas {
+            max-height: 100%;
+        }
+
         .equity-table-container {
             max-height: 400px;
             overflow-y: auto;
@@ -1205,6 +1217,7 @@
             background: #2563eb;
         }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
 </head>
 <body>
     <div class="container">
@@ -1318,11 +1331,23 @@
             <div class="equity-curve-section">
                 <div class="section-header" style="margin-bottom: 1rem;">
                     <h3>Equity Curve (Last 24 Hours)</h3>
-                    <button class="btn-secondary" onclick="loadEquitySeries()" title="Refresh equity data">
-                        Refresh
-                    </button>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn-secondary" onclick="toggleEquityView()" id="toggle-view-btn" title="Switch between chart and table view">
+                            Show Table
+                        </button>
+                        <button class="btn-secondary" onclick="loadEquitySeries()" title="Refresh equity data">
+                            Refresh
+                        </button>
+                    </div>
                 </div>
-                <div class="equity-table-container" id="equity-table-container">
+
+                <!-- Chart View (default) -->
+                <div class="equity-chart-container" id="equity-chart-container">
+                    <canvas id="equity-chart"></canvas>
+                </div>
+
+                <!-- Table View (hidden by default) -->
+                <div class="equity-table-container" id="equity-table-container" style="display: none;">
                     <table class="equity-table" id="equity-table">
                         <thead>
                             <tr>
@@ -2325,47 +2350,205 @@
         }
 
         // Equity Series
+        let equityChart = null;
+        let equityData = null;
+
         async function loadEquitySeries(hours = 24) {
             try {
                 const response = await fetch(`/account/performance/series?hours=${hours}`);
                 const data = await response.json();
 
-                const tbody = document.getElementById('equity-table-body');
+                equityData = data;
 
                 if (!data.points || data.points.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No equity data available</td></tr>';
+                    document.getElementById('equity-table-body').innerHTML = '<tr><td colspan="4" class="text-muted">No equity data available</td></tr>';
                     return;
                 }
 
-                // Show last 20 points, most recent first
-                const points = data.points.slice(-20).reverse();
+                // Render chart (default view)
+                renderEquityChart(data.points);
 
-                tbody.innerHTML = points.map(point => {
-                    const timestamp = new Date(point.timestamp);
-                    const timeStr = timestamp.toLocaleString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    });
+                // Populate table (hidden by default)
+                populateEquityTable(data.points);
 
-                    const equityStr = '$' + (point.equity || 0).toFixed(2);
-                    const cashStr = '$' + (point.cash || 0).toFixed(2);
-                    const modeStr = point.mode || 'unknown';
-
-                    return `
-                        <tr>
-                            <td>${timeStr}</td>
-                            <td>${equityStr}</td>
-                            <td>${cashStr}</td>
-                            <td><span class="badge">${modeStr}</span></td>
-                        </tr>
-                    `;
-                }).join('');
             } catch (error) {
                 console.error('Error loading equity series:', error);
-                const tbody = document.getElementById('equity-table-body');
-                tbody.innerHTML = '<tr><td colspan="4" class="text-muted">Failed to load equity data</td></tr>';
+                document.getElementById('equity-table-body').innerHTML = '<tr><td colspan="4" class="text-muted">Failed to load equity data</td></tr>';
+            }
+        }
+
+        function renderEquityChart(points) {
+            const ctx = document.getElementById('equity-chart').getContext('2d');
+
+            // Destroy existing chart if it exists
+            if (equityChart) {
+                equityChart.destroy();
+            }
+
+            // Sort points chronologically (oldest to newest)
+            const sortedPoints = [...points].sort((a, b) =>
+                new Date(a.timestamp) - new Date(b.timestamp)
+            );
+
+            // Prepare data
+            const labels = sortedPoints.map(point => {
+                const date = new Date(point.timestamp);
+                return date.toLocaleString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            });
+
+            const equityValues = sortedPoints.map(point => point.equity);
+            const cashValues = sortedPoints.map(point => point.cash);
+
+            // Create chart
+            equityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Equity',
+                            data: equityValues,
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            borderWidth: 2,
+                            tension: 0.4,
+                            fill: true,
+                            pointRadius: 3,
+                            pointHoverRadius: 5
+                        },
+                        {
+                            label: 'Cash',
+                            data: cashValues,
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            borderWidth: 2,
+                            tension: 0.4,
+                            fill: true,
+                            pointRadius: 3,
+                            pointHoverRadius: 5
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                color: '#e2e8f0',
+                                font: {
+                                    size: 12
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(30, 41, 59, 0.95)',
+                            titleColor: '#e2e8f0',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            padding: 12,
+                            displayColors: true,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    label += '$' + context.parsed.y.toFixed(2);
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                color: '#94a3b8',
+                                maxRotation: 45,
+                                minRotation: 45,
+                                font: {
+                                    size: 10
+                                }
+                            },
+                            grid: {
+                                color: '#334155',
+                                borderColor: '#334155'
+                            }
+                        },
+                        y: {
+                            ticks: {
+                                color: '#94a3b8',
+                                callback: function(value) {
+                                    return '$' + value.toFixed(0);
+                                }
+                            },
+                            grid: {
+                                color: '#334155',
+                                borderColor: '#334155'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function populateEquityTable(points) {
+            const tbody = document.getElementById('equity-table-body');
+
+            // Show last 20 points, most recent first
+            const displayPoints = points.slice(-20).reverse();
+
+            tbody.innerHTML = displayPoints.map(point => {
+                const timestamp = new Date(point.timestamp);
+                const timeStr = timestamp.toLocaleString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+
+                const equityStr = '$' + (point.equity || 0).toFixed(2);
+                const cashStr = '$' + (point.cash || 0).toFixed(2);
+                const modeStr = point.mode || 'unknown';
+
+                return `
+                    <tr>
+                        <td>${timeStr}</td>
+                        <td>${equityStr}</td>
+                        <td>${cashStr}</td>
+                        <td><span class="badge">${modeStr}</span></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function toggleEquityView() {
+            const chartContainer = document.getElementById('equity-chart-container');
+            const tableContainer = document.getElementById('equity-table-container');
+            const toggleBtn = document.getElementById('toggle-view-btn');
+
+            if (chartContainer.style.display === 'none') {
+                // Show chart
+                chartContainer.style.display = 'block';
+                tableContainer.style.display = 'none';
+                toggleBtn.textContent = 'Show Table';
+            } else {
+                // Show table
+                chartContainer.style.display = 'none';
+                tableContainer.style.display = 'block';
+                toggleBtn.textContent = 'Show Chart';
             }
         }
 
