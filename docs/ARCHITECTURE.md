@@ -3768,7 +3768,6 @@ The prompt includes:
 class Proposal:
     proposal_id: str                      # UUID
     sector_name: str                      # Sector identifier
-    recommended_enabled: bool             # Enable or disable
     confidence: float                     # 0.0-1.0
     rationale: str                        # LLM explanation
     supporting_headlines: list[str]       # Top 3-5 headlines
@@ -3776,7 +3775,49 @@ class Proposal:
     created_at: str                       # ISO timestamp
     expires_at: str                       # ISO timestamp (TTL)
     status: ProposalStatus                # "NEW", "APPROVED", "REJECTED", "APPLIED", "EXPIRED"
+    proposal_type: ProposalType           # "sector_toggle" or "constituent_change"
+    recommended_enabled: bool | None      # Enable/disable (sector_toggle only)
+    constituent_change: ConstituentChange | None  # Ticker changes (constituent_change only)
 ```
+
+**Proposal Types:**
+
+The system supports two types of proposals:
+
+1. **SECTOR_TOGGLE** - Enable or disable an entire sector
+   - Uses `recommended_enabled` field (True/False)
+   - Affects all tickers in the sector
+   - Example: "Disable mega_cap_tech sector due to market volatility"
+
+2. **CONSTITUENT_CHANGE** - Add or remove specific tickers from a sector
+   - Uses `constituent_change` field (ConstituentChange object)
+   - Allows fine-grained portfolio adjustments
+   - Example: "Add ROK to mega_cap_tech based on strong earnings"
+
+**ConstituentChange Model:**
+```python
+@dataclass
+class ConstituentChange:
+    action: ConstituentChangeAction       # "add" or "remove"
+    tickers: list[str]                    # List of ticker symbols
+    reason: str                           # Explanation for the change
+    constraints_checked: dict[str, bool]  # Validation results
+```
+
+**ConstituentChangeAction Enum:**
+```python
+class ConstituentChangeAction(str, Enum):
+    ADD = "add"       # Add tickers to sector
+    REMOVE = "remove" # Remove tickers from sector
+```
+
+**Constraints Checked:**
+
+When generating CONSTITUENT_CHANGE proposals, the system validates:
+- `not_blacklisted`: Ticker is not on the blacklist
+- `not_in_sector`: Ticker is not already in the sector (for ADD)
+- `cooldown_ok`: Ticker respects cooldown period
+- `tradable`: Ticker is tradable on the broker
 
 **ProposalSet Model:**
 ```python
@@ -3794,6 +3835,65 @@ class ProposalSet:
 - **Agreement**: `openai.recommended_enabled == anthropic.recommended_enabled` → Averaged confidence, combined rationale, "ensemble" provider
 - **Contradiction**: `openai.recommended_enabled != anthropic.recommended_enabled` → Drop proposal, record Disagreement
 - **Single provider**: Only one mentions sector → Use that recommendation with original provider name
+
+### Constituent Proposal Generation
+
+**Module:** `src/app/universe_advisor/generate_constituents.py`
+
+The system can generate CONSTITUENT_CHANGE proposals for fine-grained ticker-level adjustments within sectors.
+
+**Generation Flow:**
+1. Load recent RSS events with sector/ticker context
+2. Analyze market regime for sector compatibility
+3. Extract ticker-level signals (earnings, product launches, etc.)
+4. Generate ADD/REMOVE proposals for specific tickers
+5. Validate constraints (blacklist, duplicates, cooldown, tradability)
+6. Create proposals with supporting evidence
+
+**Example Constituent Proposal:**
+```json
+{
+  "proposal_id": "uuid-123",
+  "sector_name": "mega_cap_tech",
+  "proposal_type": "constituent_change",
+  "confidence": 0.88,
+  "rationale": "Rockwell Automation shows strong earnings momentum...",
+  "supporting_headlines": [
+    "Rockwell Automation (ROK) beats Q3 earnings with record revenue",
+    "Industrial automation demand surges amid AI infrastructure buildout"
+  ],
+  "constituent_change": {
+    "action": "add",
+    "tickers": ["ROK"],
+    "reason": "Strong earnings, high confidence automation play",
+    "constraints_checked": {
+      "not_blacklisted": true,
+      "not_in_sector": true,
+      "cooldown_ok": true,
+      "tradable": true
+    }
+  },
+  "provider": "openai",
+  "status": "NEW"
+}
+```
+
+**Constraint Validation:**
+
+Before creating a proposal, the system checks:
+- **not_blacklisted**: Ticker not on `universe_config.blacklist`
+- **not_in_sector**: For ADD, ticker not already in sector's ticker list
+- **cooldown_ok**: Ticker hasn't been added/removed recently
+- **tradable**: Ticker is tradable on the broker (via `get_tradable_assets()`)
+
+If any constraint fails, the proposal is filtered out during generation.
+
+**Generation Trigger:**
+
+Constituent proposals can be generated:
+- **Manually**: Via dashboard "Generate" button or API call
+- **Automatically**: Not currently implemented (safety consideration)
+- **On-demand**: Via test/development scripts
 
 ### Safety Guardrails
 
@@ -3880,7 +3980,45 @@ def apply_guardrails(
   - Proposals approved (status: "APPROVED")
   - Proposals rejected (status: "REJECTED")
   - Proposals applied (status: "APPLIED")
-- **Fields:** `timestamp`, `action`, `proposal_id`, `sector_name`, `recommended_enabled`, `confidence`, `provider`, `status`
+- **Common Fields:** `timestamp`, `action`, `proposal_id`, `sector_name`, `confidence`, `provider`, `status`, `proposal_type`
+- **Type-Specific Fields:**
+  - **SECTOR_TOGGLE**: `recommended_enabled` (bool)
+  - **CONSTITUENT_CHANGE**: `constituent_change` (object with `action`, `tickers`)
+
+**Example History Entries:**
+
+Sector toggle:
+```json
+{
+  "timestamp": "2026-01-06T22:00:00.000000+00:00",
+  "action": "APPROVED",
+  "proposal_id": "uuid-456",
+  "sector_name": "core_index",
+  "proposal_type": "sector_toggle",
+  "recommended_enabled": true,
+  "confidence": 0.75,
+  "provider": "openai",
+  "status": "APPROVED"
+}
+```
+
+Constituent change:
+```json
+{
+  "timestamp": "2026-01-06T22:15:00.000000+00:00",
+  "action": "APPROVED",
+  "proposal_id": "uuid-789",
+  "sector_name": "mega_cap_tech",
+  "proposal_type": "constituent_change",
+  "constituent_change": {
+    "action": "add",
+    "tickers": ["ROK", "ABB"]
+  },
+  "confidence": 0.88,
+  "provider": "openai",
+  "status": "APPROVED"
+}
+```
 
 **Atomic Write Pattern:**
 ```python
@@ -3912,20 +4050,46 @@ tmp_path.replace(file_path)  # Atomic on POSIX and Windows
 1. Operator clicks "Approve" on proposal in dashboard
 2. API endpoint validates proposal exists and status is "NEW"
 3. Calls `apply_proposal()` which:
-   - Stages change in UniverseRegistry (sets pending_version)
+   - **For SECTOR_TOGGLE**: Stages enable/disable in UniverseRegistry via `stage_change()`
+   - **For CONSTITUENT_CHANGE**: Stages ticker add/remove via `stage_constituent_change()`
+   - Both operations set a new pending_version for the sector
    - Updates proposal status to "APPROVED"
-   - Saves updated proposals file
+   - Saves updated proposals file (atomic write)
    - Appends to history file
    - Logs to ledger with event type `universe_proposal_approved`
 4. Returns `pending_version` to UI
 5. Dashboard refreshes to show pending indicator
 
+**Constituent Change Staging:**
+
+When a CONSTITUENT_CHANGE proposal is approved:
+```python
+new_version = universe_registry.stage_constituent_change(
+    sector_name="mega_cap_tech",
+    action="add",  # or "remove"
+    tickers=["ROK", "ABB"],
+)
+```
+
+This:
+- Loads current sector tickers
+- Applies the add/remove operation
+- Creates new pending version with updated ticker list
+- Preserves enabled status
+- Waits for activation on next loop tick
+
 **Rejection Flow:**
 1. Operator clicks "Reject" on proposal
 2. API endpoint updates status to "REJECTED"
-3. Saves updated proposals file
-4. Appends to history file
-5. Logs to ledger with event type `universe_proposal_rejected`
+3. Reconstructs Proposal object with proper enum conversions:
+   - Converts `proposal_type` string to ProposalType enum
+   - Converts `constituent_change.action` string to ConstituentChangeAction enum
+   - Ensures proper serialization for history file
+4. Saves updated proposals file (atomic write)
+5. Appends to history file with serialized enums
+6. Logs to ledger with event type `universe_proposal_rejected`
+
+**Important**: Both approve and reject endpoints properly handle enum serialization when persisting to history file, preventing `'str' object has no attribute 'value'` errors.
 
 **Force Generation:**
 - If `force=false`, checks if generation interval has elapsed
@@ -3941,11 +4105,14 @@ tmp_path.replace(file_path)  # Atomic on POSIX and Windows
 - **Regime Display:** Shows current market regime (regime type, SPY price/MA50, volatility)
 - **Proposals List:** Grid of proposal cards, each showing:
   - Sector name
-  - Badge: ENABLE (green) or DISABLE (red)
+  - **Badge (Proposal Type)**:
+    - **SECTOR_TOGGLE**: ENABLE (green) or DISABLE (red)
+    - **CONSTITUENT_CHANGE**: ADD (green) or REMOVE (red) with ticker symbols
   - Confidence score (0.00-1.00)
   - Provider badge (openai, anthropic, ensemble)
   - Status badge (NEW, APPROVED, REJECTED, APPLIED, EXPIRED)
   - Rationale (LLM explanation)
+  - **For CONSTITUENT_CHANGE**: Displays action, ticker list, and reason
   - Collapsible supporting headlines
   - Expiration timestamp
   - Action buttons: "Approve" and "Reject" (only for NEW status)
@@ -4070,6 +4237,7 @@ llm:
 - `tests/mocks/mock_llm_provider.py` - Mock LLM provider with deterministic responses
 - `tests/test_mock_llm_provider.py` - Tests for mock provider (3 tests)
 - `tests/test_universe_advisor.py` - Comprehensive unit tests (15+ tests)
+- `tests/test_constituent_proposals.py` - Constituent change tests (5 tests)
 
 **Test Coverage:**
 - Provider modes (openai_only, ensemble, primary_fallback)
@@ -4077,8 +4245,11 @@ llm:
 - Guardrails (confidence filter, TTL expiry, max toggles, cooldown)
 - Market regime detection
 - RSS event loading (filtering, deduplication, prioritization)
-- Proposal creation and lifecycle
-- Storage (save/load proposals, append history)
+- Proposal creation and lifecycle (SECTOR_TOGGLE and CONSTITUENT_CHANGE)
+- Storage (save/load proposals, append history with both proposal types)
+- Constituent change constraint validation (blacklist, duplicates, cooldown, tradability)
+- UniverseRegistry staging for ticker add/remove operations
+- API endpoints (approve/reject with enum serialization)
 
 **Mock Provider:**
 - No network calls required
@@ -4152,9 +4323,10 @@ src/app/
     ├── __init__.py
     ├── models.py                    # Proposal, ProposalSet, MarketRegime, Disagreement
     ├── regime.py                    # Market regime detection
-    ├── generate.py                  # Generate proposals from LLMs
+    ├── generate.py                  # Generate sector toggle proposals from LLMs
+    ├── generate_constituents.py     # Generate ticker-level constituent change proposals
     ├── guardrails.py                # Enforce safety constraints
-    ├── apply.py                     # Apply approved proposals
+    ├── apply.py                     # Apply approved proposals (both types)
     └── storage.py                   # Proposals file I/O
 
 out/
@@ -4166,7 +4338,8 @@ tests/
 │   ├── __init__.py
 │   └── mock_llm_provider.py         # Mock LLM provider for testing
 ├── test_mock_llm_provider.py        # Mock provider tests
-└── test_universe_advisor.py         # Advisor unit tests
+├── test_universe_advisor.py         # Advisor unit tests (sector toggle)
+└── test_constituent_proposals.py    # Constituent change tests
 ```
 
 ---
