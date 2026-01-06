@@ -821,6 +821,10 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         universe_registry = None
         print()
 
+    # Load config and ledger for the loop
+    config = load_config_with_yaml()
+    ledger = Ledger()
+
     iteration = 0
     while True:
         iteration += 1
@@ -833,6 +837,116 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         print(f"{'=' * 80}\n")
 
         try:
+            # Auto-generate advisor proposals if interval elapsed (best-effort)
+            if config.llm_auto_generate_enabled and universe_registry is not None:
+                try:
+                    from pathlib import Path
+
+                    from src.app.universe_advisor.storage import load_proposals
+
+                    proposals_file = Path("out/universe_proposals.json")
+                    should_generate = True
+
+                    if proposals_file.exists():
+                        existing = load_proposals(proposals_file)
+                        if existing:
+                            from datetime import UTC, datetime
+
+                            generated_at = datetime.fromisoformat(existing.get("generated_at", ""))
+                            elapsed_hours = (
+                                datetime.now(UTC) - generated_at
+                            ).total_seconds() / 3600
+                            should_generate = (
+                                elapsed_hours >= config.llm_auto_generate_interval_hours
+                            )
+
+                    if should_generate:
+                        print("Auto-generating advisor proposals...")
+                        try:
+                            from src.app.data_providers.hourly_provider import (
+                                HourlyMarketDataProvider,
+                            )
+                            from src.app.universe import load_universe_config, load_yaml_config
+                            from src.app.universe_advisor.generate import (
+                                generate_proposals,
+                                load_recent_rss_events,
+                            )
+                            from src.app.universe_advisor.guardrails import apply_guardrails
+                            from src.app.universe_advisor.regime import detect_market_regime
+                            from src.app.universe_advisor.storage import save_proposals
+
+                            # Detect regime
+                            provider = HourlyMarketDataProvider(config)
+                            regime = detect_market_regime(provider)
+
+                            # Load RSS events
+                            events_file = Path("out/selector/events.jsonl")
+                            events = load_recent_rss_events(
+                                events_file,
+                                lookback_hours=config.llm_rss_lookback_hours,
+                                max_headlines=config.llm_rss_max_headlines,
+                            )
+
+                            # Load sectors
+                            yaml_config = load_yaml_config()
+                            universe_config = load_universe_config(yaml_config)
+                            sectors = {
+                                name: {"description": sec.description, "symbols": sec.symbols}
+                                for name, sec in universe_config.sectors.items()
+                            }
+
+                            # Generate proposals
+                            llm_config = {
+                                "mode": config.llm_mode,
+                                "primary": config.llm_primary,
+                                "openai_model": config.llm_openai_model,
+                                "anthropic_model": config.llm_anthropic_model,
+                                "timeout": config.llm_timeout,
+                            }
+
+                            proposal_set = generate_proposals(
+                                llm_config, regime, events, sectors, config.llm_proposal_ttl_minutes
+                            )
+
+                            # Apply guardrails
+                            guardrails_config = {
+                                "min_confidence": config.llm_min_confidence,
+                                "max_sector_toggles_per_day": config.llm_max_sector_toggles_per_day,
+                                "cooldown_days": config.llm_cooldown_days,
+                            }
+                            history_file = Path("out/universe_proposals_history.jsonl")
+                            proposal_set = apply_guardrails(
+                                proposal_set, guardrails_config, history_file
+                            )
+
+                            # Save
+                            save_proposals(proposal_set, proposals_file)
+
+                            # Log to ledger
+                            ledger.append(
+                                {
+                                    "event_type": "universe_proposals_generated",
+                                    "generation_id": proposal_set.generation_id,
+                                    "proposal_count": len(proposal_set.proposals),
+                                    "disagreement_count": len(proposal_set.disagreements),
+                                    "regime": regime.regime.value,
+                                    "headline_count": len(events),
+                                }
+                            )
+
+                            print(
+                                f"Generated {len(proposal_set.proposals)} proposals, "
+                                f"{len(proposal_set.disagreements)} disagreements"
+                            )
+                            print()
+                        except Exception as e:
+                            print(f"WARNING: Proposal generation failed: {e}")
+                            print("Continuing with trading...")
+                            print()
+                except Exception as e:
+                    print(f"WARNING: Auto-generation check failed: {e}")
+                    print()
+
             # Check and activate pending strategy configuration changes (next-tick activation)
             if registry is not None:
                 activated = registry.check_and_activate_pending()
@@ -849,6 +963,28 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                     print("Universe configuration changes activated:")
                     for sector_name, old_version, new_version in activated:
                         print(f"  {sector_name}: v{old_version} -> v{new_version}")
+
+                        # Mark related proposals as APPLIED
+                        try:
+                            from pathlib import Path
+
+                            from src.app.universe_advisor.apply import mark_applied
+
+                            proposals_file = Path("out/universe_proposals.json")
+                            history_file = Path("out/universe_proposals_history.jsonl")
+                            mark_applied(sector_name, proposals_file, history_file)
+
+                            # Log to ledger
+                            ledger.append(
+                                {
+                                    "event_type": "universe_proposal_applied",
+                                    "sector_name": sector_name,
+                                    "version": new_version,
+                                }
+                            )
+                        except Exception as e:
+                            print(f"WARNING: Failed to mark proposals as applied: {e}")
+
                     print()
 
             # Run the appropriate mode

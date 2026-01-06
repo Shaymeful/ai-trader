@@ -53,3 +53,32 @@ universe:
         - XLF
         - XLE
         - XLV
+
+# LLM Universe Advisor Configuration
+llm:
+  # Provider mode: primary_fallback | ensemble | openai_only | anthropic_only
+  mode: "primary_fallback"
+
+  # Primary provider (for primary_fallback mode)
+  primary: "openai"  # openai | anthropic
+
+  # Model specifications
+  openai_model: "gpt-4-turbo-preview"
+  anthropic_model: "claude-3-5-sonnet-20241022"
+
+  # API timeouts
+  timeout_seconds: 30
+
+  # Safety guardrails
+  min_confidence: 0.70
+  proposal_ttl_minutes: 120
+  max_sector_toggles_per_day: 1
+  cooldown_days: 3
+
+  # RSS event filtering
+  rss_lookback_hours: 24
+  rss_max_headlines: 100
+
+  # Auto-generation
+  auto_generate_enabled: true
+  auto_generate_interval_hours: 4

@@ -3592,6 +3592,585 @@ Potential future additions (listed here for architectural consideration):
 
 ---
 
+## Universe Advisor: LLM-Powered Sector Recommendations
+
+### Overview
+
+The **Universe Advisor** is an LLM-powered decision-support system that analyzes market regime and recent news to generate sector enable/disable recommendations. It operates as a **gated system** - all proposals require explicit operator approval before affecting trading.
+
+**Key Architecture Principle:** The advisor is **advisory only**. It produces proposals that are reviewed and approved by the operator via the dashboard UI. Approved proposals stage changes in the UniverseRegistry which activate on the next loop tick.
+
+```
+┌─────────────────┐
+│  Dashboard UI   │ ← Operator approves/rejects proposals
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   API Server    │ POST /universe/proposals/generate
+│                 │ POST /universe/proposals/{id}/approve
+│                 │ POST /universe/proposals/{id}/reject
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────┐
+│              Universe Advisor                        │
+│                                                      │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐   │
+│  │   Market   │  │    RSS     │  │    LLM     │   │
+│  │   Regime   │  │  Events    │  │  Provider  │   │
+│  │  Detector  │  │  Loader    │  │  (OpenAI/  │   │
+│  │            │  │            │  │  Anthropic)│   │
+│  └────────────┘  └────────────┘  └────────────┘   │
+│         │                │               │          │
+│         └────────────────┴───────────────┘          │
+│                          │                          │
+│                   ┌──────▼──────┐                   │
+│                   │  Guardrails  │                   │
+│                   └──────┬──────┘                   │
+│                          │                          │
+│                   ┌──────▼──────┐                   │
+│                   │  Proposals  │                   │
+│                   │   Storage   │                   │
+│                   └─────────────┘                   │
+└─────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ UniverseRegistry│ ← Stage changes (pending)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Runner Loop    │ ← Activate at loop start
+└─────────────────┘
+```
+
+### LLM Provider Abstraction
+
+**Module:** `src/app/llm/providers/`
+
+The advisor supports multiple LLM providers through an abstract base class:
+
+**Provider Interface** (`src/app/llm/providers/base.py`):
+```python
+class LLMProvider(ABC):
+    @abstractmethod
+    def generate_structured_json(
+        self, prompt: str, schema: dict, temperature: float, max_tokens: int
+    ) -> dict:
+        """Generate structured JSON response from LLM."""
+        pass
+
+    @abstractmethod
+    def get_provider_name(self) -> str:
+        """Return provider name (e.g., 'openai', 'anthropic')."""
+        pass
+```
+
+**Implementations:**
+- `OpenAIProvider` (`openai_provider.py`) - Uses OpenAI JSON mode
+- `AnthropicProvider` (`anthropic_provider.py`) - Uses Claude with prompt engineering for JSON extraction
+
+**Provider Modes** (configured in `config.yaml`):
+
+1. **`openai_only`** - Single OpenAI call
+2. **`anthropic_only`** - Single Anthropic call
+3. **`primary_fallback`** - Try primary provider, fallback to secondary on error
+4. **`ensemble`** - Call both providers, apply consensus rules:
+   - **Agreement**: Both recommend same direction (enable/disable) → create ensemble proposal with averaged confidence
+   - **Contradiction**: Providers disagree on direction → drop proposal, record as disagreement (read-only display)
+   - **Single provider**: Only one mentions a sector → use that recommendation
+
+**Factory Pattern** (`src/app/llm/factory.py`):
+```python
+def get_providers_for_mode(
+    mode: ProviderMode,
+    primary: ProviderType = "openai",
+    openai_model: str | None = None,
+    anthropic_model: str | None = None,
+    timeout: int = 30,
+) -> tuple[LLMProvider, ...]:
+    """Get provider instances for a given mode."""
+```
+
+**Lazy Loading:** Providers use `__getattr__` in `__init__.py` to avoid requiring `openai` or `anthropic` packages when not used.
+
+### Market Regime Detection
+
+**Module:** `src/app/universe_advisor/regime.py`
+
+Market regime is determined by two factors:
+1. **Trend**: SPY price vs 50-day moving average (bull if SPY ≥ MA50, bear otherwise)
+2. **Volatility**: 20-day rolling standard deviation of returns (annualized)
+
+**Volatility Buckets:**
+- Low: < 15% annualized
+- Medium: 15-25% annualized
+- High: > 25% annualized
+
+**Regime Classification:**
+```python
+class MarketRegime(str, Enum):
+    BULL_LOW_VOL = "bull_low_vol"      # SPY ≥ MA50, vol < 25%
+    BULL_HIGH_VOL = "bull_high_vol"    # SPY ≥ MA50, vol ≥ 25%
+    BEAR_LOW_VOL = "bear_low_vol"      # SPY < MA50, vol < 25%
+    BEAR_HIGH_VOL = "bear_high_vol"    # SPY < MA50, vol ≥ 25%
+    UNKNOWN = "unknown"                 # Insufficient data
+```
+
+**Algorithm:**
+1. Fetch SPY data from market data provider
+2. Calculate 20-day returns: `[(close[i] - close[i-1]) / close[i-1]]`
+3. Compute standard deviation and annualize: `std_dev * sqrt(252)`
+4. Compare SPY price to MA50 for trend
+5. Classify into regime bucket
+6. Calculate confidence based on data quality (0.0-1.0)
+
+### RSS Integration
+
+**Module:** `src/app/universe_advisor/generate.py` (function: `load_recent_rss_events`)
+
+**RSS Event Loading:**
+- Reads from `out/selector/events.jsonl` (generated by RSS selector)
+- Filters by recency: default 24-hour lookback window
+- Hard cap: 100 headlines maximum
+- Deduplicates by headline text
+- Prioritizes: `candidate_created` > `headline_processed`, then by confidence, then by recency
+
+**Event Types Used:**
+- `candidate_created` - High-confidence trading candidates
+- `headline_processed` - General news headlines
+
+**LLM Prompt Construction:**
+The prompt includes:
+1. Current market regime (regime type, SPY price/MA50, trend, volatility)
+2. Recent headlines (up to 50 shown in prompt, numbered 1-N)
+3. Available sectors (description + first 5 symbols)
+4. Task instructions and JSON schema
+
+### Proposal Generation
+
+**Module:** `src/app/universe_advisor/generate.py` (function: `generate_proposals`)
+
+**Generation Flow:**
+1. Detect market regime via `detect_market_regime()`
+2. Load recent RSS events via `load_recent_rss_events()`
+3. Build prompt with regime + events + sectors
+4. Call LLM provider(s) based on mode
+5. Parse LLM responses into Proposal objects
+6. Apply consensus logic (if ensemble mode)
+7. Return ProposalSet
+
+**Proposal Model:**
+```python
+@dataclass
+class Proposal:
+    proposal_id: str                      # UUID
+    sector_name: str                      # Sector identifier
+    recommended_enabled: bool             # Enable or disable
+    confidence: float                     # 0.0-1.0
+    rationale: str                        # LLM explanation
+    supporting_headlines: list[str]       # Top 3-5 headlines
+    provider: str                         # "openai", "anthropic", "ensemble"
+    created_at: str                       # ISO timestamp
+    expires_at: str                       # ISO timestamp (TTL)
+    status: ProposalStatus                # "NEW", "APPROVED", "REJECTED", "APPLIED", "EXPIRED"
+```
+
+**ProposalSet Model:**
+```python
+@dataclass
+class ProposalSet:
+    generation_id: str                    # UUID for this generation run
+    proposals: list[Proposal]             # Actionable proposals
+    disagreements: list[Disagreement]     # Provider contradictions (read-only)
+    regime: RegimeData                    # Market regime snapshot
+    headline_count: int                   # Number of headlines analyzed
+    generated_at: str                     # ISO timestamp
+```
+
+**Ensemble Merge Rules:**
+- **Agreement**: `openai.recommended_enabled == anthropic.recommended_enabled` → Averaged confidence, combined rationale, "ensemble" provider
+- **Contradiction**: `openai.recommended_enabled != anthropic.recommended_enabled` → Drop proposal, record Disagreement
+- **Single provider**: Only one mentions sector → Use that recommendation with original provider name
+
+### Safety Guardrails
+
+**Module:** `src/app/universe_advisor/guardrails.py`
+
+Guardrails filter proposals to prevent excessive or risky changes:
+
+**Guardrail Rules:**
+1. **`min_confidence`** (default: 0.70) - Drops proposals below confidence threshold
+2. **`proposal_ttl_minutes`** (default: 120) - Proposals expire after TTL, status becomes "EXPIRED"
+3. **`max_sector_toggles_per_day`** (default: 1) - Limits toggles per sector within 24-hour window
+4. **`cooldown_days`** (default: 3) - Enforces cooldown period after last approved toggle for a sector
+
+**History Tracking:**
+- Append-only file: `out/universe_proposals_history.jsonl`
+- Records APPROVED and REJECTED proposals
+- Used by guardrails to enforce daily limits and cooldown
+
+**Guardrails Application:**
+```python
+def apply_guardrails(
+    proposal_set: ProposalSet,
+    config: dict,
+    history_file: Path,
+) -> ProposalSet:
+    """Filter proposals based on safety rules."""
+```
+
+**Example Filtering:**
+- Proposal with confidence 0.65 and min_confidence=0.70 → Filtered
+- Sector toggled 1 hour ago and max_toggles_per_day=1 → Filtered
+- Sector last approved 2 days ago and cooldown_days=3 → Filtered
+- Proposal created 3 hours ago with TTL=120 minutes → Status changed to EXPIRED
+
+### Auto-Generation
+
+**Module:** `src/app/runner.py` (integration point)
+
+**Auto-Generation Timing:**
+- Triggered at **start of each loop iteration** (before market data fetch)
+- Runs only if `config.llm_auto_generate_enabled == True`
+- Checks if `llm_auto_generate_interval_hours` has elapsed since last generation
+- Default interval: 4 hours
+
+**Best-Effort Execution:**
+- All exceptions caught and logged as warnings
+- **Never blocks trading** - if generation fails, loop continues normally
+- Logs success/failure but doesn't halt execution
+
+**Generation Steps:**
+1. Check if `out/universe_proposals.json` exists
+2. If exists, parse `generated_at` timestamp
+3. Calculate elapsed hours since last generation
+4. If elapsed ≥ interval, trigger generation:
+   - Detect market regime
+   - Load RSS events
+   - Generate proposals via LLM
+   - Apply guardrails
+   - Save to `out/universe_proposals.json` (atomic write)
+   - Log to ledger with event type `universe_proposals_generated`
+5. If generation fails, log warning and continue
+
+**Code Location:** `src/app/runner.py`, lines 836-937
+
+### Storage
+
+**Module:** `src/app/universe_advisor/storage.py`
+
+**Proposals File** (`out/universe_proposals.json`):
+- **Purpose:** Current proposals awaiting review
+- **Format:** JSON with atomic write (temp file + rename)
+- **Contents:**
+  - `generation_id` - UUID for this generation
+  - `generated_at` - ISO timestamp
+  - `regime` - Market regime snapshot
+  - `proposals` - List of proposal objects
+  - `disagreements` - List of provider contradictions
+  - `headline_count` - Number of headlines analyzed
+
+**History File** (`out/universe_proposals_history.jsonl`):
+- **Purpose:** Append-only audit trail
+- **Format:** JSONL (one JSON object per line)
+- **Events Recorded:**
+  - Proposals approved (status: "APPROVED")
+  - Proposals rejected (status: "REJECTED")
+  - Proposals applied (status: "APPLIED")
+- **Fields:** `timestamp`, `action`, `proposal_id`, `sector_name`, `recommended_enabled`, `confidence`, `provider`, `status`
+
+**Atomic Write Pattern:**
+```python
+with NamedTemporaryFile(mode="w", dir=file_path.parent, delete=False) as tmp:
+    json.dump(data, tmp, indent=2)
+    tmp_path = Path(tmp.name)
+tmp_path.replace(file_path)  # Atomic on POSIX and Windows
+```
+
+### API Endpoints
+
+**Module:** `src/ui_api/app.py`
+
+**GET Endpoints:**
+
+| Endpoint | Purpose | Returns |
+|----------|---------|---------|
+| `GET /universe/proposals` | Get current proposals and disagreements | `ProposalsListResponse` with proposals, disagreements, regime, headline count |
+
+**POST Endpoints:**
+
+| Endpoint | Purpose | Request Body | Returns |
+|----------|---------|--------------|---------|
+| `POST /universe/proposals/generate` | Generate new proposals manually | `{force: bool}` | `ChangeResponse` with success, message, proposal/disagreement count |
+| `POST /universe/proposals/{id}/approve` | Approve proposal and stage UniverseRegistry change | None | `ChangeResponse` with success, message, pending_version |
+| `POST /universe/proposals/{id}/reject` | Reject proposal | None | `ChangeResponse` with success, message |
+
+**Approval Flow:**
+1. Operator clicks "Approve" on proposal in dashboard
+2. API endpoint validates proposal exists and status is "NEW"
+3. Calls `apply_proposal()` which:
+   - Stages change in UniverseRegistry (sets pending_version)
+   - Updates proposal status to "APPROVED"
+   - Saves updated proposals file
+   - Appends to history file
+   - Logs to ledger with event type `universe_proposal_approved`
+4. Returns `pending_version` to UI
+5. Dashboard refreshes to show pending indicator
+
+**Rejection Flow:**
+1. Operator clicks "Reject" on proposal
+2. API endpoint updates status to "REJECTED"
+3. Saves updated proposals file
+4. Appends to history file
+5. Logs to ledger with event type `universe_proposal_rejected`
+
+**Force Generation:**
+- If `force=false`, checks if generation interval has elapsed
+- If `force=true`, skips interval check and always generates
+
+### Dashboard UI
+
+**Module:** `src/ui_api/dashboard.html`
+
+**Advisor Suggestions Section:**
+- **Header:** Displays proposal count and disagreement count
+- **Generate Button:** Triggers manual generation via POST endpoint
+- **Regime Display:** Shows current market regime (regime type, SPY price/MA50, volatility)
+- **Proposals List:** Grid of proposal cards, each showing:
+  - Sector name
+  - Badge: ENABLE (green) or DISABLE (red)
+  - Confidence score (0.00-1.00)
+  - Provider badge (openai, anthropic, ensemble)
+  - Status badge (NEW, APPROVED, REJECTED, APPLIED, EXPIRED)
+  - Rationale (LLM explanation)
+  - Collapsible supporting headlines
+  - Expiration timestamp
+  - Action buttons: "Approve" and "Reject" (only for NEW status)
+- **Disagreements Section:** Collapsible details list showing:
+  - Sector name
+  - Provider A recommendation + confidence
+  - Provider B recommendation + confidence
+  - Highlighted to show contradiction
+
+**JavaScript Functions:**
+- `loadProposals()` - Fetches current proposals from GET endpoint
+- `renderProposals(data)` - Updates DOM with proposals and disagreements
+- `generateProposals()` - Calls POST generate endpoint
+- `approveProposal(proposalId)` - Calls POST approve endpoint with confirmation
+- `rejectProposal(proposalId)` - Calls POST reject endpoint
+
+**User Feedback:**
+- Success messages (green) for approvals/rejections
+- Pending version shown on approved proposals
+- Expired proposals grayed out with opacity
+- Auto-refresh every 30 seconds includes proposals
+
+**Code Location:** `src/ui_api/dashboard.html`, lines vary (embedded in HTML file)
+
+### Runner Integration
+
+**Module:** `src/app/runner.py`
+
+**Integration Point 1: Auto-Generation** (lines 836-937)
+- Location: After UniverseRegistry initialization, before main loop
+- Checks if auto-generation is enabled
+- Checks if interval has elapsed
+- Generates proposals if conditions met
+- All exceptions caught (best-effort)
+
+**Integration Point 2: Mark Applied** (lines 956-974)
+- Location: After `universe_registry.check_and_activate_pending()`
+- When UniverseRegistry activates a pending change
+- Finds APPROVED proposals for that sector
+- Updates status to "APPLIED"
+- Appends to history file
+- Logs to ledger with event type `universe_proposal_applied`
+
+**Activation Flow:**
+1. Operator approves proposal → status becomes "APPROVED", UniverseRegistry has pending_version
+2. Loop iteration starts
+3. `universe_registry.check_and_activate_pending()` promotes pending to active
+4. Returns list of activated changes: `[(sector_name, old_version, new_version)]`
+5. For each activated change:
+   - Print log: "sector_name: vX → vY"
+   - Call `mark_applied(sector_name, proposals_file, history_file)`
+   - Updates APPROVED proposals to APPLIED
+   - Logs to ledger
+6. Trading proceeds with new universe configuration
+
+### Ledger Events
+
+**Event Types Added:**
+
+1. **`universe_proposals_generated`**
+   - Emitted when proposals are generated (auto or manual)
+   - Fields: `generation_id`, `proposal_count`, `disagreement_count`, `regime`, `headline_count`
+
+2. **`universe_proposal_approved`**
+   - Emitted when operator approves a proposal
+   - Fields: `proposal_id`, `sector_name`, `recommended_enabled`, `pending_version`
+
+3. **`universe_proposal_rejected`**
+   - Emitted when operator rejects a proposal
+   - Fields: `proposal_id`, `sector_name`
+
+4. **`universe_proposal_applied`**
+   - Emitted when approved proposal activates in UniverseRegistry
+   - Fields: `sector_name`, `version`
+
+### Configuration
+
+**Config File:** `config/config.yaml`
+
+**Added Section:**
+```yaml
+# LLM Universe Advisor Configuration
+llm:
+  # Provider mode: primary_fallback | ensemble | openai_only | anthropic_only
+  mode: "primary_fallback"
+
+  # Primary provider (for primary_fallback mode)
+  primary: "openai"  # openai | anthropic
+
+  # Model specifications
+  openai_model: "gpt-4-turbo-preview"
+  anthropic_model: "claude-3-5-sonnet-20241022"
+
+  # API timeouts
+  timeout_seconds: 30
+
+  # Safety guardrails
+  min_confidence: 0.70
+  proposal_ttl_minutes: 120
+  max_sector_toggles_per_day: 1
+  cooldown_days: 3
+
+  # RSS event filtering
+  rss_lookback_hours: 24
+  rss_max_headlines: 100
+
+  # Auto-generation
+  auto_generate_enabled: true
+  auto_generate_interval_hours: 4
+```
+
+**Environment Variables Required:**
+- `OPENAI_API_KEY` - If using OpenAI provider
+- `ANTHROPIC_API_KEY` - If using Anthropic provider
+
+**Config Model:** `src/app/config.py`
+- Added fields: `llm_mode`, `llm_primary`, `llm_openai_model`, `llm_anthropic_model`, `llm_timeout`, `llm_min_confidence`, `llm_proposal_ttl_minutes`, `llm_max_sector_toggles_per_day`, `llm_cooldown_days`, `llm_rss_lookback_hours`, `llm_rss_max_headlines`, `llm_auto_generate_enabled`, `llm_auto_generate_interval_hours`
+
+### Testing
+
+**Test Files:**
+- `tests/mocks/mock_llm_provider.py` - Mock LLM provider with deterministic responses
+- `tests/test_mock_llm_provider.py` - Tests for mock provider (3 tests)
+- `tests/test_universe_advisor.py` - Comprehensive unit tests (15+ tests)
+
+**Test Coverage:**
+- Provider modes (openai_only, ensemble, primary_fallback)
+- Ensemble merge rules (agreement, contradiction, single provider)
+- Guardrails (confidence filter, TTL expiry, max toggles, cooldown)
+- Market regime detection
+- RSS event loading (filtering, deduplication, prioritization)
+- Proposal creation and lifecycle
+- Storage (save/load proposals, append history)
+
+**Mock Provider:**
+- No network calls required
+- Returns deterministic responses
+- Records call history for verification
+- Supports custom responses for testing
+
+**Test Strategy:**
+- All tests use MockLLMProvider (no OpenAI/Anthropic API calls)
+- Temporary directories for file I/O
+- Fixtures for sample regime, events, sectors
+- Isolated unit tests with no external dependencies
+
+### Safety Guarantees
+
+1. **Operator Gating:**
+   - All proposals require explicit approval
+   - No automatic sector changes
+   - Clear approve/reject buttons in UI
+   - Confirmation dialog on approve action
+
+2. **Next-Tick Activation:**
+   - Approved proposals stage changes immediately
+   - Changes activate at loop boundary only (via UniverseRegistry)
+   - No mid-loop configuration drift
+   - Deterministic activation timing
+
+3. **Best-Effort Generation:**
+   - Generation failures logged but never block trading
+   - All exceptions caught and logged as warnings
+   - Loop continues normally if generation fails
+   - Feature is fully optional (can be disabled via config)
+
+4. **Guardrails Enforcement:**
+   - Confidence threshold prevents low-quality proposals
+   - TTL prevents stale proposals from being applied
+   - Daily limits prevent excessive toggling
+   - Cooldown prevents flip-flopping
+
+5. **Audit Trail:**
+   - All proposals recorded in history file (append-only)
+   - Ledger events for all actions (generate, approve, reject, apply)
+   - Proposal IDs track specific recommendations
+   - Full context preserved (regime, headlines, rationale)
+
+6. **Version Tracking:**
+   - UniverseRegistry tracks active_version and pending_version
+   - Dashboard shows pending indicator
+   - Operators know when changes will activate
+
+7. **Graceful Degradation:**
+   - Missing API keys → provider mode falls back or skips generation
+   - Missing RSS events → empty event list
+   - Missing regime data → UNKNOWN regime, low confidence
+   - All edge cases handled without crashing
+
+### File Structure
+
+```
+src/app/
+├── llm/
+│   ├── __init__.py
+│   ├── providers/
+│   │   ├── __init__.py              # Lazy imports
+│   │   ├── base.py                  # LLMProvider abstract interface
+│   │   ├── openai_provider.py       # OpenAI implementation
+│   │   └── anthropic_provider.py    # Anthropic implementation
+│   └── factory.py                   # Provider factory with mode logic
+│
+└── universe_advisor/
+    ├── __init__.py
+    ├── models.py                    # Proposal, ProposalSet, MarketRegime, Disagreement
+    ├── regime.py                    # Market regime detection
+    ├── generate.py                  # Generate proposals from LLMs
+    ├── guardrails.py                # Enforce safety constraints
+    ├── apply.py                     # Apply approved proposals
+    └── storage.py                   # Proposals file I/O
+
+out/
+├── universe_proposals.json          # Current proposals (atomic write)
+└── universe_proposals_history.jsonl # Applied/rejected history (append-only)
+
+tests/
+├── mocks/
+│   ├── __init__.py
+│   └── mock_llm_provider.py         # Mock LLM provider for testing
+├── test_mock_llm_provider.py        # Mock provider tests
+└── test_universe_advisor.py         # Advisor unit tests
+```
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing

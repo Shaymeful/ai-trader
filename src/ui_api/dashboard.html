@@ -93,6 +93,107 @@
             border: 1px solid #334155;
         }
 
+        /* Advisor Section */
+        .advisor-section {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .regime-display {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #10b981;
+            font-size: 0.875rem;
+            color: #cbd5e1;
+        }
+
+        .proposals-list {
+            display: grid;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .proposal-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid #334155;
+        }
+
+        .proposal-item.expired {
+            opacity: 0.5;
+            border-color: #64748b;
+        }
+
+        .proposal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .proposal-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn-approve {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background 0.2s;
+        }
+
+        .btn-approve:hover {
+            background: #059669;
+        }
+
+        .btn-reject {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background 0.2s;
+        }
+
+        .btn-reject:hover {
+            background: #dc2626;
+        }
+
+        .disagreements-section {
+            margin-top: 1rem;
+            color: #cbd5e1;
+        }
+
+        .disagreements-section summary {
+            cursor: pointer;
+            padding: 0.5rem;
+            background: #0f172a;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+        }
+
+        .disagreement-item {
+            background: #451a03;
+            border: 1px solid #f59e0b;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+
         .universe-section .section-header {
             display: flex;
             align-items: center;
@@ -955,6 +1056,45 @@
             </div>
         </div>
 
+        <!-- Advisor Suggestions Section -->
+        <div class="advisor-section">
+            <div class="section-header">
+                <h2>Advisor Suggestions</h2>
+                <div class="advisor-stats">
+                    <span class="stat-item">
+                        <span id="proposal-count" class="stat-value">0</span>
+                        <span class="stat-label">proposals</span>
+                    </span>
+                    <span class="stat-divider">|</span>
+                    <span class="stat-item">
+                        <span id="disagreement-count" class="stat-value">0</span>
+                        <span class="stat-label">disagreements</span>
+                    </span>
+                </div>
+                <button class="btn-primary" onclick="generateProposals()" title="Generate new proposals from LLM">
+                    Generate
+                </button>
+            </div>
+
+            <!-- Market Regime Display -->
+            <div class="regime-display" id="regime-display">
+                <!-- Dynamically populated -->
+            </div>
+
+            <!-- Proposals List -->
+            <div class="proposals-list" id="proposals-list">
+                <!-- Dynamically populated -->
+            </div>
+
+            <!-- Disagreements List (collapsible) -->
+            <details class="disagreements-section">
+                <summary>Provider Disagreements (<span id="disagreements-count-summary">0</span>)</summary>
+                <div class="disagreements-list" id="disagreements-list">
+                    <!-- Dynamically populated -->
+                </div>
+            </details>
+        </div>
+
         <div class="main-grid">
             <div class="strategies-section">
                 <h2>Strategies</h2>
@@ -1164,6 +1304,77 @@
             }
         }
 
+        // Universe Advisor Proposals Management
+        async function loadProposals() {
+            try {
+                const response = await fetch('/universe/proposals');
+                if (!response.ok) throw new Error('Failed to load proposals');
+
+                const data = await response.json();
+                renderProposals(data);
+            } catch (error) {
+                console.error('Error loading proposals:', error);
+            }
+        }
+
+        function renderProposals(data) {
+            document.getElementById('proposal-count').textContent = data.proposals.length;
+            document.getElementById('disagreement-count').textContent = data.disagreements.length;
+            document.getElementById('disagreements-count-summary').textContent = data.disagreements.length;
+
+            const regimeDisplay = document.getElementById('regime-display');
+            if (data.regime && data.regime.regime) {
+                regimeDisplay.innerHTML = `<strong>Regime:</strong> ${data.regime.regime} | SPY: $${(data.regime.spy_price || 0).toFixed(2)} | Volatility: ${data.regime.volatility || 'N/A'}`;
+            } else {
+                regimeDisplay.innerHTML = '<em>No regime data</em>';
+            }
+
+            const proposalsList = document.getElementById('proposals-list');
+            if (data.proposals.length === 0) {
+                proposalsList.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 2rem;">No proposals. Click Generate.</div>';
+            } else {
+                proposalsList.innerHTML = data.proposals.map(p => `
+                    <div class="proposal-item">
+                        <div class="proposal-header">
+                            <div><strong>${p.sector_name}</strong> <span style="color: ${p.recommended_enabled ? '#10b981' : '#ef4444'}">${p.recommended_enabled ? 'Enable' : 'Disable'}</span> (${p.confidence.toFixed(2)}) - ${p.provider}</div>
+                            <div class="proposal-actions">
+                                ${p.status === 'NEW' ? `<button class="btn-approve" onclick="approveProposal('${p.proposal_id}')">Approve</button><button class="btn-reject" onclick="rejectProposal('${p.proposal_id}')">Reject</button>` : `<span>${p.status}</span>`}
+                            </div>
+                        </div>
+                        <div style="color: #cbd5e1; margin-top: 0.5rem; font-size: 0.875rem;">${p.rationale}</div>
+                    </div>
+                `).join('');
+            }
+
+            const disagreementsList = document.getElementById('disagreements-list');
+            disagreementsList.innerHTML = data.disagreements.length === 0 ? '<div style="color: #94a3b8;">No disagreements</div>' : data.disagreements.map(d => `<div class="disagreement-item"><strong>${d.sector_name}</strong><br>${d.provider_a}: ${d.recommendation_a ? 'Enable' : 'Disable'} (${d.confidence_a.toFixed(2)})<br>${d.provider_b}: ${d.recommendation_b ? 'Enable' : 'Disable'} (${d.confidence_b.toFixed(2)})</div>`).join('');
+        }
+
+        async function generateProposals() {
+            try {
+                const response = await fetch('/universe/proposals/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: false }) });
+                const result = await response.json();
+                if (response.ok) { showSuccess(result.message); setTimeout(() => loadProposals(), 500); } else { showError(result.detail || 'Failed to generate'); }
+            } catch (error) { console.error('Error:', error); showError('Failed to generate'); }
+        }
+
+        async function approveProposal(proposalId) {
+            if (!confirm('Approve this proposal?')) return;
+            try {
+                const response = await fetch(`/universe/proposals/${proposalId}/approve`, { method: 'POST' });
+                const result = await response.json();
+                if (response.ok) { showSuccess(result.message); setTimeout(() => { loadProposals(); loadUniverseSectors(); }, 500); } else { showError(result.detail || 'Failed'); }
+            } catch (error) { console.error('Error:', error); showError('Failed'); }
+        }
+
+        async function rejectProposal(proposalId) {
+            try {
+                const response = await fetch(`/universe/proposals/${proposalId}/reject`, { method: 'POST' });
+                const result = await response.json();
+                if (response.ok) { showSuccess(result.message); setTimeout(() => loadProposals(), 500); } else { showError(result.detail || 'Failed'); }
+            } catch (error) { console.error('Error:', error); showError('Failed'); }
+        }
+
         async function loadDashboard() {
             try {
                 // Load health status
@@ -1188,6 +1399,9 @@
 
                 // Load universe sectors
                 await loadUniverseSectors();
+
+                // Load advisor proposals
+                await loadProposals();
 
                 // Load candidates
                 const candidatesResponse = await fetch('/candidates');

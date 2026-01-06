@@ -254,6 +254,52 @@ class UniverseSectorsResponse(BaseModel):
     source: str
 
 
+class ProposalResponse(BaseModel):
+    """Single proposal response."""
+
+    proposal_id: str
+    sector_name: str
+    recommended_enabled: bool
+    confidence: float
+    rationale: str
+    supporting_headlines: list[str]
+    provider: str
+    created_at: str
+    expires_at: str
+    status: str
+
+
+class DisagreementResponse(BaseModel):
+    """Provider disagreement response."""
+
+    disagreement_id: str
+    sector_name: str
+    provider_a: str
+    recommendation_a: bool
+    confidence_a: float
+    provider_b: str
+    recommendation_b: bool
+    confidence_b: float
+    created_at: str
+
+
+class ProposalsListResponse(BaseModel):
+    """List of proposals and disagreements."""
+
+    generation_id: str | None
+    generated_at: str | None
+    headline_count: int
+    regime: dict[str, Any]
+    proposals: list[ProposalResponse]
+    disagreements: list[DisagreementResponse]
+
+
+class GenerateRequest(BaseModel):
+    """Request to generate proposals."""
+
+    force: bool = Field(default=False, description="Force generation even if recently generated")
+
+
 # ============================================================================
 # GET Endpoints (Read-Only)
 # ============================================================================
@@ -732,6 +778,290 @@ async def reset_universe():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reset universe: {e}") from e
+
+
+@app.get("/universe/proposals", response_model=ProposalsListResponse)
+async def get_proposals():
+    """Get current proposals and disagreements."""
+    from src.app.universe_advisor.storage import load_proposals
+
+    proposals_file = Path("out/universe_proposals.json")
+    data = load_proposals(proposals_file)
+
+    if not data:
+        return ProposalsListResponse(
+            generation_id=None,
+            generated_at=None,
+            headline_count=0,
+            regime={},
+            proposals=[],
+            disagreements=[],
+        )
+
+    # Convert to response models
+    proposals = [ProposalResponse(**p) for p in data.get("proposals", [])]
+    disagreements = [DisagreementResponse(**d) for d in data.get("disagreements", [])]
+
+    return ProposalsListResponse(
+        generation_id=data.get("generation_id"),
+        generated_at=data.get("generated_at"),
+        headline_count=data.get("headline_count", 0),
+        regime=data.get("regime", {}),
+        proposals=proposals,
+        disagreements=disagreements,
+    )
+
+
+@app.post("/universe/proposals/generate", response_model=ChangeResponse)
+async def generate_proposals_endpoint(request: GenerateRequest):
+    """Generate new proposals manually."""
+    from src.app.config import load_config_with_yaml
+    from src.app.data_providers.hourly_provider import HourlyMarketDataProvider
+    from src.app.universe import load_universe_config, load_yaml_config
+    from src.app.universe_advisor.generate import (
+        generate_proposals,
+        load_recent_rss_events,
+    )
+    from src.app.universe_advisor.guardrails import apply_guardrails
+    from src.app.universe_advisor.regime import detect_market_regime
+    from src.app.universe_advisor.storage import load_proposals, save_proposals
+
+    try:
+        config = load_config_with_yaml()
+
+        # Check if recently generated (unless force=True)
+        if not request.force:
+            proposals_file = Path("out/universe_proposals.json")
+            existing = load_proposals(proposals_file)
+            if existing:
+                generated_at = datetime.fromisoformat(existing.get("generated_at", ""))
+                elapsed_hours = (datetime.now(UTC) - generated_at).total_seconds() / 3600
+                if elapsed_hours < config.llm_auto_generate_interval_hours:
+                    return ChangeResponse(
+                        success=False,
+                        message=f"Proposals generated {elapsed_hours:.1f}h ago. Use force=true to regenerate.",
+                        pending_version=None,
+                    )
+
+        # Detect regime
+        provider = HourlyMarketDataProvider(config)
+        regime = detect_market_regime(provider)
+
+        # Load RSS events
+        events_file = Path("out/selector/events.jsonl")
+        events = load_recent_rss_events(
+            events_file,
+            lookback_hours=config.llm_rss_lookback_hours,
+            max_headlines=config.llm_rss_max_headlines,
+        )
+
+        # Load sectors
+        yaml_config = load_yaml_config()
+        universe_config = load_universe_config(yaml_config)
+        sectors = {
+            name: {"description": sec.description, "symbols": sec.symbols}
+            for name, sec in universe_config.sectors.items()
+        }
+
+        # Generate proposals
+        llm_config = {
+            "mode": config.llm_mode,
+            "primary": config.llm_primary,
+            "openai_model": config.llm_openai_model,
+            "anthropic_model": config.llm_anthropic_model,
+            "timeout": config.llm_timeout,
+        }
+
+        proposal_set = generate_proposals(
+            llm_config, regime, events, sectors, config.llm_proposal_ttl_minutes
+        )
+
+        # Apply guardrails
+        guardrails_config = {
+            "min_confidence": config.llm_min_confidence,
+            "max_sector_toggles_per_day": config.llm_max_sector_toggles_per_day,
+            "cooldown_days": config.llm_cooldown_days,
+        }
+        history_file = Path("out/universe_proposals_history.jsonl")
+        proposal_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+
+        # Save
+        proposals_file = Path("out/universe_proposals.json")
+        save_proposals(proposal_set, proposals_file)
+
+        # Log to ledger
+        if ledger:
+            ledger.append(
+                {
+                    "event_type": "universe_proposals_generated",
+                    "generation_id": proposal_set.generation_id,
+                    "proposal_count": len(proposal_set.proposals),
+                    "disagreement_count": len(proposal_set.disagreements),
+                    "regime": regime.regime.value,
+                    "headline_count": len(events),
+                }
+            )
+
+        return ChangeResponse(
+            success=True,
+            message=f"Generated {len(proposal_set.proposals)} proposals, {len(proposal_set.disagreements)} disagreements.",
+            pending_version=None,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate proposals: {e}") from e
+
+
+@app.post("/universe/proposals/{proposal_id}/approve", response_model=ChangeResponse)
+async def approve_proposal(proposal_id: str):
+    """Approve a proposal and stage UniverseRegistry change."""
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    from src.app.universe_advisor.apply import apply_proposal
+    from src.app.universe_advisor.models import Proposal
+    from src.app.universe_advisor.storage import load_proposals
+
+    try:
+        proposals_file = Path("out/universe_proposals.json")
+        data = load_proposals(proposals_file)
+
+        if not data:
+            raise HTTPException(status_code=404, detail="No proposals found")
+
+        # Find proposal
+        proposal_data = None
+        for p in data.get("proposals", []):
+            if p["proposal_id"] == proposal_id:
+                proposal_data = p
+                break
+
+        if not proposal_data:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+
+        if proposal_data["status"] != "NEW":
+            raise HTTPException(
+                status_code=400, detail=f"Proposal status is {proposal_data['status']}"
+            )
+
+        # Convert to Proposal object
+        proposal = Proposal(**proposal_data)
+
+        # Apply (stages UniverseRegistry change)
+        history_file = Path("out/universe_proposals_history.jsonl")
+        new_version = apply_proposal(proposal, universe_registry, proposals_file, history_file)
+
+        # Log to ledger
+        if ledger:
+            ledger.append(
+                {
+                    "event_type": "universe_proposal_approved",
+                    "proposal_id": proposal_id,
+                    "sector_name": proposal.sector_name,
+                    "recommended_enabled": proposal.recommended_enabled,
+                    "pending_version": new_version,
+                }
+            )
+
+        return ChangeResponse(
+            success=True,
+            message=f"Proposal approved. {proposal.sector_name} will be {'enabled' if proposal.recommended_enabled else 'disabled'} on next loop tick.",
+            pending_version=new_version,
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to approve proposal: {e}") from e
+
+
+@app.post("/universe/proposals/{proposal_id}/reject", response_model=ChangeResponse)
+async def reject_proposal(proposal_id: str):
+    """Reject a proposal."""
+    from src.app.universe_advisor.models import (
+        Disagreement,
+        MarketRegime,
+        Proposal,
+        ProposalSet,
+        RegimeData,
+    )
+    from src.app.universe_advisor.storage import (
+        append_to_history,
+        load_proposals,
+        save_proposals,
+    )
+
+    try:
+        proposals_file = Path("out/universe_proposals.json")
+        data = load_proposals(proposals_file)
+
+        if not data:
+            raise HTTPException(status_code=404, detail="No proposals found")
+
+        # Find and update proposal
+        found = False
+        proposal_data = None
+        for p in data.get("proposals", []):
+            if p["proposal_id"] == proposal_id:
+                p["status"] = "REJECTED"
+                proposal_data = p
+                found = True
+                break
+
+        if not found:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+
+        # Reconstruct ProposalSet for save
+        regime_data = data.get("regime", {})
+        regime = RegimeData(
+            regime=MarketRegime(regime_data.get("regime", "unknown")),
+            spy_price=regime_data.get("spy_price", 0.0),
+            spy_ma50=regime_data.get("spy_ma50", 0.0),
+            trend=regime_data.get("trend", "bear"),
+            volatility=regime_data.get("volatility", "high"),
+            volatility_value=regime_data.get("volatility_value", 0.0),
+            confidence=regime_data.get("confidence", 0.0),
+            timestamp=regime_data.get("timestamp", datetime.now(UTC).isoformat()),
+        )
+
+        proposals_list = [Proposal(**p) for p in data.get("proposals", [])]
+        disagreements_list = [Disagreement(**d) for d in data.get("disagreements", [])]
+
+        updated_set = ProposalSet(
+            generation_id=data.get("generation_id", ""),
+            proposals=proposals_list,
+            disagreements=disagreements_list,
+            regime=regime,
+            headline_count=data.get("headline_count", 0),
+            generated_at=data.get("generated_at", datetime.now(UTC).isoformat()),
+        )
+
+        # Save
+        save_proposals(updated_set, proposals_file)
+
+        # Append to history
+        proposal = Proposal(**proposal_data)
+        history_file = Path("out/universe_proposals_history.jsonl")
+        append_to_history(proposal, "REJECTED", history_file)
+
+        # Log to ledger
+        if ledger:
+            ledger.append(
+                {
+                    "event_type": "universe_proposal_rejected",
+                    "proposal_id": proposal_id,
+                    "sector_name": proposal.sector_name,
+                }
+            )
+
+        return ChangeResponse(
+            success=True,
+            message="Proposal rejected.",
+            pending_version=None,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reject proposal: {e}") from e
 
 
 @app.get("/health/detailed", response_model=DetailedHealthResponse)

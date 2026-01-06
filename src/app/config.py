@@ -116,6 +116,35 @@ class Config(BaseModel):
         default=200, description="Maximum rolling return samples to keep per strategy"
     )
 
+    # LLM Advisor Configuration
+    llm_mode: str = Field(default="primary_fallback", description="LLM provider mode")
+    llm_primary: str = Field(default="openai", description="Primary LLM provider")
+    llm_openai_model: str = Field(default="gpt-4-turbo-preview", description="OpenAI model to use")
+    llm_anthropic_model: str = Field(
+        default="claude-3-5-sonnet-20241022", description="Anthropic model to use"
+    )
+    llm_timeout: int = Field(default=30, description="LLM API timeout in seconds")
+    llm_min_confidence: float = Field(
+        default=0.70, description="Minimum confidence threshold for proposals"
+    )
+    llm_proposal_ttl_minutes: int = Field(
+        default=120, description="Proposal time-to-live in minutes"
+    )
+    llm_max_sector_toggles_per_day: int = Field(
+        default=1, description="Maximum sector toggles per day"
+    )
+    llm_cooldown_days: int = Field(default=3, description="Cooldown period in days per sector")
+    llm_rss_lookback_hours: int = Field(
+        default=24, description="RSS events lookback period in hours"
+    )
+    llm_rss_max_headlines: int = Field(default=100, description="Maximum RSS headlines to process")
+    llm_auto_generate_enabled: bool = Field(
+        default=True, description="Enable automatic proposal generation"
+    )
+    llm_auto_generate_interval_hours: int = Field(
+        default=4, description="Auto-generation interval in hours"
+    )
+
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
     """
