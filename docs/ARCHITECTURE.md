@@ -2599,6 +2599,210 @@ Generates 3 sample candidates:
 
 ---
 
+## Universe Configuration
+
+### Overview
+
+The trading universe can be configured using sector groups for better organization and per-sector control. This enables the UI to display checkboxes for each sector and allows the loop to trade only enabled sectors.
+
+### Configuration Format
+
+**Sector-Based Format** (Recommended):
+
+```yaml
+universe:
+  # Fallback behavior when resolving symbols
+  # Options: "preserve_order" (default), "alphabetical"
+  fallback_mode: "preserve_order"
+
+  # Sector groups
+  sectors:
+    core_index:
+      enabled: true
+      description: "Major market index ETFs"
+      symbols:
+        - SPY
+        - QQQ
+
+    mega_cap_tech:
+      enabled: true
+      description: "Mega-cap technology stocks"
+      symbols:
+        - AAPL
+        - MSFT
+        - NVDA
+        - AMD
+        - META
+        - GOOGL
+        - TSLA
+
+    us_sector_etfs:
+      enabled: true
+      description: "US sector rotation ETFs"
+      symbols:
+        - XLF
+        - XLE
+        - XLV
+```
+
+**Legacy Format** (Still Supported):
+
+```yaml
+universe:
+  core:
+    symbols:
+      - SPY
+      - QQQ
+      - AAPL
+      - MSFT
+      # ...
+```
+
+### Resolution Logic
+
+**Implementation:** `src/app/universe.py`
+
+**Resolution Priority:**
+1. **Legacy format** (`universe.core.symbols`) - Takes precedence if both formats present
+2. **Sector format** (`universe.sectors`) - New structured format
+3. **Empty** - Returns empty list with warning
+
+**Deduplication:**
+- Symbols can appear in multiple sectors
+- First occurrence is preserved (sector declaration order)
+- Duplicates are removed and counted
+- Warning emitted if duplicates found
+
+**Fallback Modes:**
+- `preserve_order` - Maintain sector declaration order (default)
+- `alphabetical` - Sort symbols alphabetically
+- `random` - Randomize order (testing only)
+
+**Integration:**
+```python
+# In src/app/config.py:
+resolution = resolve_universe(yaml_config)
+config.universe_symbols = resolution.symbols
+
+# In src/app/runner.py:
+universe = config.universe_symbols  # Resolved from sectors
+```
+
+### API Endpoint
+
+**GET /universe/sectors** - View sector configuration and resolved symbols
+
+**Response:**
+```json
+{
+  "sectors": [
+    {
+      "sector_name": "core_index",
+      "enabled": true,
+      "description": "Major market index ETFs",
+      "symbols": ["SPY", "QQQ"],
+      "symbol_count": 2
+    },
+    {
+      "sector_name": "mega_cap_tech",
+      "enabled": true,
+      "description": "Mega-cap technology stocks",
+      "symbols": ["AAPL", "MSFT", "NVDA", "AMD", "META", "GOOGL", "TSLA"],
+      "symbol_count": 7
+    },
+    {
+      "sector_name": "us_sector_etfs",
+      "enabled": true,
+      "description": "US sector rotation ETFs",
+      "symbols": ["XLF", "XLE", "XLV"],
+      "symbol_count": 3
+    }
+  ],
+  "resolved_symbols": [
+    "SPY", "QQQ", "AAPL", "MSFT", "NVDA",
+    "AMD", "META", "GOOGL", "TSLA", "XLF", "XLE", "XLV"
+  ],
+  "total_symbols": 12,
+  "fallback_mode": "preserve_order",
+  "deduplication_count": 0,
+  "warnings": [],
+  "source": "sectors"
+}
+```
+
+### Backward Compatibility
+
+**Legacy Support:**
+- Old `universe.core.symbols` format still works
+- Takes precedence if both formats present
+- Warning logged suggesting migration
+- No code changes needed to support both formats
+
+**Migration Path:**
+1. Code supports both formats simultaneously
+2. Update `config/config.yaml` to new sector format
+3. Verify resolved symbols match expected list
+4. No breaking changes - can revert config anytime
+
+**Rollback Strategy:**
+- Revert `config/config.yaml` to legacy format
+- Code automatically falls back to legacy resolution
+- No code changes needed for rollback
+
+### Default Configuration
+
+By default, all sectors are enabled and produce the same symbol list as the legacy format:
+
+**Resolved Symbols:**
+```
+SPY, QQQ, AAPL, MSFT, NVDA, AMD, META, GOOGL, TSLA, XLF, XLE, XLV
+```
+
+**Sectors:**
+- `core_index` (2 symbols): SPY, QQQ
+- `mega_cap_tech` (7 symbols): AAPL, MSFT, NVDA, AMD, META, GOOGL, TSLA
+- `us_sector_etfs` (3 symbols): XLF, XLE, XLV
+
+### Testing
+
+**Test File:** `tests/test_universe.py`
+
+**Test Coverage:**
+- Legacy format backward compatibility
+- New sector format resolution
+- Disabled sectors exclusion
+- Symbol deduplication across sectors
+- Fallback mode sorting (alphabetical, preserve_order)
+- Empty universe handling
+- Exact backward compatibility match
+
+**Config Integration Tests:** `tests/test_config.py`
+- Sector-based universe resolution through config loader
+- Legacy format still works through config loader
+
+**API Tests:** `tests/test_api.py`
+- GET /universe/sectors endpoint response structure
+- Sector list validation
+- Resolved symbols validation
+
+### Future Enhancements
+
+**Short Term:**
+- POST endpoints to toggle sector enabled state (requires persistence)
+- UI checkboxes for per-sector control in dashboard
+
+**Medium Term:**
+- Per-strategy sector filtering
+- Dynamic sector creation via UI
+- Sector performance analytics
+
+**Long Term:**
+- AI-powered sector recommendations
+- Auto-balancing across sectors
+- Correlation-based sector grouping
+
+---
+
 ## Strategy Dashboard System
 
 ### Overview

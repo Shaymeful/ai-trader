@@ -211,6 +211,28 @@ class SelectorStatusResponse(BaseModel):
     last_error: str | None
 
 
+class SectorInfo(BaseModel):
+    """Sector information."""
+
+    sector_name: str
+    enabled: bool
+    description: str
+    symbols: list[str]
+    symbol_count: int
+
+
+class UniverseSectorsResponse(BaseModel):
+    """Universe sectors response."""
+
+    sectors: list[SectorInfo]
+    resolved_symbols: list[str]
+    total_symbols: int
+    fallback_mode: str
+    deduplication_count: int
+    warnings: list[str]
+    source: str
+
+
 # ============================================================================
 # GET Endpoints (Read-Only)
 # ============================================================================
@@ -595,6 +617,56 @@ async def get_selector_status():
         candidates_count=candidates_count,
         candidates_by_action=candidates_by_action,
         last_error=last_error,
+    )
+
+
+@app.get("/universe/sectors", response_model=UniverseSectorsResponse)
+async def get_universe_sectors():
+    """
+    Get universe sectors and resolved symbol list.
+
+    Returns sector configuration, resolved symbols, and deduplication info.
+    Read-only endpoint - no mutations supported yet.
+    """
+    from pathlib import Path
+
+    from src.app.config import load_yaml_config
+    from src.app.universe import load_universe_config, resolve_universe
+
+    # Load YAML config
+    repo_root = Path(__file__).resolve().parents[2]
+    config_path = repo_root / "config" / "config.yaml"
+
+    if not config_path.exists():
+        raise HTTPException(status_code=503, detail="Config file not found")
+
+    yaml_config = load_yaml_config(config_path)
+
+    # Resolve universe
+    resolution = resolve_universe(yaml_config)
+    universe_config = load_universe_config(yaml_config)
+
+    # Build sector list
+    sectors_list = []
+    for sector_name, sector_config in universe_config.sectors.items():
+        sectors_list.append(
+            SectorInfo(
+                sector_name=sector_name,
+                enabled=sector_config.enabled,
+                description=sector_config.description,
+                symbols=sector_config.symbols,
+                symbol_count=len(sector_config.symbols),
+            )
+        )
+
+    return UniverseSectorsResponse(
+        sectors=sectors_list,
+        resolved_symbols=resolution.symbols,
+        total_symbols=len(resolution.symbols),
+        fallback_mode=universe_config.fallback_mode,
+        deduplication_count=resolution.deduplication_count,
+        warnings=resolution.warnings,
+        source=resolution.source,
     )
 
 

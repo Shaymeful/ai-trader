@@ -572,3 +572,44 @@ def test_dashboard_has_new_sections(client):
     assert "togglePauseTrading" in content
     assert "renderCandidates" in content
     assert "filterCandidates" in content
+
+
+def test_universe_sectors_endpoint(client):
+    """Test GET /universe/sectors endpoint."""
+    response = client.get("/universe/sectors")
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check response structure
+    assert "sectors" in data
+    assert "resolved_symbols" in data
+    assert "total_symbols" in data
+    assert "fallback_mode" in data
+    assert "source" in data
+    assert "deduplication_count" in data
+    assert "warnings" in data
+
+    # Check sectors list
+    sectors = data["sectors"]
+    assert isinstance(sectors, list)
+    assert len(sectors) > 0
+
+    # Check first sector structure
+    if sectors:
+        sector = sectors[0]
+        assert "sector_name" in sector
+        assert "enabled" in sector
+        assert "description" in sector
+        assert "symbols" in sector
+        assert "symbol_count" in sector
+
+    # Check resolved symbols
+    assert isinstance(data["resolved_symbols"], list)
+    assert data["total_symbols"] == len(data["resolved_symbols"])
+
+    # Verify fallback mode is valid
+    assert data["fallback_mode"] in ["preserve_order", "alphabetical", "random"]
+
+    # Verify source is valid
+    assert data["source"] in ["sectors", "legacy", "empty"]
