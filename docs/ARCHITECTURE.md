@@ -5768,6 +5768,270 @@ tests/
 
 ---
 
+## Loop Timing & Runtime State
+
+### Overview
+
+The loop timing system tracks execution timing for the trading loop and displays real-time countdown and scheduling information in the dashboard. This feature allows operators to monitor loop execution without restarting the runner.
+
+**Key Features:**
+- Real-time countdown to next loop iteration
+- Last execution timestamp
+- Next scheduled execution time
+- Loop interval display
+- No restart required to see timing updates
+
+### Runtime State
+
+**File:** `state/runtime.json`
+
+**Purpose:** Persistent storage of loop timing information that updates on each loop iteration.
+
+**Format:**
+```json
+{
+  "loop_interval_seconds": 3600,
+  "last_loop_start": "2026-01-07T10:00:00+00:00",
+  "last_loop_end": "2026-01-07T10:00:12+00:00",
+  "next_loop_at": "2026-01-07T11:00:12+00:00",
+  "updated_at": "2026-01-07T10:00:12.123456+00:00"
+}
+```
+
+**Fields:**
+- `loop_interval_seconds`: Configured sleep interval between loop iterations (from `--sleep-seconds` flag)
+- `last_loop_start`: ISO timestamp (UTC) when the last loop iteration started
+- `last_loop_end`: ISO timestamp (UTC) when the last loop iteration completed
+- `next_loop_at`: ISO timestamp (UTC) when the next loop iteration is scheduled
+- `updated_at`: ISO timestamp (UTC) when the state file was last updated
+
+**State Model:** `src/app/state.py:RuntimeState`
+
+```python
+class RuntimeState(BaseModel):
+    """Runtime state for loop timing and dashboard display."""
+
+    loop_interval_seconds: int = Field(default=3600)
+    last_loop_start: str | None = Field(default=None)
+    last_loop_end: str | None = Field(default=None)
+    next_loop_at: str | None = Field(default=None)
+    updated_at: str = Field(...)
+```
+
+**Functions:**
+- `load_runtime_state(state_dir)`: Load runtime state from file (returns default if missing)
+- `save_runtime_state(state, state_dir)`: Save runtime state with atomic write (temp file + rename)
+
+### Runner Integration
+
+**Module:** `src/app/runner.py:run_loop()`
+
+**Timing Instrumentation Points:**
+
+1. **Loop Initialization (line 783-787):**
+   ```python
+   from .state import RuntimeState, load_runtime_state, save_runtime_state
+
+   runtime_state = load_runtime_state()
+   runtime_state.loop_interval_seconds = sleep_seconds
+   save_runtime_state(runtime_state)
+   ```
+
+2. **Iteration Start (line 843-845):**
+   ```python
+   loop_start_utc = datetime.now(UTC)
+   runtime_state.last_loop_start = loop_start_utc.isoformat()
+   save_runtime_state(runtime_state)
+   ```
+
+3. **Iteration End - Success (line 1032-1039):**
+   ```python
+   loop_end_utc = datetime.now(UTC)
+   runtime_state.last_loop_end = loop_end_utc.isoformat()
+   next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
+   runtime_state.next_loop_at = next_run_utc.isoformat()
+   save_runtime_state(runtime_state)
+   ```
+
+4. **Iteration End - Error (line 1098-1105):**
+   ```python
+   # Same timing update even on error
+   loop_end_utc = datetime.now(UTC)
+   runtime_state.last_loop_end = loop_end_utc.isoformat()
+   next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
+   runtime_state.next_loop_at = next_run_utc.isoformat()
+   save_runtime_state(runtime_state)
+   ```
+
+**Behavior:**
+- State updates at start and end of each iteration (success or error)
+- Next loop time calculated as `loop_end + sleep_seconds`
+- All timestamps stored in UTC for consistency
+- Atomic file writes prevent corruption
+
+### API Endpoint
+
+**Endpoint:** `GET /runtime`
+
+**Module:** `src/ui_api/app.py:get_runtime()`
+
+**Response Model:**
+```python
+class RuntimeResponse(BaseModel):
+    loop_interval_seconds: int
+    last_loop_start: str | None
+    last_loop_end: str | None
+    next_loop_at: str | None
+    seconds_until_next_loop: int | None  # Calculated server-side
+    updated_at: str
+```
+
+**Response Example:**
+```json
+{
+  "loop_interval_seconds": 3600,
+  "last_loop_start": "2026-01-07T10:00:00+00:00",
+  "last_loop_end": "2026-01-07T10:00:12+00:00",
+  "next_loop_at": "2026-01-07T11:00:12+00:00",
+  "seconds_until_next_loop": 2400,
+  "updated_at": "2026-01-07T10:00:12.123456+00:00"
+}
+```
+
+**Calculation Logic:**
+```python
+# Calculate seconds until next loop (for countdown display)
+if runtime_state.next_loop_at:
+    next_loop_dt = datetime.fromisoformat(runtime_state.next_loop_at.replace("Z", "+00:00"))
+    now_utc = datetime.now(UTC)
+    delta = (next_loop_dt - now_utc).total_seconds()
+    seconds_until_next = int(delta)
+```
+
+### Dashboard UI
+
+**Module:** `src/ui_api/dashboard.html`
+
+**Loop Status Section:**
+
+Located between Account Summary and Performance sections.
+
+**HTML Structure:**
+```html
+<div class="loop-status-section">
+    <div class="section-header">
+        <h2>Loop Status</h2>
+    </div>
+    <div class="loop-status-grid">
+        <div class="loop-status-item">
+            <div class="loop-status-label">Next Loop In</div>
+            <div class="loop-status-value loop-countdown" id="next-loop-countdown">--</div>
+        </div>
+        <div class="loop-status-item">
+            <div class="loop-status-label">Loop Interval</div>
+            <div class="loop-status-value" id="loop-interval">--</div>
+        </div>
+        <div class="loop-status-item">
+            <div class="loop-status-label">Last Execution</div>
+            <div class="loop-status-value" id="last-loop-time">--</div>
+        </div>
+        <div class="loop-status-item">
+            <div class="loop-status-label">Next Scheduled</div>
+            <div class="loop-status-value" id="next-loop-time">--</div>
+        </div>
+    </div>
+</div>
+```
+
+**JavaScript Functions:**
+
+1. **loadLoopStatus()** (line 2059):
+   - Fetches runtime state from `/runtime` endpoint
+   - Updates all display elements
+   - Starts 1-second countdown timer
+
+2. **updateLoopStatusDisplay(data)** (line 2081):
+   - Formats loop interval as hours (e.g., "1.0h")
+   - Converts UTC timestamps to local time for display
+   - Stores data globally for countdown updates
+
+3. **updateLoopCountdown()** (line 2117):
+   - Runs every second via `setInterval`
+   - Calculates time remaining until next loop
+   - Formats countdown based on time scale:
+     - < 1 minute: "45s"
+     - < 1 hour: "15m 30s"
+     - >= 1 hour: "2h 15m"
+   - Shows "Overdue (Xm)" if past scheduled time (in warning color)
+
+**Visual Styling:**
+- `.loop-countdown`: Green color (#10b981) for normal countdown
+- `.loop-overdue`: Amber color (#f59e0b) for overdue indication
+- Grid layout with 4 items (responsive to screen size)
+- Consistent with other dashboard sections (dark theme)
+
+**Update Behavior:**
+- Initial load: Fetches state when dashboard loads
+- Live countdown: Updates every 1 second client-side
+- Refresh: Full reload fetches latest state from server
+- Auto-refresh: Works with existing 10-second dashboard refresh
+
+### Testing
+
+**Test File:** `tests/test_runtime_state.py` (10 tests)
+
+**Test Coverage:**
+1. `test_runtime_state_creation`: Model creation with defaults
+2. `test_runtime_state_with_values`: Model creation with all values
+3. `test_load_runtime_state_nonexistent`: Loading when file doesn't exist
+4. `test_save_and_load_runtime_state`: Round-trip save/load
+5. `test_save_runtime_state_updates_timestamp`: Timestamp auto-update
+6. `test_load_runtime_state_corrupted_json`: Handling corrupted file
+7. `test_save_runtime_state_atomic`: Atomic write verification
+8. `test_runtime_state_file_format`: JSON structure validation
+9. `test_runtime_state_multiple_saves`: Sequential saves
+10. `test_runtime_state_directory_creation`: Auto-create state directory
+
+**All tests use temporary directories and do not modify actual state files.**
+
+### Implementation Files
+
+- `src/app/state.py`: RuntimeState model, load/save functions (line 421-500)
+- `src/app/runner.py`: Timing instrumentation at loop boundaries (lines 783, 843, 1032, 1098)
+- `src/ui_api/app.py`: GET /runtime endpoint (line 387-420)
+- `src/ui_api/dashboard.html`: Loop Status section UI and countdown logic (lines 1032-1071 CSS, 1424-1447 HTML, 2056-2156 JavaScript)
+- `tests/test_runtime_state.py`: Comprehensive unit tests (10 tests)
+
+### Design Decisions
+
+1. **UTC Timestamps:**
+   - All timestamps stored in UTC for consistency
+   - Converted to local time only for display
+   - Prevents timezone confusion across restarts
+
+2. **Atomic Writes:**
+   - Uses NamedTemporaryFile + rename pattern
+   - Prevents corruption if process killed during write
+   - Consistent with other state files (strategy_state.json, etc.)
+
+3. **Client-Side Countdown:**
+   - Countdown updates every second in browser
+   - Reduces server load (no polling every second)
+   - Server calculates seconds_until_next_loop once per fetch
+
+4. **Graceful Degradation:**
+   - If runtime.json missing, displays "--" instead of error
+   - If endpoint fails, shows "--" and logs error to console
+   - Dashboard functional even if timing unavailable
+
+5. **No Trading Impact:**
+   - Timing tracking has no effect on trading logic
+   - All state updates wrapped in try/except
+   - Never blocks loop iteration
+   - Pure observability feature
+
+---
+
 ## Known Constraints
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing

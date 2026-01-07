@@ -416,3 +416,85 @@ def print_strategy_state_summary(states: dict[str, StrategyState], min_samples: 
         )
 
     print("=" * 80)
+
+
+# ============================================================================
+# Runtime State Management (for loop timing and dashboard display)
+# ============================================================================
+
+
+class RuntimeState(BaseModel):
+    """
+    Runtime state for loop timing and dashboard display.
+
+    Tracks loop execution timing to display in dashboard without restarting runner.
+    """
+
+    loop_interval_seconds: int = Field(
+        default=3600, description="Configured sleep interval between loop iterations"
+    )
+    last_loop_start: str | None = Field(
+        default=None, description="ISO timestamp of last loop iteration start (UTC)"
+    )
+    last_loop_end: str | None = Field(
+        default=None, description="ISO timestamp of last loop iteration end (UTC)"
+    )
+    next_loop_at: str | None = Field(
+        default=None, description="ISO timestamp of next scheduled loop iteration (UTC)"
+    )
+    updated_at: str = Field(description="ISO timestamp of last state update (UTC)")
+
+
+def load_runtime_state(state_dir: str = "state") -> RuntimeState:
+    """
+    Load runtime state from state directory.
+
+    Args:
+        state_dir: Directory containing runtime.json (default: "state")
+
+    Returns:
+        RuntimeState object (returns default if file doesn't exist or is corrupted)
+    """
+    state_file = Path(state_dir) / "runtime.json"
+
+    if not state_file.exists():
+        return RuntimeState(updated_at=datetime.now(ZoneInfo("UTC")).isoformat())
+
+    try:
+        with open(state_file) as f:
+            data = json.load(f)
+            return RuntimeState(**data)
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger("ai-trader")
+        logger.warning(f"Failed to load runtime state from {state_file}: {e}")
+        return RuntimeState(updated_at=datetime.now(ZoneInfo("UTC")).isoformat())
+
+
+def save_runtime_state(state: RuntimeState, state_dir: str = "state"):
+    """
+    Save runtime state to state directory (atomic write).
+
+    Args:
+        state: RuntimeState to save
+        state_dir: Directory to save runtime.json (default: "state")
+    """
+    from tempfile import NamedTemporaryFile
+
+    state_path = Path(state_dir)
+    state_path.mkdir(exist_ok=True, parents=True)
+
+    state_file = state_path / "runtime.json"
+
+    # Update timestamp
+    state.updated_at = datetime.now(ZoneInfo("UTC")).isoformat()
+
+    # Atomic write (write to temp, then rename)
+    with NamedTemporaryFile(
+        mode="w", dir=state_path, delete=False, suffix=".tmp", encoding="utf-8"
+    ) as tmp_file:
+        json.dump(state.model_dump(), tmp_file, indent=2)
+        tmp_path = Path(tmp_file.name)
+
+    tmp_path.replace(state_file)

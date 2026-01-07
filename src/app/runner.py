@@ -779,6 +779,13 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
     status_log = log_dir / "loop_status.log"
     error_log = log_dir / "loop_errors.log"
 
+    # Initialize runtime state for loop timing tracking
+    from .state import RuntimeState, load_runtime_state, save_runtime_state
+
+    runtime_state = load_runtime_state()
+    runtime_state.loop_interval_seconds = sleep_seconds
+    save_runtime_state(runtime_state)
+
     print("=" * 80)
     print("LOOP MODE ENABLED")
     print("=" * 80)
@@ -831,6 +838,11 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         # Use market time for loop timestamps to align with log filenames
         market_time = get_market_time_now()
         run_timestamp = market_time.isoformat()
+
+        # Record loop iteration start time (UTC for state tracking)
+        loop_start_utc = datetime.now(UTC)
+        runtime_state.last_loop_start = loop_start_utc.isoformat()
+        save_runtime_state(runtime_state)
 
         print(f"\n{'=' * 80}")
         print(f"LOOP ITERATION {iteration} - {run_timestamp}")
@@ -1016,6 +1028,16 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             with open(status_log, "a") as f:
                 f.write(status_line)
 
+            # Record loop iteration end time and calculate next run
+            loop_end_utc = datetime.now(UTC)
+            runtime_state.last_loop_end = loop_end_utc.isoformat()
+            # Calculate next run time (loop_end + sleep_seconds)
+            from datetime import timedelta
+
+            next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
+            runtime_state.next_loop_at = next_run_utc.isoformat()
+            save_runtime_state(runtime_state)
+
             # Capture equity snapshot (best-effort)
             if not dry_run and config.alpaca_api_key:
                 try:
@@ -1071,6 +1093,16 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
 
             with open(status_log, "a") as f:
                 f.write(status_line)
+
+            # Record loop iteration end time even on error
+            loop_end_utc = datetime.now(UTC)
+            runtime_state.last_loop_end = loop_end_utc.isoformat()
+            # Calculate next run time (loop_end + sleep_seconds)
+            from datetime import timedelta
+
+            next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
+            runtime_state.next_loop_at = next_run_utc.isoformat()
+            save_runtime_state(runtime_state)
 
             print(f"\n{'=' * 80}")
             print(f"ERROR IN ITERATION {iteration}")

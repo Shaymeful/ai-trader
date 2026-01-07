@@ -80,6 +80,19 @@ class HealthResponse(BaseModel):
     ledger_available: bool
 
 
+class RuntimeResponse(BaseModel):
+    """Runtime state response with loop timing information."""
+
+    loop_interval_seconds: int = Field(description="Configured loop interval in seconds")
+    last_loop_start: str | None = Field(description="ISO timestamp of last loop start (UTC)")
+    last_loop_end: str | None = Field(description="ISO timestamp of last loop end (UTC)")
+    next_loop_at: str | None = Field(description="ISO timestamp of next scheduled loop (UTC)")
+    seconds_until_next_loop: int | None = Field(
+        description="Seconds until next loop (negative if overdue)"
+    )
+    updated_at: str = Field(description="ISO timestamp of state file update (UTC)")
+
+
 class AccountSummaryResponse(BaseModel):
     """Account summary response."""
 
@@ -368,6 +381,42 @@ async def health_check():
         timestamp=datetime.now(UTC).isoformat(),
         registry_loaded=registry is not None and registry.state is not None,
         ledger_available=ledger is not None,
+    )
+
+
+@app.get("/runtime", response_model=RuntimeResponse)
+async def get_runtime():
+    """
+    Get runtime state with loop timing information.
+
+    Returns:
+        - Configured loop interval
+        - Last loop start/end times
+        - Next scheduled loop time
+        - Seconds until next loop (for countdown display)
+    """
+    from src.app.state import load_runtime_state
+
+    runtime_state = load_runtime_state()
+
+    # Calculate seconds until next loop
+    seconds_until_next = None
+    if runtime_state.next_loop_at:
+        try:
+            next_loop_dt = datetime.fromisoformat(runtime_state.next_loop_at.replace("Z", "+00:00"))
+            now_utc = datetime.now(UTC)
+            delta = (next_loop_dt - now_utc).total_seconds()
+            seconds_until_next = int(delta)
+        except Exception:
+            pass
+
+    return RuntimeResponse(
+        loop_interval_seconds=runtime_state.loop_interval_seconds,
+        last_loop_start=runtime_state.last_loop_start,
+        last_loop_end=runtime_state.last_loop_end,
+        next_loop_at=runtime_state.next_loop_at,
+        seconds_until_next_loop=seconds_until_next,
+        updated_at=runtime_state.updated_at,
     )
 
 

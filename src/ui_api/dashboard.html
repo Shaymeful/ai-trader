@@ -1029,6 +1029,47 @@
             background: linear-gradient(90deg, #3b82f6, #10b981);
         }
 
+        /* Loop Status Section */
+        .loop-status-section {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .loop-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .loop-status-item {
+            text-align: center;
+        }
+
+        .loop-status-label {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .loop-status-value {
+            color: #f1f5f9;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .loop-countdown {
+            color: #10b981;
+            font-weight: 700;
+        }
+
+        .loop-overdue {
+            color: #f59e0b;
+        }
+
         /* Performance Section */
         .performance-section {
             background: #1e293b;
@@ -1376,6 +1417,31 @@
                 <div class="account-stat">
                     <div class="account-stat-label">Enabled Strategies</div>
                     <div class="account-stat-value" id="enabled-strategies">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loop Status Section -->
+        <div class="loop-status-section">
+            <div class="section-header">
+                <h2>Loop Status</h2>
+            </div>
+            <div class="loop-status-grid">
+                <div class="loop-status-item">
+                    <div class="loop-status-label">Next Loop In</div>
+                    <div class="loop-status-value loop-countdown" id="next-loop-countdown">--</div>
+                </div>
+                <div class="loop-status-item">
+                    <div class="loop-status-label">Loop Interval</div>
+                    <div class="loop-status-value" id="loop-interval">--</div>
+                </div>
+                <div class="loop-status-item">
+                    <div class="loop-status-label">Last Execution</div>
+                    <div class="loop-status-value" id="last-loop-time">--</div>
+                </div>
+                <div class="loop-status-item">
+                    <div class="loop-status-label">Next Scheduled</div>
+                    <div class="loop-status-value" id="next-loop-time">--</div>
                 </div>
             </div>
         </div>
@@ -1987,12 +2053,117 @@
             }).join('');
         }
 
+        // Loop Status Management
+        let loopStatusInterval = null;
+
+        async function loadLoopStatus() {
+            try {
+                const response = await fetch('/runtime');
+                if (!response.ok) {
+                    // If runtime state not available, hide the section or show N/A
+                    updateLoopStatusDisplay(null);
+                    return;
+                }
+
+                const data = await response.json();
+                updateLoopStatusDisplay(data);
+
+                // Start countdown timer if not already running
+                if (!loopStatusInterval) {
+                    loopStatusInterval = setInterval(updateLoopCountdown, 1000);
+                }
+            } catch (error) {
+                console.error('Error loading loop status:', error);
+                updateLoopStatusDisplay(null);
+            }
+        }
+
+        function updateLoopStatusDisplay(data) {
+            if (!data) {
+                document.getElementById('loop-interval').textContent = '--';
+                document.getElementById('last-loop-time').textContent = '--';
+                document.getElementById('next-loop-time').textContent = '--';
+                document.getElementById('next-loop-countdown').textContent = '--';
+                return;
+            }
+
+            // Store runtime data globally for countdown updates
+            window.runtimeData = data;
+
+            // Format interval (convert seconds to human readable)
+            const intervalHours = (data.loop_interval_seconds / 3600).toFixed(1);
+            document.getElementById('loop-interval').textContent = `${intervalHours}h`;
+
+            // Format last execution time (local time)
+            if (data.last_loop_end) {
+                const lastLoopDate = new Date(data.last_loop_end);
+                document.getElementById('last-loop-time').textContent = lastLoopDate.toLocaleTimeString();
+            } else {
+                document.getElementById('last-loop-time').textContent = '--';
+            }
+
+            // Format next scheduled time (local time)
+            if (data.next_loop_at) {
+                const nextLoopDate = new Date(data.next_loop_at);
+                document.getElementById('next-loop-time').textContent = nextLoopDate.toLocaleTimeString();
+            } else {
+                document.getElementById('next-loop-time').textContent = '--';
+            }
+
+            // Initial countdown update
+            updateLoopCountdown();
+        }
+
+        function updateLoopCountdown() {
+            if (!window.runtimeData || !window.runtimeData.next_loop_at) {
+                document.getElementById('next-loop-countdown').textContent = '--';
+                return;
+            }
+
+            const nextLoopDate = new Date(window.runtimeData.next_loop_at);
+            const now = new Date();
+            const diffMs = nextLoopDate - now;
+            const diffSeconds = Math.floor(diffMs / 1000);
+
+            const countdownEl = document.getElementById('next-loop-countdown');
+
+            if (diffSeconds <= 0) {
+                // Overdue
+                const overdueMins = Math.ceil(Math.abs(diffSeconds) / 60);
+                countdownEl.textContent = `Overdue (${overdueMins}m)`;
+                countdownEl.classList.remove('loop-countdown');
+                countdownEl.classList.add('loop-overdue');
+            } else if (diffSeconds < 60) {
+                // Less than a minute
+                countdownEl.textContent = `${diffSeconds}s`;
+                countdownEl.classList.add('loop-countdown');
+                countdownEl.classList.remove('loop-overdue');
+            } else if (diffSeconds < 3600) {
+                // Less than an hour
+                const mins = Math.floor(diffSeconds / 60);
+                const secs = diffSeconds % 60;
+                countdownEl.textContent = `${mins}m ${secs}s`;
+                countdownEl.classList.add('loop-countdown');
+                countdownEl.classList.remove('loop-overdue');
+            } else {
+                // More than an hour
+                const hours = Math.floor(diffSeconds / 3600);
+                const mins = Math.floor((diffSeconds % 3600) / 60);
+                countdownEl.textContent = `${hours}h ${mins}m`;
+                countdownEl.classList.add('loop-countdown');
+                countdownEl.classList.remove('loop-overdue');
+            }
+        }
+
         async function loadDashboard() {
             try {
                 // Load health status
                 const healthResponse = await fetch('/health/detailed');
                 const healthData = await healthResponse.json();
                 updateHealthPanel(healthData);
+
+                // Load loop status
+                await loadLoopStatus();
 
                 // Load account summary
                 const accountResponse = await fetch('/account/summary');
