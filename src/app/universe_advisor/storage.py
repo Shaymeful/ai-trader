@@ -1,55 +1,19 @@
-"""Proposals storage with atomic writes."""
+"""Proposal storage (JSON + JSONL)."""
 
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from .models import Proposal, ProposalSet, ProposalType
-
-
-def _serialize_proposal(p: Proposal) -> dict:
-    """Serialize a proposal to a dict for JSON storage.
-
-    Args:
-        p: Proposal to serialize
-
-    Returns:
-        Dict representation of proposal
-    """
-    proposal_dict = {
-        "proposal_id": p.proposal_id,
-        "sector_name": p.sector_name,
-        "confidence": p.confidence,
-        "rationale": p.rationale,
-        "supporting_headlines": p.supporting_headlines,
-        "provider": p.provider,
-        "created_at": p.created_at,
-        "expires_at": p.expires_at,
-        "status": p.status,
-        "proposal_type": p.proposal_type.value,
-    }
-
-    # Add type-specific fields
-    if p.proposal_type == ProposalType.SECTOR_TOGGLE:
-        proposal_dict["recommended_enabled"] = p.recommended_enabled
-    elif p.proposal_type == ProposalType.CONSTITUENT_CHANGE and p.constituent_change:
-        proposal_dict["constituent_change"] = {
-            "action": p.constituent_change.action.value,
-            "tickers": p.constituent_change.tickers,
-            "reason": p.constituent_change.reason,
-            "constraints_checked": p.constituent_change.constraints_checked,
-        }
-
-    return proposal_dict
+from .models import Proposal, ProposalSet
 
 
 def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
     """Save proposals to JSON file (atomic write).
-
+    
     Args:
-        proposal_set: Proposal set to save
-        file_path: Destination file path
+        proposal_set: Proposals to save
+        file_path: Path to JSON file
     """
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -67,7 +31,21 @@ def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
             "confidence": proposal_set.regime.confidence,
             "timestamp": proposal_set.regime.timestamp,
         },
-        "proposals": [_serialize_proposal(p) for p in proposal_set.proposals],
+        "proposals": [
+            {
+                "proposal_id": p.proposal_id,
+                "sector_name": p.sector_name,
+                "recommended_enabled": p.recommended_enabled,
+                "confidence": p.confidence,
+                "rationale": p.rationale,
+                "supporting_headlines": p.supporting_headlines,
+                "provider": p.provider,
+                "created_at": p.created_at,
+                "expires_at": p.expires_at,
+                "status": p.status,
+            }
+            for p in proposal_set.proposals
+        ],
         "disagreements": [
             {
                 "disagreement_id": d.disagreement_id,
@@ -100,12 +78,12 @@ def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
 
 def load_proposals(file_path: Path) -> dict | None:
     """Load proposals from JSON file.
-
+    
     Args:
-        file_path: Source file path
-
+        file_path: Path to JSON file
+        
     Returns:
-        Raw proposal dict or None if file doesn't exist
+        Proposals dict or None if file doesn't exist
     """
     if not file_path.exists():
         return None
@@ -114,6 +92,7 @@ def load_proposals(file_path: Path) -> dict | None:
         with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
         return data
+
     except Exception as e:
         print(f"Failed to load proposals: {e}")
         return None
@@ -125,11 +104,11 @@ def append_to_history(
     history_file: Path,
 ) -> None:
     """Append proposal action to history file (append-only).
-
+    
     Args:
-        proposal: Proposal to record
-        action: Action taken ("APPROVED" or "REJECTED")
-        history_file: History file path
+        proposal: Proposal being acted upon
+        action: Action taken (APPROVED or REJECTED)
+        history_file: Path to history JSONL file
     """
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -138,44 +117,11 @@ def append_to_history(
         "action": action,
         "proposal_id": proposal.proposal_id,
         "sector_name": proposal.sector_name,
+        "recommended_enabled": proposal.recommended_enabled,
         "confidence": proposal.confidence,
         "provider": proposal.provider,
         "status": action,
-        "proposal_type": proposal.proposal_type.value,
     }
-
-    # Add type-specific fields
-    if proposal.proposal_type == ProposalType.SECTOR_TOGGLE:
-        entry["recommended_enabled"] = proposal.recommended_enabled
-    elif proposal.proposal_type == ProposalType.CONSTITUENT_CHANGE and proposal.constituent_change:
-        entry["constituent_change"] = {
-            "action": proposal.constituent_change.action.value,
-            "tickers": proposal.constituent_change.tickers,
-        }
 
     with open(history_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
-
-
-def load_history(history_file: Path) -> list[dict]:
-    """Load proposal history.
-
-    Args:
-        history_file: History file path
-
-    Returns:
-        List of history entries
-    """
-    if not history_file.exists():
-        return []
-
-    history = []
-    with open(history_file, encoding="utf-8") as f:
-        for line in f:
-            try:
-                entry = json.loads(line)
-                history.append(entry)
-            except json.JSONDecodeError:
-                continue
-
-    return history

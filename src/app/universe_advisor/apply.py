@@ -1,42 +1,16 @@
-"""Apply approved proposals by staging UniverseRegistry changes."""
+"""Apply approved proposals to UniverseRegistry."""
 
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
-from src.app.universe_registry import UniverseRegistry
-
-from .models import Proposal, ProposalType
-from .storage import append_to_history, load_proposals
-
-
-def _save_proposals_dict(data: dict, file_path: Path) -> None:
-    """Save proposals dict to JSON file with atomic write.
-
-    Args:
-        data: Proposals dict to save
-        file_path: Destination file path
-    """
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Atomic write
-    with NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=file_path.parent,
-        delete=False,
-        suffix=".tmp",
-    ) as tmp_file:
-        json.dump(data, tmp_file, indent=2)
-        tmp_path = Path(tmp_file.name)
-
-    tmp_path.replace(file_path)
+from .models import Proposal
+from .storage import append_to_history, load_proposals, save_proposals
 
 
 def apply_proposal(
     proposal: Proposal,
-    universe_registry: UniverseRegistry,
+    universe_registry,  # UniverseRegistry instance
     proposals_file: Path,
     history_file: Path,
 ) -> int:
@@ -52,22 +26,11 @@ def apply_proposal(
     Returns:
         New pending_version from registry
     """
-    # Stage change in UniverseRegistry based on proposal type
-    if proposal.proposal_type == ProposalType.SECTOR_TOGGLE:
-        new_version = universe_registry.stage_change(
-            proposal.sector_name,
-            proposal.recommended_enabled,
-        )
-    elif proposal.proposal_type == ProposalType.CONSTITUENT_CHANGE:
-        if not proposal.constituent_change:
-            raise ValueError("CONSTITUENT_CHANGE proposal missing constituent_change data")
-        new_version = universe_registry.stage_constituent_change(
-            proposal.sector_name,
-            proposal.constituent_change.action.value,
-            proposal.constituent_change.tickers,
-        )
-    else:
-        raise ValueError(f"Unknown proposal type: {proposal.proposal_type}")
+    # Stage change in UniverseRegistry
+    new_version = universe_registry.stage_change(
+        proposal.sector_name,
+        proposal.recommended_enabled,
+    )
 
     # Update proposal status to APPROVED
     proposal.status = "APPROVED"
@@ -79,15 +42,37 @@ def apply_proposal(
         for p in proposal_set["proposals"]:
             if p["proposal_id"] == proposal.proposal_id:
                 p["status"] = "APPROVED"
-                break  # Stop after finding the matching proposal
-
-        # Save directly as dict (atomic write)
-        _save_proposals_dict(proposal_set, proposals_file)
+        save_proposals_dict(proposal_set, proposals_file)
 
     # Append to history
     append_to_history(proposal, "APPROVED", history_file)
 
     return new_version
+
+
+def save_proposals_dict(data: dict, file_path: Path) -> None:
+    """Save proposals dict to file (helper for apply_proposal).
+    
+    Args:
+        data: Proposals dict
+        file_path: Path to JSON file
+    """
+    from tempfile import NamedTemporaryFile
+
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Atomic write
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=file_path.parent,
+        delete=False,
+        suffix=".tmp",
+    ) as tmp_file:
+        json.dump(data, tmp_file, indent=2)
+        tmp_path = Path(tmp_file.name)
+
+    tmp_path.replace(file_path)
 
 
 def mark_applied(
@@ -110,11 +95,9 @@ def mark_applied(
         return
 
     # Find APPROVED proposals for this sector
-    updated = False
     for p in proposal_set.get("proposals", []):
         if p["sector_name"] == sector_name and p["status"] == "APPROVED":
             p["status"] = "APPLIED"
-            updated = True
 
             # Append to history
             history_entry = {
@@ -122,21 +105,14 @@ def mark_applied(
                 "action": "APPLIED",
                 "proposal_id": p["proposal_id"],
                 "sector_name": p["sector_name"],
+                "recommended_enabled": p["recommended_enabled"],
                 "confidence": p["confidence"],
                 "provider": p["provider"],
                 "status": "APPLIED",
-                "proposal_type": p.get("proposal_type", "sector_toggle"),
             }
-
-            # Add type-specific fields
-            if p.get("proposal_type") == "sector_toggle" or "recommended_enabled" in p:
-                history_entry["recommended_enabled"] = p.get("recommended_enabled")
-            if p.get("proposal_type") == "constituent_change" and "constituent_change" in p:
-                history_entry["constituent_change"] = p["constituent_change"]
 
             with open(history_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(history_entry) + "\n")
 
-    # Save updated proposals if any changes
-    if updated:
-        _save_proposals_dict(proposal_set, proposals_file)
+    # Save updated proposals
+    save_proposals_dict(proposal_set, proposals_file)

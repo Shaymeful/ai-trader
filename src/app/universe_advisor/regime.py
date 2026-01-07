@@ -18,7 +18,7 @@ def detect_market_regime(provider: MarketDataProvider) -> RegimeData:
     Returns:
         RegimeData with classification
     """
-    # Get SPY data
+    # Get SPY data (this will use whatever MA period the provider is configured with)
     market_data = provider.get_market_data(["SPY"])
     spy_data = market_data.get("SPY")
 
@@ -37,13 +37,13 @@ def detect_market_regime(provider: MarketDataProvider) -> RegimeData:
     spy_price = spy_data["price"]
     spy_ma50 = spy_data.get("ma", spy_price)  # Fallback if MA not available
 
-    # Detect trend
+    # Detect trend (bull if price >= MA, bear otherwise)
     trend = "bull" if spy_price >= spy_ma50 else "bear"
 
     # Calculate volatility (20-day rolling std-dev of returns)
     closes = spy_data.get("closes", [])
     if len(closes) >= 20:
-        returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, 20)]
+        returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, min(21, len(closes)))]
         std_dev = statistics.stdev(returns)
         # Annualize: multiply by sqrt(252 trading days)
         annualized_vol = std_dev * (252**0.5)

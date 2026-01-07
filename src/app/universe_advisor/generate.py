@@ -1,4 +1,4 @@
-"""Proposal generation from LLMs using RSS events and market regime."""
+"""Proposal generation using LLM with RSS events and market regime."""
 
 import json
 import uuid
@@ -41,17 +41,17 @@ def load_recent_rss_events(
                 event = json.loads(line)
 
                 # Only include candidate_created or headline_processed
-                event_type = event.get("event_type")
-                if event_type not in ["candidate_created", "headline_processed"]:
+                if event.get("event_type") not in ["candidate_created", "headline_processed"]:
                     continue
 
                 # Parse timestamp
                 timestamp_str = event.get("timestamp", "")
-                timestamp = datetime.fromisoformat(timestamp_str)
+                if timestamp_str:
+                    timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
 
-                # Filter by recency
-                if timestamp < cutoff:
-                    continue
+                    # Filter by recency
+                    if timestamp < cutoff:
+                        continue
 
                 # Dedupe by headline text
                 headline = event.get("headline", "")
@@ -85,16 +85,7 @@ def build_prompt(
     events: list[dict],
     sectors: dict[str, dict],  # sector_name -> {description, symbols}
 ) -> str:
-    """Build prompt for LLM.
-
-    Args:
-        regime: Market regime data
-        events: Recent RSS events
-        sectors: Sector definitions
-
-    Returns:
-        Formatted prompt string
-    """
+    """Build prompt for LLM."""
     # Format regime
     regime_desc = f"""Current Market Regime: {regime.regime.value}
 - SPY Price: ${regime.spy_price:.2f}
@@ -155,15 +146,140 @@ Respond with JSON in this exact format:
     return prompt
 
 
+def _create_proposal(
+    prop_data: dict,
+    events: list[dict],
+    provider: str,
+    now: datetime,
+    expires_at: datetime,
+) -> Proposal:
+    """Helper to create Proposal from LLM response."""
+    # Extract supporting headlines
+    headline_numbers = prop_data.get("supporting_headline_numbers", [])
+    supporting_headlines = []
+    for num in headline_numbers[:5]:  # Cap at 5
+        if 1 <= num <= len(events):
+            headline = events[num - 1].get("headline", "")
+            if headline:
+                supporting_headlines.append(headline)
+
+    return Proposal(
+        proposal_id=str(uuid.uuid4()),
+        sector_name=prop_data["sector_name"],
+        recommended_enabled=prop_data["recommended_enabled"],
+        confidence=prop_data["confidence"],
+        rationale=prop_data["rationale"],
+        supporting_headlines=supporting_headlines,
+        provider=provider,
+        created_at=now.isoformat(),
+        expires_at=expires_at.isoformat(),
+        status="NEW",
+    )
+
+
+def _combine_headlines(
+    openai_prop: dict,
+    anthropic_prop: dict,
+    events: list[dict],
+) -> list[str]:
+    """Combine supporting headlines from both providers."""
+    numbers = set(openai_prop.get("supporting_headline_numbers", []))
+    numbers.update(anthropic_prop.get("supporting_headline_numbers", []))
+
+    headlines = []
+    for num in sorted(numbers)[:5]:  # Cap at 5
+        if 1 <= num <= len(events):
+            headline = events[num - 1].get("headline", "")
+            if headline and headline not in headlines:
+                headlines.append(headline)
+
+    return headlines
+
+
+def _merge_ensemble_responses(
+    openai_response: dict,
+    anthropic_response: dict,
+    events: list[dict],
+    now: datetime,
+    expires_at: datetime,
+) -> tuple[list[Proposal], list[Disagreement]]:
+    """
+    Merge responses from ensemble mode.
+
+    Logic:
+    - If both agree on direction → create proposal with "ensemble" provider
+    - If they contradict → record as disagreement, drop proposal
+    - If only one provider mentions a sector → use that recommendation
+    """
+    openai_props = {p["sector_name"]: p for p in openai_response.get("proposals", [])}
+    anthropic_props = {p["sector_name"]: p for p in anthropic_response.get("proposals", [])}
+
+    all_sectors = set(openai_props.keys()) | set(anthropic_props.keys())
+
+    proposals = []
+    disagreements = []
+
+    for sector in all_sectors:
+        openai_prop = openai_props.get(sector)
+        anthropic_prop = anthropic_props.get(sector)
+
+        if openai_prop and anthropic_prop:
+            # Both mentioned this sector
+            if openai_prop["recommended_enabled"] == anthropic_prop["recommended_enabled"]:
+                # Agreement → create ensemble proposal
+                avg_confidence = (openai_prop["confidence"] + anthropic_prop["confidence"]) / 2
+                combined_rationale = (
+                    f"OpenAI: {openai_prop['rationale']} | "
+                    f"Claude: {anthropic_prop['rationale']}"
+                )
+
+                proposals.append(
+                    Proposal(
+                        proposal_id=str(uuid.uuid4()),
+                        sector_name=sector,
+                        recommended_enabled=openai_prop["recommended_enabled"],
+                        confidence=avg_confidence,
+                        rationale=combined_rationale,
+                        supporting_headlines=_combine_headlines(openai_prop, anthropic_prop, events),
+                        provider="ensemble",
+                        created_at=now.isoformat(),
+                        expires_at=expires_at.isoformat(),
+                        status="NEW",
+                    )
+                )
+            else:
+                # Contradiction → record disagreement
+                disagreements.append(
+                    Disagreement(
+                        disagreement_id=str(uuid.uuid4()),
+                        sector_name=sector,
+                        provider_a="openai",
+                        recommendation_a=openai_prop["recommended_enabled"],
+                        confidence_a=openai_prop["confidence"],
+                        provider_b="anthropic",
+                        recommendation_b=anthropic_prop["recommended_enabled"],
+                        confidence_b=anthropic_prop["confidence"],
+                        created_at=now.isoformat(),
+                    )
+                )
+
+        elif openai_prop:
+            # Only OpenAI mentioned
+            proposals.append(_create_proposal(openai_prop, events, "openai", now, expires_at))
+
+        elif anthropic_prop:
+            # Only Anthropic mentioned
+            proposals.append(_create_proposal(anthropic_prop, events, "anthropic", now, expires_at))
+
+    return proposals, disagreements
+
+
 def generate_proposals(
     config: dict,  # LLM config section
     regime: RegimeData,
     events: list[dict],
     sectors: dict[str, dict],
     ttl_minutes: int = 120,
-    full_config: dict | None = None,  # Full config for constituent proposals
-    history_file: Path | None = None,  # History file for cooldown checks
-    candidates_file: Path | None = None,  # Candidates file path
 ) -> ProposalSet:
     """
     Generate proposals using configured LLM provider(s).
@@ -174,9 +290,6 @@ def generate_proposals(
         events: Recent RSS events
         sectors: Sector definitions
         ttl_minutes: Proposal time-to-live
-        full_config: Full config dict (for constituent proposals)
-        history_file: History file path (for constituent proposals)
-        candidates_file: Candidates file path (for constituent proposals)
 
     Returns:
         ProposalSet with proposals and disagreements
@@ -249,52 +362,6 @@ def generate_proposals(
             openai_response, anthropic_response, events, now, expires_at
         )
 
-    # Generate constituent change proposals if enabled
-    if full_config and history_file:
-        from pathlib import Path as PathType
-
-        from .generate_constituents import (
-            generate_constituent_proposals,
-            load_recent_candidates,
-        )
-
-        # Load candidates from events file or use provided candidates_file
-        if (
-            candidates_file
-            and candidates_file.exists()
-            or isinstance(candidates_file, PathType)
-            and candidates_file.exists()
-        ):
-            candidates = load_recent_candidates(
-                candidates_file,
-                lookback_hours=full_config.get("llm_rss_lookback_hours", 24),
-                max_candidates=50,
-            )
-        else:
-            # Try default location
-            default_candidates = PathType("out/selector/events.jsonl")
-            if default_candidates.exists():
-                candidates = load_recent_candidates(
-                    default_candidates,
-                    lookback_hours=full_config.get("llm_rss_lookback_hours", 24),
-                    max_candidates=50,
-                )
-            else:
-                candidates = []
-
-        if candidates:
-            constituent_proposals = generate_constituent_proposals(
-                full_config,
-                regime,
-                candidates,
-                sectors,
-                history_file,
-                ttl_minutes,
-            )
-
-            # Add to proposals list
-            proposals.extend(constituent_proposals)
-
     return ProposalSet(
         generation_id=generation_id,
         proposals=proposals,
@@ -303,162 +370,3 @@ def generate_proposals(
         headline_count=len(events),
         generated_at=now.isoformat(),
     )
-
-
-def _create_proposal(
-    prop_data: dict,
-    events: list[dict],
-    provider: str,
-    now: datetime,
-    expires_at: datetime,
-) -> Proposal:
-    """Helper to create Proposal from LLM response.
-
-    Args:
-        prop_data: Proposal data from LLM
-        events: RSS events list
-        provider: Provider name
-        now: Current timestamp
-        expires_at: Expiration timestamp
-
-    Returns:
-        Proposal instance
-    """
-    # Extract supporting headlines
-    headline_numbers = prop_data.get("supporting_headline_numbers", [])
-    supporting_headlines = []
-    for num in headline_numbers[:5]:  # Cap at 5
-        if 1 <= num <= len(events):
-            headline = events[num - 1].get("headline", "")
-            if headline:
-                supporting_headlines.append(headline)
-
-    return Proposal(
-        proposal_id=str(uuid.uuid4()),
-        sector_name=prop_data["sector_name"],
-        recommended_enabled=prop_data["recommended_enabled"],
-        confidence=prop_data["confidence"],
-        rationale=prop_data["rationale"],
-        supporting_headlines=supporting_headlines,
-        provider=provider,
-        created_at=now.isoformat(),
-        expires_at=expires_at.isoformat(),
-        status="NEW",
-    )
-
-
-def _merge_ensemble_responses(
-    openai_response: dict,
-    anthropic_response: dict,
-    events: list[dict],
-    now: datetime,
-    expires_at: datetime,
-) -> tuple[list[Proposal], list[Disagreement]]:
-    """
-    Merge responses from ensemble mode.
-
-    Logic:
-    - If both agree on direction → create proposal with "ensemble" provider
-    - If they contradict → record as disagreement, drop proposal
-    - If only one provider mentions a sector → use that recommendation
-
-    Args:
-        openai_response: OpenAI response dict
-        anthropic_response: Anthropic response dict
-        events: RSS events list
-        now: Current timestamp
-        expires_at: Expiration timestamp
-
-    Returns:
-        Tuple of (proposals, disagreements)
-    """
-    openai_props = {p["sector_name"]: p for p in openai_response.get("proposals", [])}
-    anthropic_props = {p["sector_name"]: p for p in anthropic_response.get("proposals", [])}
-
-    all_sectors = set(openai_props.keys()) | set(anthropic_props.keys())
-
-    proposals = []
-    disagreements = []
-
-    for sector in all_sectors:
-        openai_prop = openai_props.get(sector)
-        anthropic_prop = anthropic_props.get(sector)
-
-        if openai_prop and anthropic_prop:
-            # Both mentioned this sector
-            if openai_prop["recommended_enabled"] == anthropic_prop["recommended_enabled"]:
-                # Agreement → create ensemble proposal
-                avg_confidence = (openai_prop["confidence"] + anthropic_prop["confidence"]) / 2
-                rationale_combined = (
-                    f"OpenAI: {openai_prop['rationale']} | Claude: {anthropic_prop['rationale']}"
-                )
-
-                proposals.append(
-                    Proposal(
-                        proposal_id=str(uuid.uuid4()),
-                        sector_name=sector,
-                        recommended_enabled=openai_prop["recommended_enabled"],
-                        confidence=avg_confidence,
-                        rationale=rationale_combined,
-                        supporting_headlines=_combine_headlines(
-                            openai_prop, anthropic_prop, events
-                        ),
-                        provider="ensemble",
-                        created_at=now.isoformat(),
-                        expires_at=expires_at.isoformat(),
-                        status="NEW",
-                    )
-                )
-            else:
-                # Contradiction → record disagreement
-                disagreements.append(
-                    Disagreement(
-                        disagreement_id=str(uuid.uuid4()),
-                        sector_name=sector,
-                        provider_a="openai",
-                        recommendation_a=openai_prop["recommended_enabled"],
-                        confidence_a=openai_prop["confidence"],
-                        provider_b="anthropic",
-                        recommendation_b=anthropic_prop["recommended_enabled"],
-                        confidence_b=anthropic_prop["confidence"],
-                        created_at=now.isoformat(),
-                    )
-                )
-
-        elif openai_prop:
-            # Only OpenAI mentioned
-            proposals.append(_create_proposal(openai_prop, events, "openai", now, expires_at))
-
-        elif anthropic_prop:
-            # Only Anthropic mentioned
-            proposals.append(_create_proposal(anthropic_prop, events, "anthropic", now, expires_at))
-
-    return proposals, disagreements
-
-
-def _combine_headlines(
-    openai_prop: dict,
-    anthropic_prop: dict,
-    events: list[dict],
-) -> list[str]:
-    """Combine supporting headlines from both providers.
-
-    Args:
-        openai_prop: OpenAI proposal data
-        anthropic_prop: Anthropic proposal data
-        events: RSS events list
-
-    Returns:
-        Combined list of headlines
-    """
-    numbers = set(openai_prop.get("supporting_headline_numbers", []))
-    numbers.update(anthropic_prop.get("supporting_headline_numbers", []))
-
-    headlines = []
-    for num in sorted(numbers)[:5]:  # Cap at 5
-        if 1 <= num <= len(events):
-            headline = events[num - 1].get("headline", "")
-            if headline and headline not in headlines:
-                headlines.append(headline)
-
-    return headlines

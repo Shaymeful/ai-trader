@@ -4,7 +4,32 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .models import ProposalSet
-from .storage import load_history
+
+
+def load_history(history_file: Path) -> list[dict]:
+    """Load proposal history from JSONL file.
+    
+    Args:
+        history_file: Path to history JSONL file
+        
+    Returns:
+        List of history entries
+    """
+    if not history_file.exists():
+        return []
+
+    import json
+
+    history = []
+    with open(history_file, encoding="utf-8") as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+                history.append(entry)
+            except json.JSONDecodeError:
+                continue
+
+    return history
 
 
 def apply_guardrails(
@@ -40,6 +65,7 @@ def apply_guardrails(
 
     # Count recent toggles per sector
     cutoff_day = now - timedelta(days=1)
+    cutoff_cooldown = now - timedelta(days=cooldown_days)
 
     toggles_today = {}
     last_toggle_by_sector = {}
@@ -50,7 +76,7 @@ def apply_guardrails(
 
         timestamp_str = entry.get("timestamp", "")
         try:
-            timestamp = datetime.fromisoformat(timestamp_str)
+            timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
         except ValueError:
             continue
 
@@ -64,7 +90,7 @@ def apply_guardrails(
 
         # Track last toggle
         if sector not in last_toggle_by_sector or timestamp > datetime.fromisoformat(
-            last_toggle_by_sector[sector]
+            last_toggle_by_sector[sector].replace("Z", "+00:00")
         ):
             last_toggle_by_sector[sector] = timestamp.isoformat()
 
@@ -75,14 +101,13 @@ def apply_guardrails(
         # Check confidence
         if proposal.confidence < min_confidence:
             print(
-                f"FILTERED: {proposal.sector_name} - "
-                f"confidence {proposal.confidence} < {min_confidence}"
+                f"FILTERED: {proposal.sector_name} - confidence {proposal.confidence} < {min_confidence}"
             )
             continue
 
         # Check expiry
         try:
-            expires = datetime.fromisoformat(proposal.expires_at)
+            expires = datetime.fromisoformat(proposal.expires_at.replace("Z", "+00:00"))
             if now >= expires:
                 print(f"FILTERED: {proposal.sector_name} - expired")
                 continue
@@ -98,7 +123,7 @@ def apply_guardrails(
         last_toggle_str = last_toggle_by_sector.get(proposal.sector_name)
         if last_toggle_str:
             try:
-                last_toggle = datetime.fromisoformat(last_toggle_str)
+                last_toggle = datetime.fromisoformat(last_toggle_str.replace("Z", "+00:00"))
                 if now - last_toggle < timedelta(days=cooldown_days):
                     print(f"FILTERED: {proposal.sector_name} - cooldown active")
                     continue
