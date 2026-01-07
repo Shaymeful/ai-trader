@@ -14,7 +14,7 @@ from src.app.universe_advisor.generate import (
     generate_proposals,
     load_recent_rss_events,
 )
-from src.app.universe_advisor.guardrails import apply_guardrails
+from src.app.universe_advisor.guardrails import apply_guardrails, load_history
 from src.app.universe_advisor.models import (
     MarketRegime,
     Proposal,
@@ -23,7 +23,6 @@ from src.app.universe_advisor.models import (
 )
 from src.app.universe_advisor.storage import (
     append_to_history,
-    load_history,
     load_proposals,
     save_proposals,
 )
@@ -460,3 +459,185 @@ def test_combine_headlines(sample_events):
 
     assert len(headlines) == 2  # Deduplicated
     assert headlines[0] == "Tech stocks rally on earnings"
+
+
+def test_apply_guardrails_ttl_expired(temp_dir, sample_regime):
+    """Test guardrails filter expired proposals."""
+    now = datetime.now(UTC)
+
+    proposals = [
+        Proposal(
+            proposal_id="1",
+            sector_name="test",
+            recommended_enabled=True,
+            confidence=0.85,
+            rationale="Test",
+            supporting_headlines=[],
+            provider="test",
+            created_at=(now - timedelta(hours=3)).isoformat(),
+            expires_at=(now - timedelta(hours=1)).isoformat(),  # Expired
+            status="NEW",
+        )
+    ]
+
+    proposal_set = ProposalSet(
+        generation_id="test",
+        proposals=proposals,
+        disagreements=[],
+        regime=sample_regime,
+        headline_count=10,
+        generated_at=now.isoformat(),
+    )
+
+    guardrails_config = {
+        "min_confidence": 0.70,
+        "max_sector_toggles_per_day": 1,
+        "cooldown_days": 3,
+    }
+
+    history_file = temp_dir / "history.jsonl"
+    filtered_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+
+    assert len(filtered_set.proposals) == 0  # Filtered due to expiry
+
+
+def test_apply_guardrails_max_toggles_per_day(temp_dir, sample_regime):
+    """Test guardrails enforce max toggles per day."""
+    now = datetime.now(UTC)
+
+    # Create history with 1 toggle today
+    history_file = temp_dir / "history.jsonl"
+    today_entry = {
+        "timestamp": (now - timedelta(hours=1)).isoformat(),
+        "status": "APPROVED",
+        "sector_name": "test_sector",
+    }
+    with open(history_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps(today_entry) + "\n")
+
+    proposals = [
+        Proposal(
+            proposal_id="1",
+            sector_name="test_sector",
+            recommended_enabled=False,
+            confidence=0.85,
+            rationale="Test",
+            supporting_headlines=[],
+            provider="test",
+            created_at=now.isoformat(),
+            expires_at=(now + timedelta(hours=2)).isoformat(),
+            status="NEW",
+        )
+    ]
+
+    proposal_set = ProposalSet(
+        generation_id="test",
+        proposals=proposals,
+        disagreements=[],
+        regime=sample_regime,
+        headline_count=10,
+        generated_at=now.isoformat(),
+    )
+
+    guardrails_config = {
+        "min_confidence": 0.70,
+        "max_sector_toggles_per_day": 1,  # Already reached limit
+        "cooldown_days": 3,
+    }
+
+    filtered_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+
+    assert len(filtered_set.proposals) == 0  # Filtered due to max toggles
+
+
+def test_generate_proposals_primary_fallback(sample_regime, sample_events, sample_sectors):
+    """Test proposal generation with primary_fallback mode."""
+    mock_primary = MockLLMProvider("openai")
+    mock_fallback = MockLLMProvider("anthropic")
+
+    # Mock factory to return both providers
+    def mock_get_providers(mode, primary, **kwargs):
+        return (mock_primary, mock_fallback)
+
+    import src.app.universe_advisor.generate as gen_module
+
+    original_get_providers = gen_module.get_providers_for_mode
+    gen_module.get_providers_for_mode = mock_get_providers
+
+    try:
+        config = {
+            "mode": "primary_fallback",
+            "primary": "openai",
+            "openai_model": "gpt-4",
+            "anthropic_model": "claude-3",
+            "timeout": 30,
+        }
+
+        proposal_set = generate_proposals(config, sample_regime, sample_events, sample_sectors)
+
+        assert len(proposal_set.proposals) == 1
+        assert proposal_set.proposals[0].provider == "openai"
+        assert mock_primary.call_count == 1
+        assert mock_fallback.call_count == 0  # Not called (primary succeeded)
+    finally:
+        gen_module.get_providers_for_mode = original_get_providers
+
+
+def test_generate_proposals_ensemble(sample_regime, sample_events, sample_sectors):
+    """Test proposal generation with ensemble mode."""
+    mock_openai = MockLLMProvider(
+        "openai",
+        {
+            "proposals": [
+                {
+                    "sector_name": "mega_cap_tech",
+                    "recommended_enabled": True,
+                    "confidence": 0.85,
+                    "rationale": "OpenAI rationale",
+                    "supporting_headline_numbers": [1],
+                }
+            ]
+        },
+    )
+
+    mock_anthropic = MockLLMProvider(
+        "anthropic",
+        {
+            "proposals": [
+                {
+                    "sector_name": "mega_cap_tech",
+                    "recommended_enabled": True,  # Agreement
+                    "confidence": 0.90,
+                    "rationale": "Anthropic rationale",
+                    "supporting_headline_numbers": [2],
+                }
+            ]
+        },
+    )
+
+    # Mock factory to return both providers
+    def mock_get_providers(mode, primary, **kwargs):
+        return (mock_openai, mock_anthropic)
+
+    import src.app.universe_advisor.generate as gen_module
+
+    original_get_providers = gen_module.get_providers_for_mode
+    gen_module.get_providers_for_mode = mock_get_providers
+
+    try:
+        config = {
+            "mode": "ensemble",
+            "primary": "openai",
+            "openai_model": "gpt-4",
+            "anthropic_model": "claude-3",
+            "timeout": 30,
+        }
+
+        proposal_set = generate_proposals(config, sample_regime, sample_events, sample_sectors)
+
+        assert len(proposal_set.proposals) == 1
+        assert proposal_set.proposals[0].provider == "ensemble"
+        assert mock_openai.call_count == 1
+        assert mock_anthropic.call_count == 1
+    finally:
+        gen_module.get_providers_for_mode = original_get_providers
