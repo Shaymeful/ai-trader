@@ -14,17 +14,21 @@ rss_feeds:
   # Real RSS feeds for automation/industrials sector
   - https://roboticsandautomationnews.com/feed/  # Robotics & Automation News
   - https://www.investing.com/rss/news_25.rss  # Stock Market News (includes industrials)
+  - https://www.roboticstomorrow.com/rss.xml  # Robotics & Automation
+  - https://seekingalpha.com/feed.xml  # Seeking Alpha All Articles (ticker-heavy)
 
   # Real RSS feeds for energy sector
   - https://www.investing.com/rss/commodities_Energy.rss  # Energy Analysis & News
   - https://www.investing.com/rss/news_11.rss  # Commodities & Futures News
   - https://energywatch.com/service/rss  # Energy, Oil & Gas, Renewables News
+  - https://renewablesnow.com/feed/  # Renewable Energy News
 
-  # Additional options (uncomment as needed):
-  # - https://renewablesnow.com/feed/  # Renewable Energy News
-  # - https://www.roboticstomorrow.com/rss.xml  # Robotics & Automation
-  # - https://www.investing.com/rss/stock.rss  # Stock Markets Analysis
-  # - https://seekingalpha.com/feed.xml  # Seeking Alpha All Articles
+  # Stock-specific feeds with ticker symbols
+  - https://www.investing.com/rss/stock.rss  # Stock Markets Analysis (ticker mentions)
+
+  # Additional options for future:
+  # - https://finance.yahoo.com/news/rssindex  # Yahoo Finance (may require specific ticker feeds)
+  # - https://www.marketwatch.com/rss/  # MarketWatch (multiple feeds available)
 
 # Keyword rules for sector classification
 keyword_rules:
