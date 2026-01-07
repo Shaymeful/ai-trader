@@ -3367,6 +3367,7 @@ class GlobalConfig:
    - Runtime configuration changes
    - Persisted modifications from dashboard/API
    - Merged on top of base configuration
+   - **Supports both strategy configs AND global_config overrides** (added in PR #28)
 
 **Loading Process:**
 1. Load base config from YAML
@@ -3379,7 +3380,8 @@ class GlobalConfig:
 - `load()` - Load and merge configurations
 - `get_strategy(strategy_id)` - Get specific strategy config
 - `get_enabled_strategies()` - Filter for enabled strategies only
-- `stage_change(strategy_id, changes)` - Stage configuration change
+- `stage_change(strategy_id, changes)` - Stage strategy configuration change
+- `stage_global_config_change(changes)` - Update global config at runtime (effective immediately)
 - `check_and_activate_pending()` - Activate pending versions (called at loop start)
 - `_save_overrides()` - Persist changes to JSON (atomic write)
 
@@ -3388,6 +3390,50 @@ class GlobalConfig:
 - `pending_version`: Configuration staged for next loop tick
 - Each `stage_change()` increments `pending_version`
 - `check_and_activate_pending()` promotes `pending_version` to `active_version`
+
+**Global Config Runtime Updates:**
+
+The StrategyRegistry supports runtime updates to global configuration (risk limits) via `stage_global_config_change()`:
+
+**Supported Fields:**
+- `max_daily_loss` - Daily loss limit in USD
+- `max_total_positions` - Maximum concurrent positions
+- `max_order_notional` - Maximum order size in USD
+
+**Update Flow:**
+1. Operator edits account summary values in dashboard
+2. POST `/account/summary` API endpoint called
+3. Endpoint calls `registry.stage_global_config_change(changes)`
+4. Global config updated **immediately** in `registry.state.global_config`
+5. Changes persisted to `out/strategies_overrides.json`
+6. Registry version incremented
+7. Running loop uses updated risk limits on next check
+
+**Overrides File Format:**
+```json
+{
+  "strategies": {
+    "strategy_id": {
+      "enabled": true,
+      "weight": 0.5,
+      ...
+    }
+  },
+  "global_config": {
+    "max_daily_loss": 1500.0,
+    "max_total_positions": 15,
+    "max_order_notional": 12000.0
+  },
+  "registry_version": 3,
+  "last_saved": "2026-01-07T..."
+}
+```
+
+**Immediate vs Next-Tick:**
+- **Strategy changes** (enable/disable, weight, params): Stage as pending, activate on next tick
+- **Global config changes** (risk limits): Apply immediately, effective for all risk checks
+
+This ensures risk limit changes take effect immediately while strategy changes maintain deterministic next-tick activation.
 
 **Example Base Configuration** (`config/strategies.yaml`):
 ```yaml
@@ -3565,7 +3611,7 @@ async def lifespan(app: FastAPI):
 | `POST /strategies/{id}/params` | Update parameters | `{params: dict}` | `{success, message, pending_version}` |
 | `POST /pause_trading` | Pause/resume order submission | `{paused: bool}` | `{success, message}` |
 | `POST /universe/sectors/{sector}/tickers` | Add/remove tickers manually | `{add: [str], remove: [str]}` | `{success, message, pending_version}` |
-| `POST /account/summary` | Update account settings | `{total_capital?, max_daily_loss?, max_total_positions?}` | `{success, message}` |
+| `POST /account/summary` | Update account settings (propagates to registry) | `{total_capital?, max_daily_loss?, max_total_positions?}` | `{success, message}` |
 
 **Read-Only Performance Endpoints:**
 
@@ -3843,6 +3889,28 @@ The `GET /account/summary` endpoint now checks `out/account_summary.json` first:
 - If file missing or read error: Fall back to config defaults
 - Priority: persisted settings > config defaults
 - Backwards compatible: No breaking changes
+
+**Updated POST Endpoint (System-Wide Propagation):**
+The `POST /account/summary` endpoint now propagates changes to the StrategyRegistry:
+- Saves to `out/account_summary.json` (for dashboard display)
+- **NEW:** Calls `registry.stage_global_config_change()` for max_daily_loss and max_total_positions
+- Changes take effect **immediately** in the running system
+- Updates `out/strategies_overrides.json` with global_config section
+- Registry version incremented
+- Message changed to "Updated X, Y, Z (effective immediately)"
+- **Result:** Risk limits now apply system-wide, not just in dashboard UI
+
+**Before This Change:**
+- Dashboard edits only updated `out/account_summary.json` (display-only)
+- Running system used `registry.state.global_config` from `config/strategies.yaml`
+- Changes did NOT affect actual risk checks
+- User expectation violated (edits appeared to work but didn't)
+
+**After This Change:**
+- Dashboard edits update both files
+- Changes propagate to `registry.state.global_config` immediately
+- RiskManager and trading loop use updated values
+- Changes persist across restarts (loaded from overrides)
 
 **Ledger Event:**
 ```json
@@ -5552,20 +5620,59 @@ llm:
 **Test Files:**
 - `tests/mocks/mock_llm_provider.py` - Mock LLM provider with deterministic responses
 - `tests/test_mock_llm_provider.py` - Tests for mock provider (3 tests)
-- `tests/test_universe_advisor.py` - Comprehensive unit tests (15+ tests)
+- `tests/test_universe_advisor.py` - Comprehensive unit tests (17 tests)
+- `tests/test_universe_advisor_regime.py` - Market regime detection tests (9 tests)
 - `tests/test_constituent_proposals.py` - Constituent change tests (5 tests)
 
 **Test Coverage:**
-- Provider modes (openai_only, ensemble, primary_fallback)
-- Ensemble merge rules (agreement, contradiction, single provider)
-- Guardrails (confidence filter, TTL expiry, max toggles, cooldown)
-- Market regime detection
-- RSS event loading (filtering, deduplication, prioritization)
-- Proposal creation and lifecycle (SECTOR_TOGGLE and CONSTITUENT_CHANGE)
-- Storage (save/load proposals, append history with both proposal types)
-- Constituent change constraint validation (blacklist, duplicates, cooldown, tradability)
-- UniverseRegistry staging for ticker add/remove operations
-- API endpoints (approve/reject with enum serialization)
+
+1. **Market Regime Detection** (9 tests in `test_universe_advisor_regime.py`):
+   - Bull markets with low/medium/high volatility
+   - Bear markets with low/medium/high volatility
+   - Insufficient data handling (< 20 data points)
+   - Missing SPY data (returns UNKNOWN regime)
+   - Confidence scaling with data points (more data = higher confidence)
+   - Timestamp validation (regime timestamp within 1 second of current time)
+   - Volatility bucketing thresholds (low < 15%, medium 15-25%, high > 25%)
+
+2. **Provider Modes** (3 tests):
+   - openai_only mode (single provider)
+   - primary_fallback mode (try primary, fallback to secondary on error)
+   - ensemble mode (call both, apply consensus rules)
+
+3. **Ensemble Merge Rules** (3 tests):
+   - Agreement: Both providers recommend same direction → ensemble proposal with averaged confidence
+   - Contradiction: Providers disagree on direction → drop proposal, record disagreement
+   - Single provider: Only one mentions sector → use that recommendation
+
+4. **Safety Guardrails** (5 tests):
+   - min_confidence filter (drops proposals below threshold)
+   - TTL expiry enforcement (marks expired proposals)
+   - Max toggles per day enforcement (prevents excessive toggling)
+   - Cooldown period enforcement (prevents flip-flopping)
+   - All guardrails work with history file tracking
+
+5. **RSS Event Loading** (3 tests):
+   - File not found handling (returns empty list)
+   - Lookback period filtering (24-hour window by default)
+   - Headline deduplication (same headline text filtered)
+
+6. **Proposal Creation and Lifecycle** (3 tests):
+   - Proposal creation from LLM response data
+   - Supporting headlines extraction from events
+   - Status transitions (NEW → APPROVED/REJECTED/APPLIED/EXPIRED)
+   - Both SECTOR_TOGGLE and CONSTITUENT_CHANGE proposal types
+
+7. **Storage** (3 tests):
+   - Save and load proposals (atomic write with temp file + rename)
+   - Append to history (append-only JSONL format)
+   - Headline combination from multiple providers
+   - Handles both proposal types in history
+
+8. **Constituent Change Specific**:
+   - Constraint validation (blacklist, duplicates, cooldown, tradability)
+   - UniverseRegistry staging for ticker add/remove operations
+   - API endpoints (approve/reject with enum serialization)
 
 **Mock Provider:**
 - No network calls required
@@ -5652,10 +5759,11 @@ out/
 tests/
 ├── mocks/
 │   ├── __init__.py
-│   └── mock_llm_provider.py         # Mock LLM provider for testing
-├── test_mock_llm_provider.py        # Mock provider tests
-├── test_universe_advisor.py         # Advisor unit tests (sector toggle)
-└── test_constituent_proposals.py    # Constituent change tests
+│   └── mock_llm_provider.py            # Mock LLM provider for testing
+├── test_mock_llm_provider.py           # Mock provider tests (3 tests)
+├── test_universe_advisor.py            # Advisor unit tests (17 tests)
+├── test_universe_advisor_regime.py     # Market regime detection tests (9 tests)
+└── test_constituent_proposals.py       # Constituent change tests (5 tests)
 ```
 
 ---
