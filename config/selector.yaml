@@ -188,7 +188,7 @@ stopwords:
   - CMO
 
 # LLM enrichment (optional)
-candidates_enrichment_enabled: false  # Set to true to enable OpenAI enrichment
+candidates_enrichment_enabled: true  # Set to true to enable OpenAI enrichment
 candidates_llm_provider: openai  # openai or anthropic
 candidates_llm_model: gpt-4o-mini  # Cost-effective model for enrichment
 candidates_min_confidence: 0.70  # Filter out candidates below this confidence

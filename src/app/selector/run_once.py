@@ -4,7 +4,12 @@ import argparse
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from src.app.selector.rss_selector import RSSSelector
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def main() -> int:
