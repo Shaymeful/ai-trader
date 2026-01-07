@@ -645,12 +645,6 @@ class TestRejectionReasonLogging:
 
     def test_rejection_duplicate(self, selector):
         """Test rejection event logged for duplicate candidates."""
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-
-        eastern = ZoneInfo("America/New_York")
-        now = datetime(2026, 1, 6, 10, 0, 0, tzinfo=eastern)
-
         headline = {
             "title": "Automation firm (XYZ) beats earnings expectations",
             "description": "",
@@ -865,3 +859,86 @@ class TestStatsAggregation:
         assert stats["candidates_created"] == 2
         assert stats["symbols_extracted"] == 2
         assert stats["rejected_no_symbol"] == 1
+
+
+class TestTickerValidation:
+    """Test ticker validation integration."""
+
+    def test_validation_rejects_ceo_stopword(self, selector):
+        """Test that CEO is rejected as a stopword."""
+        # Create fake RSS with CEO ticker
+        rss_with_ceo = """<?xml version="1.0"?>
+<rss version="2.0">
+    <channel>
+        <item>
+            <title>Interview with Kardome CEO (CEO): Teaching robots to hear</title>
+            <description>Automation company CEO discusses robotics</description>
+        </item>
+    </channel>
+</rss>"""
+
+        # Run selector with CEO ticker
+        candidates, events = selector.run(
+            rss_content_override={"https://example.com/automation": rss_with_ceo}
+        )
+
+        # CEO should be filtered out by validation
+        assert len(candidates) == 0
+
+    def test_validation_accepts_valid_ticker(self, selector):
+        """Test that valid tickers like ROK are accepted."""
+        # Create fake RSS with valid ROK ticker
+        rss_with_rok = """<?xml version="1.0"?>
+<rss version="2.0">
+    <channel>
+        <item>
+            <title>Rockwell Automation (ROK) beats earnings with record revenue</title>
+            <description>Industrial automation company shows strong quarter</description>
+        </item>
+    </channel>
+</rss>"""
+
+        # Run selector with ROK ticker
+        candidates, events = selector.run(
+            rss_content_override={"https://example.com/automation": rss_with_rok}
+        )
+
+        # ROK should pass validation
+        assert len(candidates) == 1
+        assert candidates[0].symbol == "ROK"
+
+    def test_snapshot_includes_validation_stats(self, selector, tmp_path):
+        """Test that snapshot includes validation statistics."""
+        # Create fake RSS with one valid and one invalid ticker
+        rss_mixed = """<?xml version="1.0"?>
+<rss version="2.0">
+    <channel>
+        <item>
+            <title>Rockwell (ROK) beats earnings</title>
+            <description>Automation company shows strength</description>
+        </item>
+        <item>
+            <title>CEO discusses automation trends</title>
+            <description>Industry leaders talk about robots</description>
+        </item>
+    </channel>
+</rss>"""
+
+        # Run selector
+        candidates, events = selector.run(
+            rss_content_override={"https://example.com/automation": rss_mixed}
+        )
+
+        # Write snapshot
+        selector.write_snapshot(candidates, output_dir=str(tmp_path))
+
+        # Read snapshot
+        snapshot_file = tmp_path / "snapshot.json"
+        with open(snapshot_file) as f:
+            snapshot = json.load(f)
+
+        # Check metadata includes validation stats
+        assert "metadata" in snapshot
+        assert "validation_stats" in snapshot["metadata"]
+        assert snapshot["metadata"]["validation_stats"]["total_output"] >= 0
+        assert snapshot["metadata"]["source"] == "rss"  # No LLM by default

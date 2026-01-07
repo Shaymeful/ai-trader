@@ -13,6 +13,9 @@ import requests
 import yaml
 from pydantic import BaseModel
 
+from src.app.selector.llm_enrichment import create_enricher
+from src.app.selector.ticker_validation import create_validator
+
 
 class SelectorConfig(BaseModel):
     """Configuration for RSS selector."""
@@ -66,10 +69,11 @@ class SelectorEvent(BaseModel):
 class RSSSelector:
     """RSS-based selector for automation and energy candidates."""
 
-    def __init__(self, config_path: str = "config/selector.yaml"):
+    def __init__(self, config_path: str = "config/selector.yaml", alpaca_client: Any | None = None):
         """Initialize selector with configuration."""
         self.config_path = Path(config_path)
-        self.config = self._load_config()
+        self.config_dict = self._load_config_dict()
+        self.config = SelectorConfig(**self.config_dict)
         self.eastern = ZoneInfo("America/New_York")
 
         # Symbol extraction pattern: (SYMBOL) or SYMBOL: or $SYMBOL
@@ -78,16 +82,20 @@ class RSSSelector:
         # Duplicate suppression tracking: (symbol, action) -> timestamp
         self.recent_candidates: dict[tuple[str, str], datetime] = {}
 
-    def _load_config(self) -> SelectorConfig:
-        """Load selector configuration from YAML."""
+        # Initialize ticker validator
+        self.validator = create_validator(self.config_dict, alpaca_client)
+
+        # Initialize LLM enricher (if enabled in config)
+        self.enricher = create_enricher(self.config_dict)
+
+    def _load_config_dict(self) -> dict[str, Any]:
+        """Load selector configuration from YAML as dict."""
         if not self.config_path.exists():
             msg = f"Selector config not found: {self.config_path}"
             raise FileNotFoundError(msg)
 
         with open(self.config_path, encoding="utf-8") as f:
-            config_data = yaml.safe_load(f)
-
-        return SelectorConfig(**config_data)
+            return yaml.safe_load(f)
 
     def fetch_rss_feed(self, feed_url: str, timeout: int = 10) -> str:
         """Fetch RSS feed content."""
@@ -575,20 +583,103 @@ class RSSSelector:
                 )
             )
 
-        return all_candidates, all_events
+        # Apply deterministic validation
+        validated_candidates, validation_stats = self._apply_validation(all_candidates)
+
+        # Apply optional LLM enrichment
+        final_candidates = validated_candidates
+        enrichment_stats = {}
+
+        if self.enricher:
+            try:
+                # Convert candidates to dict format for enricher
+                candidate_dicts = [c.model_dump() for c in validated_candidates]
+
+                # Enrich candidates
+                enriched_dicts, enrichment_stats = self.enricher.enrich_candidates(candidate_dicts)
+
+                # Convert back to Candidate objects
+                final_candidates = [Candidate(**c) for c in enriched_dicts]
+
+            except Exception as e:
+                print(f"LLM enrichment failed: {e}")
+                enrichment_stats = {"error": str(e)}
+
+        # Store stats for snapshot metadata
+        self._validation_stats = validation_stats
+        self._enrichment_stats = enrichment_stats
+
+        return final_candidates, all_events
+
+    def _apply_validation(
+        self, candidates: list[Candidate]
+    ) -> tuple[list[Candidate], dict[str, int]]:
+        """
+        Apply deterministic ticker validation to candidates.
+
+        Returns:
+            (validated_candidates, stats)
+        """
+        validated = []
+        stats = {
+            "total_input": len(candidates),
+            "rejected_stopword": 0,
+            "rejected_format": 0,
+            "rejected_not_tradable": 0,
+            "total_output": 0,
+        }
+
+        for candidate in candidates:
+            is_valid, rejection_reason = self.validator.validate(candidate.symbol)
+
+            if not is_valid:
+                # Track rejection reason
+                if "Stopword" in str(rejection_reason):
+                    stats["rejected_stopword"] += 1
+                elif "Invalid format" in str(rejection_reason):
+                    stats["rejected_format"] += 1
+                elif "not tradable" in str(rejection_reason or ""):
+                    stats["rejected_not_tradable"] += 1
+                continue
+
+            validated.append(candidate)
+
+        stats["total_output"] = len(validated)
+        return validated, stats
 
     def write_snapshot(self, candidates: list[Candidate], output_dir: str = "out/selector") -> None:
-        """Write candidates to snapshot.json."""
+        """Write candidates to snapshot.json with validation and enrichment metadata."""
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
         snapshot_file = output_path / "snapshot.json"
 
+        # Determine source
+        source = "rss"
+        if hasattr(self, "_enrichment_stats") and self._enrichment_stats.get("llm_called"):
+            source = "rss+llm"
+
+        # Build metadata
+        metadata = {
+            "source": source,
+            "config": str(self.config_path),
+        }
+
+        # Add validation stats
+        if hasattr(self, "_validation_stats"):
+            metadata["validation_stats"] = self._validation_stats
+
+        # Add LLM enrichment stats
+        if hasattr(self, "_enrichment_stats") and self._enrichment_stats:
+            metadata["enrichment_stats"] = self._enrichment_stats
+            if "model" in self._enrichment_stats:
+                metadata["llm_model"] = self._enrichment_stats["model"]
+
         snapshot = {
             "generated_at": datetime.now(self.eastern).isoformat(),
             "count": len(candidates),
             "candidates": [c.model_dump() for c in candidates],
-            "metadata": {"source": "rss_selector", "config": str(self.config_path)},
+            "metadata": metadata,
         }
 
         with open(snapshot_file, "w", encoding="utf-8") as f:
@@ -633,11 +724,10 @@ class RSSSelector:
                 stats["headlines_processed"] += 1
             elif event.event_type == "candidate_created":
                 stats["candidates_created"] += 1
-            elif event.event_type == "candidate_rejected":
-                if event.rejection_reason:
-                    key = f"rejected_{event.rejection_reason}"
-                    if key in stats:
-                        stats[key] += 1
+            elif event.event_type == "candidate_rejected" and event.rejection_reason:
+                key = f"rejected_{event.rejection_reason}"
+                if key in stats:
+                    stats[key] += 1
 
             # Track symbols extracted (any event with symbol field set)
             if event.symbol:

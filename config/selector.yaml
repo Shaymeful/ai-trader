@@ -150,3 +150,43 @@ safety:
 screening:
   liquidity_floor_usd: 20000000  # $20M minimum avg daily dollar volume (if available)
   duplicate_suppression_minutes: 60  # Suppress same symbol+action within 60 minutes
+
+# Ticker validation stopwords (common false positives from RSS headlines)
+stopwords:
+  - CEO
+  - AI
+  - US
+  - USA
+  - IPO
+  - ETF
+  - SEC
+  - FED
+  - CPI
+  - GDP
+  - EPS
+  - Q4
+  - Q3
+  - Q2
+  - Q1
+  - BTC
+  - ETH
+  - API
+  - IT
+  - HR
+  - PR
+  - IR
+  - VP
+  - SVP
+  - EVP
+  - CTO
+  - CFO
+  - COO
+  - CMO
+
+# LLM enrichment (optional)
+candidates_enrichment_enabled: false  # Set to true to enable OpenAI enrichment
+candidates_llm_provider: openai  # openai or anthropic
+candidates_llm_model: gpt-4o-mini  # Cost-effective model for enrichment
+candidates_min_confidence: 0.70  # Filter out candidates below this confidence
+candidates_max_count: 20  # Cap total candidates returned
+candidates_llm_timeout: 30  # API timeout in seconds
