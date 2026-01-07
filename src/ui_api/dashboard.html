@@ -1555,6 +1555,33 @@
                     Last generated: <span id="candidates-last-generated">N/A</span>
                 </div>
             </div>
+
+            <!-- Validation Stats Display -->
+            <div id="validation-stats" style="display: none; background: #0f172a; border-radius: 8px; padding: 1rem; margin: 1rem 0; border-left: 3px solid #10b981;">
+                <div style="display: flex; gap: 2rem; flex-wrap: wrap; font-size: 0.9rem;">
+                    <div>
+                        <strong style="color: #10b981;">Source:</strong>
+                        <span id="stats-source" style="color: #94a3b8;">-</span>
+                    </div>
+                    <div>
+                        <strong style="color: #3b82f6;">Input:</strong>
+                        <span id="stats-input" style="color: #94a3b8;">-</span>
+                    </div>
+                    <div>
+                        <strong style="color: #ef4444;">Rejected:</strong>
+                        <span id="stats-rejected" style="color: #94a3b8;">-</span>
+                    </div>
+                    <div>
+                        <strong style="color: #10b981;">Output:</strong>
+                        <span id="stats-output" style="color: #94a3b8;">-</span>
+                    </div>
+                    <div id="stats-llm-section" style="display: none;">
+                        <strong style="color: #f59e0b;">LLM:</strong>
+                        <span id="stats-llm" style="color: #94a3b8;">-</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="candidates-filters">
                 <select id="filter-action" class="filter-input" onchange="filterCandidates()">
                     <option value="">All Actions</option>
@@ -2107,6 +2134,44 @@
             if (data.last_generated) {
                 const genDate = new Date(data.last_generated);
                 document.getElementById('candidates-last-generated').textContent = genDate.toLocaleString();
+            }
+
+            // Display validation stats if metadata is available
+            if (data.metadata) {
+                const statsDiv = document.getElementById('validation-stats');
+                statsDiv.style.display = 'block';
+
+                // Source
+                const source = data.metadata.source || 'rss';
+                document.getElementById('stats-source').textContent = source;
+
+                // Validation stats
+                if (data.metadata.validation_stats) {
+                    const vStats = data.metadata.validation_stats;
+                    document.getElementById('stats-input').textContent = vStats.total_input || 0;
+
+                    const rejected = (vStats.rejected_stopword || 0) +
+                                    (vStats.rejected_format || 0) +
+                                    (vStats.rejected_not_tradable || 0);
+                    document.getElementById('stats-rejected').textContent = rejected;
+
+                    document.getElementById('stats-output').textContent = vStats.total_output || 0;
+                }
+
+                // LLM enrichment stats
+                if (data.metadata.enrichment_stats && data.metadata.enrichment_stats.llm_called) {
+                    const llmSection = document.getElementById('stats-llm-section');
+                    llmSection.style.display = 'block';
+
+                    const eStats = data.metadata.enrichment_stats;
+                    const model = eStats.model || 'unknown';
+                    const ignored = eStats.ignored || 0;
+                    document.getElementById('stats-llm').textContent = `${model} (ignored: ${ignored})`;
+                } else {
+                    document.getElementById('stats-llm-section').style.display = 'none';
+                }
+            } else {
+                document.getElementById('validation-stats').style.display = 'none';
             }
         }
 

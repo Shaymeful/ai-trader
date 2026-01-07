@@ -200,6 +200,7 @@ class CandidatesResponse(BaseModel):
     candidates: list[CandidateInfo]
     count: int
     last_generated: str | None
+    metadata: dict[str, Any] | None = None
 
 
 class DetailedHealthResponse(BaseModel):
@@ -698,6 +699,7 @@ async def get_candidates():
             candidates=candidates_list,
             count=len(candidates_list),
             last_generated=data.get("generated_at"),
+            metadata=data.get("metadata"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load candidates: {e}") from e
