@@ -1463,10 +1463,12 @@ async def update_account_summary(request: AccountSummaryUpdateRequest):
     """
     Update account summary settings (total capital, max daily loss, max positions).
 
-    Settings are persisted to out/account_summary.json.
+    Settings are persisted to out/account_summary.json and applied to registry at runtime.
     """
     if ledger is None:
         raise HTTPException(status_code=503, detail="Ledger not available")
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Registry not available")
 
     # Load existing settings
     settings_file = Path("out/account_summary.json")
@@ -1484,18 +1486,22 @@ async def update_account_summary(request: AccountSummaryUpdateRequest):
     # Apply updates (only non-None fields)
     old_settings = current_settings.copy()
     updated_fields = []
+    registry_changes = {}
 
     if request.total_capital is not None:
         current_settings["total_capital"] = request.total_capital
         updated_fields.append("total_capital")
+        # Note: total_capital is display-only, not part of registry config
 
     if request.max_daily_loss is not None:
         current_settings["max_daily_loss"] = request.max_daily_loss
         updated_fields.append("max_daily_loss")
+        registry_changes["max_daily_loss"] = request.max_daily_loss
 
     if request.max_total_positions is not None:
         current_settings["max_total_positions"] = request.max_total_positions
         updated_fields.append("max_total_positions")
+        registry_changes["max_total_positions"] = request.max_total_positions
 
     if not updated_fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -1516,6 +1522,13 @@ async def update_account_summary(request: AccountSummaryUpdateRequest):
 
         tmp_path.replace(settings_file)
 
+        # Update registry with runtime changes (if any)
+        if registry_changes:
+            try:
+                registry.stage_global_config_change(registry_changes)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid values: {e}") from e
+
         # Log to ledger
         ledger.append(
             {
@@ -1529,7 +1542,7 @@ async def update_account_summary(request: AccountSummaryUpdateRequest):
 
         return ChangeResponse(
             success=True,
-            message=f"Updated {', '.join(updated_fields)}",
+            message=f"Updated {', '.join(updated_fields)} (effective immediately)",
             pending_version=None,
         )
 

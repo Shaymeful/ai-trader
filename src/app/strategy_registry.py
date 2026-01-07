@@ -140,7 +140,7 @@ class StrategyRegistry:
             with open(self.overrides_path) as f:
                 overrides = json.load(f)
 
-            self._apply_overrides(strategies, overrides)
+            self._apply_overrides(strategies, global_config, overrides)
 
         # Create registry state
         self.state = StrategyRegistryState(
@@ -148,9 +148,11 @@ class StrategyRegistry:
             global_config=global_config,
         )
 
-    def _apply_overrides(self, strategies: dict[str, StrategyConfig], overrides: dict) -> None:
+    def _apply_overrides(
+        self, strategies: dict[str, StrategyConfig], global_config: GlobalConfig, overrides: dict
+    ) -> None:
         """
-        Apply overrides from JSON file to strategy configurations.
+        Apply overrides from JSON file to strategy and global configurations.
 
         Overrides format:
         {
@@ -163,9 +165,24 @@ class StrategyRegistry:
                     "last_modified": "ISO timestamp"
                 }
             },
+            "global_config": {
+                "max_daily_loss": float,
+                "max_total_positions": int,
+                "max_order_notional": float
+            },
             "registry_version": N
         }
         """
+        # Apply global config overrides
+        global_overrides = overrides.get("global_config", {})
+        if "max_daily_loss" in global_overrides:
+            global_config.max_daily_loss = float(global_overrides["max_daily_loss"])
+        if "max_total_positions" in global_overrides:
+            global_config.max_total_positions = int(global_overrides["max_total_positions"])
+        if "max_order_notional" in global_overrides:
+            global_config.max_order_notional = float(global_overrides["max_order_notional"])
+
+        # Apply strategy overrides
         strategy_overrides = overrides.get("strategies", {})
 
         for strategy_id, override_data in strategy_overrides.items():
@@ -273,6 +290,44 @@ class StrategyRegistry:
 
         return new_version
 
+    def stage_global_config_change(self, changes: dict[str, Any]) -> None:
+        """
+        Update global configuration (risk limits, etc.) at runtime.
+
+        Args:
+            changes: Dictionary of changes (max_daily_loss, max_total_positions, max_order_notional)
+
+        Raises:
+            ValueError: If registry not loaded or changes invalid
+        """
+        if self.state is None:
+            raise ValueError("Registry not loaded")
+
+        # Apply changes to global config (effective immediately)
+        if "max_daily_loss" in changes:
+            value = float(changes["max_daily_loss"])
+            if value <= 0:
+                raise ValueError(f"max_daily_loss must be positive, got {value}")
+            self.state.global_config.max_daily_loss = value
+
+        if "max_total_positions" in changes:
+            value = int(changes["max_total_positions"])
+            if value <= 0:
+                raise ValueError(f"max_total_positions must be positive, got {value}")
+            self.state.global_config.max_total_positions = value
+
+        if "max_order_notional" in changes:
+            value = float(changes["max_order_notional"])
+            if value <= 0:
+                raise ValueError(f"max_order_notional must be positive, got {value}")
+            self.state.global_config.max_order_notional = value
+
+        # Increment registry version
+        self.state.registry_version += 1
+
+        # Persist to overrides file
+        self._save_overrides()
+
     def _save_overrides(self) -> None:
         """Save current state to overrides file."""
         if self.state is None:
@@ -284,6 +339,11 @@ class StrategyRegistry:
         # Build overrides structure
         overrides = {
             "strategies": {},
+            "global_config": {
+                "max_daily_loss": self.state.global_config.max_daily_loss,
+                "max_total_positions": self.state.global_config.max_total_positions,
+                "max_order_notional": self.state.global_config.max_order_notional,
+            },
             "registry_version": self.state.registry_version,
             "last_saved": datetime.now(UTC).isoformat(),
         }
