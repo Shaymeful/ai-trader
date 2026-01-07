@@ -852,6 +852,35 @@ async def reset_universe():
         raise HTTPException(status_code=500, detail=f"Failed to reset universe: {e}") from e
 
 
+@app.get("/universe/proposal-history")
+async def get_proposals_history(limit: int = 50):
+    """Get proposal history from history file."""
+    import json
+
+    history_file = Path("out/universe_proposals_history.jsonl")
+
+    if not history_file.exists():
+        return {"history": []}
+
+    try:
+        history = []
+        with open(history_file, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                    history.append(entry)
+                except json.JSONDecodeError:
+                    continue
+
+        # Return most recent entries first
+        history.reverse()
+
+        return {"history": history[:limit]}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load history: {e}") from e
+
+
 @app.get("/universe/proposals", response_model=ProposalsListResponse)
 async def get_proposals():
     """Get current proposals and disagreements."""

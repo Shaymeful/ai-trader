@@ -194,6 +194,75 @@
             font-size: 0.875rem;
         }
 
+        .advisor-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #334155;
+        }
+
+        .advisor-tab {
+            background: transparent;
+            color: #94a3b8;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+
+        .advisor-tab:hover {
+            color: #cbd5e1;
+        }
+
+        .advisor-tab.active {
+            color: #10b981;
+            border-bottom-color: #10b981;
+        }
+
+        .advisor-tab-content {
+            display: none;
+        }
+
+        .advisor-tab-content.active {
+            display: block;
+        }
+
+        .history-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid #334155;
+            margin-bottom: 0.75rem;
+        }
+
+        .history-item.approved {
+            border-left: 4px solid #10b981;
+        }
+
+        .history-item.rejected {
+            border-left: 4px solid #ef4444;
+        }
+
+        .history-item.applied {
+            border-left: 4px solid #3b82f6;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .history-timestamp {
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+
         .universe-section .section-header {
             display: flex;
             align-items: center;
@@ -1399,11 +1468,11 @@
         <!-- Advisor Suggestions Section -->
         <div class="advisor-section">
             <div class="section-header">
-                <h2>Advisor Suggestions</h2>
+                <h2>Advisor</h2>
                 <div class="advisor-stats">
                     <span class="stat-item">
                         <span id="proposal-count" class="stat-value">0</span>
-                        <span class="stat-label">proposals</span>
+                        <span class="stat-label">pending</span>
                     </span>
                     <span class="stat-divider">|</span>
                     <span class="stat-item">
@@ -1416,23 +1485,39 @@
                 </button>
             </div>
 
-            <!-- Market Regime Display -->
-            <div class="regime-display" id="regime-display">
-                <!-- Dynamically populated -->
+            <!-- Tabs -->
+            <div class="advisor-tabs">
+                <button class="advisor-tab active" onclick="switchAdvisorTab('suggestions')">Suggestions</button>
+                <button class="advisor-tab" onclick="switchAdvisorTab('history')">History</button>
             </div>
 
-            <!-- Proposals List -->
-            <div class="proposals-list" id="proposals-list">
-                <!-- Dynamically populated -->
-            </div>
-
-            <!-- Disagreements List (collapsible) -->
-            <details class="disagreements-section">
-                <summary>Provider Disagreements (<span id="disagreements-count-summary">0</span>)</summary>
-                <div class="disagreements-list" id="disagreements-list">
+            <!-- Suggestions Tab Content -->
+            <div id="advisor-tab-suggestions" class="advisor-tab-content active">
+                <!-- Market Regime Display -->
+                <div class="regime-display" id="regime-display">
                     <!-- Dynamically populated -->
                 </div>
-            </details>
+
+                <!-- Proposals List -->
+                <div class="proposals-list" id="proposals-list">
+                    <!-- Dynamically populated -->
+                </div>
+
+                <!-- Disagreements List (collapsible) -->
+                <details class="disagreements-section">
+                    <summary>Provider Disagreements (<span id="disagreements-count-summary">0</span>)</summary>
+                    <div class="disagreements-list" id="disagreements-list">
+                        <!-- Dynamically populated -->
+                    </div>
+                </details>
+            </div>
+
+            <!-- History Tab Content -->
+            <div id="advisor-tab-history" class="advisor-tab-content">
+                <div id="history-list">
+                    <!-- Dynamically populated -->
+                </div>
+            </div>
         </div>
 
         <div class="main-grid">
@@ -1733,7 +1818,10 @@
         }
 
         function renderProposals(data) {
-            document.getElementById('proposal-count').textContent = data.proposals.length;
+            // Filter to only show NEW proposals
+            const newProposals = data.proposals.filter(p => p.status === 'NEW');
+
+            document.getElementById('proposal-count').textContent = newProposals.length;
             document.getElementById('disagreement-count').textContent = data.disagreements.length;
             document.getElementById('disagreements-count-summary').textContent = data.disagreements.length;
 
@@ -1745,10 +1833,10 @@
             }
 
             const proposalsList = document.getElementById('proposals-list');
-            if (data.proposals.length === 0) {
-                proposalsList.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 2rem;">No proposals. Click Generate.</div>';
+            if (newProposals.length === 0) {
+                proposalsList.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 2rem;">No pending proposals. Click Generate.</div>';
             } else {
-                proposalsList.innerHTML = data.proposals.map(p => {
+                proposalsList.innerHTML = newProposals.map(p => {
                     const proposalType = p.proposal_type || 'sector_toggle';
                     let typeDisplay = '';
 
@@ -1792,7 +1880,7 @@
             try {
                 const response = await fetch(`/universe/proposals/${proposalId}/approve`, { method: 'POST' });
                 const result = await response.json();
-                if (response.ok) { showSuccess(result.message); setTimeout(() => { loadProposals(); loadUniverseSectors(); }, 500); } else { showError(result.detail || 'Failed'); }
+                if (response.ok) { showSuccess(result.message); setTimeout(() => { loadProposals(); loadUniverseSectors(); loadHistory(); }, 500); } else { showError(result.detail || 'Failed'); }
             } catch (error) { console.error('Error:', error); showError('Failed'); }
         }
 
@@ -1800,8 +1888,76 @@
             try {
                 const response = await fetch(`/universe/proposals/${proposalId}/reject`, { method: 'POST' });
                 const result = await response.json();
-                if (response.ok) { showSuccess(result.message); setTimeout(() => loadProposals(), 500); } else { showError(result.detail || 'Failed'); }
+                if (response.ok) { showSuccess(result.message); setTimeout(() => { loadProposals(); loadHistory(); }, 500); } else { showError(result.detail || 'Failed'); }
             } catch (error) { console.error('Error:', error); showError('Failed'); }
+        }
+
+        function switchAdvisorTab(tab) {
+            // Update tab buttons
+            document.querySelectorAll('.advisor-tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.advisor-tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`advisor-tab-${tab}`).classList.add('active');
+
+            // Load history when switching to history tab
+            if (tab === 'history') {
+                loadHistory();
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const response = await fetch('/universe/proposal-history?limit=50');
+                if (!response.ok) throw new Error('Failed to load history');
+
+                const data = await response.json();
+                renderHistory(data.history);
+            } catch (error) {
+                console.error('Error loading history:', error);
+            }
+        }
+
+        function renderHistory(history) {
+            const historyList = document.getElementById('history-list');
+
+            if (history.length === 0) {
+                historyList.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 2rem;">No history yet.</div>';
+                return;
+            }
+
+            historyList.innerHTML = history.map(h => {
+                const statusClass = h.status ? h.status.toLowerCase() : 'unknown';
+                const timestamp = new Date(h.timestamp).toLocaleString();
+
+                let actionDisplay = '';
+                if (h.proposal_type === 'sector_toggle') {
+                    actionDisplay = `<span style="color: ${h.recommended_enabled ? '#10b981' : '#ef4444'}">${h.recommended_enabled ? 'Enable' : 'Disable'}</span>`;
+                } else if (h.proposal_type === 'constituent_change' && h.constituent_change) {
+                    const action = h.constituent_change.action.toUpperCase();
+                    const tickers = h.constituent_change.tickers.join(', ');
+                    const actionColor = action === 'ADD' ? '#10b981' : '#ef4444';
+                    actionDisplay = `<span style="color: ${actionColor}">${action}: ${tickers}</span>`;
+                }
+
+                return `
+                    <div class="history-item ${statusClass}">
+                        <div class="history-header">
+                            <div>
+                                <strong>${h.sector_name}</strong> ${actionDisplay}
+                                <span style="margin-left: 0.5rem; color: #64748b;">(${h.confidence ? h.confidence.toFixed(2) : 'N/A'})</span>
+                            </div>
+                            <span class="badge ${statusClass === 'approved' ? 'badge-success' : statusClass === 'rejected' ? 'badge-danger' : 'badge-info'}">${h.status || h.action}</span>
+                        </div>
+                        <div class="history-timestamp">${timestamp} - ${h.provider || 'unknown'}</div>
+                    </div>
+                `;
+            }).join('');
         }
 
         async function loadDashboard() {
