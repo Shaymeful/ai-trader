@@ -290,6 +290,14 @@
             color: #94a3b8;
         }
 
+        .sector-tickers {
+            font-size: 0.7rem;
+            color: #64748b;
+            margin-top: 0.5rem;
+            line-height: 1.4;
+            font-family: 'Courier New', monospace;
+        }
+
         .sector-badge {
             display: inline-block;
             padding: 0.125rem 0.5rem;
@@ -1382,9 +1390,6 @@
                         <span class="stat-label">symbols</span>
                     </span>
                 </div>
-                <button class="btn-secondary" onclick="resetUniverse()" title="Reset all sectors to defaults">
-                    Reset to Defaults
-                </button>
             </div>
             <div class="sector-grid" id="sector-grid">
                 <!-- Dynamically populated -->
@@ -1617,10 +1622,19 @@
             const grid = document.getElementById('sector-grid');
             if (!grid) return;
 
+            // Store sector data globally for editor access
+            window.sectorDataCache = {};
+            data.sectors.forEach(sector => {
+                window.sectorDataCache[sector.sector_name] = sector.symbols;
+            });
+
             grid.innerHTML = data.sectors.map(sector => {
                 const hasPending = sector.pending_version !== null;
                 const pendingClass = hasPending ? 'pending' : '';
                 const pendingBadge = hasPending ? '<span class="sector-badge pending">Pending</span>' : '';
+
+                // Format tickers for display (small font)
+                const tickersDisplay = sector.symbols.join(', ');
 
                 return `
                     <div class="sector-item ${pendingClass}">
@@ -1632,10 +1646,13 @@
                             <div class="sector-details">
                                 ${sector.symbol_count} symbols | ${sector.description}
                             </div>
+                            <div class="sector-tickers">
+                                ${tickersDisplay}
+                            </div>
                             <button class="btn-view-edit"
-                                    onclick="openSectorEditor('${sector.sector_name}', ${JSON.stringify(sector.symbols)})"
+                                    onclick="openSectorEditorById('${sector.sector_name}')"
                                     style="margin-top: 0.5rem;">
-                                View / Edit Tickers
+                                Edit Tickers
                             </button>
                         </div>
                         <label class="toggle-switch">
@@ -2614,6 +2631,12 @@
         let currentTickers = [];
         let tickersToAdd = [];
         let tickersToRemove = [];
+
+        function openSectorEditorById(sectorName) {
+            // Retrieve tickers from cached data
+            const tickers = window.sectorDataCache?.[sectorName] || [];
+            openSectorEditor(sectorName, tickers);
+        }
 
         function openSectorEditor(sectorName, tickers) {
             currentSector = sectorName;
