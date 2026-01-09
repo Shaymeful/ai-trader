@@ -1887,11 +1887,12 @@
                             <th>Tags</th>
                             <th>Reason</th>
                             <th>Expires</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="candidates-tbody">
                         <tr>
-                            <td colspan="8" style="text-align: center; color: #64748b;">Loading candidates...</td>
+                            <td colspan="9" style="text-align: center; color: #64748b;">Loading candidates...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -1982,11 +1983,64 @@
         </div>
     </div>
 
+    <!-- Propose Add to Sector Modal -->
+    <div id="propose-add-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Propose Add to Sector</h3>
+                <button class="modal-close" onclick="closeProposeAddModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="color: #cbd5e1; margin-bottom: 1rem;">
+                    Symbol: <strong id="propose-symbol"></strong>
+                </p>
+                <div class="form-group">
+                    <label for="propose-sector-select">Select Sector</label>
+                    <select id="propose-sector-select" class="form-input">
+                        <option value="">-- Select Sector --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="create-sector-checkbox" onchange="toggleCreateSector()">
+                        Create new sector
+                    </label>
+                </div>
+                <div id="create-sector-form" style="display: none;">
+                    <div class="form-group">
+                        <label for="new-sector-name">Sector Name</label>
+                        <input type="text" id="new-sector-name" class="form-input" placeholder="e.g., robotics">
+                    </div>
+                    <div class="form-group">
+                        <label for="new-sector-description">Description</label>
+                        <input type="text" id="new-sector-description" class="form-input"
+                               placeholder="e.g., Robotics and automation companies">
+                    </div>
+                    <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 0.5rem;">
+                        ℹ️ New sectors are created <strong>disabled</strong> by default.
+                        Enable them explicitly to trade.
+                    </p>
+                </div>
+                <div class="form-group">
+                    <label for="proposal-rationale">Rationale</label>
+                    <textarea id="proposal-rationale" class="form-input" rows="3"
+                              placeholder="Why should this symbol be added?"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeProposeAddModal()">Cancel</button>
+                <button class="btn-primary" onclick="submitProposeAdd()">Create Proposal</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let strategiesData = [];
         let allocationData = null;
         let candidatesData = [];
         let currentEditStrategy = null;
+        let currentProposeSymbol = null;
+        let currentProposeCandidateId = null;
 
         // Universe Sectors Management
 
@@ -2659,7 +2713,7 @@
         function renderCandidates(candidates) {
             const tbody = document.getElementById('candidates-tbody');
             if (candidates.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b;">No candidates available</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #64748b;">No candidates available</td></tr>';
                 return;
             }
 
@@ -2667,6 +2721,9 @@
                 const expiresDate = c.expires_at ? new Date(c.expires_at) : null;
                 const expiresText = expiresDate ? expiresDate.toLocaleString() : 'N/A';
                 const actionClass = `action-${c.action}`;
+
+                // Only show "Propose Add to Sector" for BUY or WATCH actions
+                const showProposeButton = c.action === 'buy' || c.action === 'watch';
 
                 return `
                     <tr data-symbol="${c.symbol}" data-action="${c.action}" data-confidence="${c.confidence}"
@@ -2690,6 +2747,14 @@
                         </td>
                         <td style="color: #cbd5e1;">${c.reason}</td>
                         <td style="color: #94a3b8; font-size: 0.8rem;">${expiresText}</td>
+                        <td>
+                            ${showProposeButton ? `
+                                <button class="btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;"
+                                    onclick="showProposeAddModal('${c.symbol}', '${c.sector || ''}', '${c.candidate_id}')">
+                                    Propose Add
+                                </button>
+                            ` : '-'}
+                        </td>
                     </tr>
                 `;
             }).join('');
@@ -3666,6 +3731,162 @@
             } catch (error) {
                 console.error('Error saving sector changes:', error);
                 showError('Failed to update tickers');
+            }
+        }
+
+        // Propose Add to Sector Functions
+        async function showProposeAddModal(symbol, suggestedSector, candidateId) {
+            currentProposeSymbol = symbol;
+            currentProposeCandidateId = candidateId;
+
+            // Show modal
+            document.getElementById('propose-add-modal').classList.add('active');
+
+            // Set symbol
+            document.getElementById('propose-symbol').textContent = symbol;
+
+            // Load sectors and populate dropdown
+            try {
+                const response = await fetch('/universe/sectors');
+                const data = await response.json();
+
+                const select = document.getElementById('propose-sector-select');
+                select.innerHTML = '<option value="">-- Select Sector --</option>';
+
+                data.sectors.forEach(sector => {
+                    const option = document.createElement('option');
+                    option.value = sector.sector_name;
+                    option.textContent = `${sector.sector_name} (${sector.symbol_count} symbols)`;
+                    if (sector.sector_name === suggestedSector) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+
+                // Pre-fill sector name if suggested
+                if (suggestedSector) {
+                    document.getElementById('new-sector-name').value = suggestedSector;
+                }
+            } catch (error) {
+                console.error('Error loading sectors:', error);
+                showError('Failed to load sectors');
+            }
+        }
+
+        function closeProposeAddModal() {
+            document.getElementById('propose-add-modal').classList.remove('active');
+            currentProposeSymbol = null;
+            currentProposeCandidateId = null;
+            document.getElementById('create-sector-checkbox').checked = false;
+            document.getElementById('create-sector-form').style.display = 'none';
+            document.getElementById('propose-sector-select').value = '';
+            document.getElementById('new-sector-name').value = '';
+            document.getElementById('new-sector-description').value = '';
+            document.getElementById('proposal-rationale').value = '';
+        }
+
+        function toggleCreateSector() {
+            const checkbox = document.getElementById('create-sector-checkbox');
+            const form = document.getElementById('create-sector-form');
+            const select = document.getElementById('propose-sector-select');
+
+            if (checkbox.checked) {
+                form.style.display = 'block';
+                select.disabled = true;
+            } else {
+                form.style.display = 'none';
+                select.disabled = false;
+            }
+        }
+
+        async function submitProposeAdd() {
+            const createNew = document.getElementById('create-sector-checkbox').checked;
+            let sectorName;
+
+            if (createNew) {
+                // Create new sector
+                sectorName = document.getElementById('new-sector-name').value.trim();
+                const description = document.getElementById('new-sector-description').value.trim();
+
+                if (!sectorName) {
+                    showError('Sector name is required');
+                    return;
+                }
+
+                if (!description) {
+                    showError('Sector description is required');
+                    return;
+                }
+
+                // Create sector first
+                try {
+                    const response = await fetch('/universe/sectors', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            sector_name: sectorName,
+                            description: description,
+                            symbols: [currentProposeSymbol],
+                            enabled: false,
+                        }),
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok) {
+                        showError(result.detail || 'Failed to create sector');
+                        return;
+                    }
+
+                    showSuccess(result.message);
+                } catch (error) {
+                    console.error('Error creating sector:', error);
+                    showError('Failed to create sector');
+                    return;
+                }
+            } else {
+                // Use existing sector
+                sectorName = document.getElementById('propose-sector-select').value;
+
+                if (!sectorName) {
+                    showError('Please select a sector');
+                    return;
+                }
+            }
+
+            // Create proposal
+            const rationale = document.getElementById('proposal-rationale').value.trim()
+                || `Add ${currentProposeSymbol} to ${sectorName}`;
+
+            try {
+                const response = await fetch('/universe/proposals/constituents', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sector_name: sectorName,
+                        action: 'add',
+                        tickers: [currentProposeSymbol],
+                        source: 'candidates',
+                        candidate_id: currentProposeCandidateId,
+                        rationale: rationale,
+                    }),
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    closeProposeAddModal();
+                    setTimeout(() => {
+                        loadProposals();
+                        loadUniverseSectors();
+                    }, 500);
+                } else {
+                    showError(result.detail || 'Failed to create proposal');
+                }
+            } catch (error) {
+                console.error('Error creating proposal:', error);
+                showError('Failed to create proposal');
             }
         }
 

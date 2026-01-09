@@ -9,9 +9,9 @@ IMPORTANT: This service is optional. The bot runs normally if the API is never s
 
 import json
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -388,6 +388,26 @@ class UpdateTickersRequest(BaseModel):
 
     add: list[str] = Field(default_factory=list, description="Tickers to add")
     remove: list[str] = Field(default_factory=list, description="Tickers to remove")
+
+
+class CreateSectorRequest(BaseModel):
+    """Request to create a new sector."""
+
+    sector_name: str = Field(..., min_length=1, description="Sector name")
+    description: str = Field(..., min_length=1, description="Sector description")
+    symbols: list[str] = Field(default_factory=list, description="Initial symbols")
+    enabled: bool = Field(default=False, description="Whether sector is enabled (default false)")
+
+
+class CreateConstituentProposalRequest(BaseModel):
+    """Request to create a constituent change proposal."""
+
+    sector_name: str = Field(..., min_length=1, description="Target sector name")
+    action: Literal["add", "remove"] = Field(..., description="Action to perform")
+    tickers: list[str] = Field(..., min_items=1, description="Tickers to add/remove")
+    source: str = Field(default="manual", description="Source of proposal (manual, candidates)")
+    candidate_id: str | None = Field(default=None, description="Candidate ID if from candidates")
+    rationale: str = Field(default="Operator-initiated change", description="Reason for change")
 
 
 class AccountSummaryUpdateRequest(BaseModel):
@@ -1067,6 +1087,247 @@ async def reset_universe():
         raise HTTPException(status_code=500, detail=f"Failed to reset universe: {e}") from e
 
 
+@app.post("/universe/sectors", response_model=ChangeResponse)
+async def create_sector(request: CreateSectorRequest):
+    """Create a new sector (disabled by default).
+
+    The sector is persisted to universe_overrides.json and requires explicit
+    enabling before affecting trading.
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    try:
+        # Check if sector already exists
+        if request.sector_name in universe_registry.sectors:
+            raise HTTPException(
+                status_code=400, detail=f"Sector '{request.sector_name}' already exists"
+            )
+
+        # Validate tickers (basic format check)
+        for ticker in request.symbols:
+            if not ticker or not ticker.isupper():
+                raise HTTPException(status_code=400, detail=f"Invalid ticker format: {ticker}")
+
+        # Create sector in UniverseRegistry
+        from src.app.universe import SectorConfig
+
+        new_sector = SectorConfig(
+            name=request.sector_name,
+            description=request.description,
+            symbols=request.symbols,
+            enabled=request.enabled,
+        )
+        universe_registry.sectors[request.sector_name] = new_sector
+
+        # Create override entry (disabled by default unless explicitly enabled)
+        from src.app.universe_registry import SectorOverride
+
+        override = SectorOverride(
+            enabled=request.enabled,
+            active_version=1 if request.enabled else 0,
+            pending_version=None,
+            last_modified=datetime.now(UTC).isoformat(),
+            tickers=request.symbols if request.symbols else None,
+        )
+        universe_registry.overrides[request.sector_name] = override
+
+        # Save overrides atomically
+        universe_registry._save_overrides()
+
+        # Log to ledger
+        if ledger:
+            ledger.append(
+                {
+                    "event_type": "universe_sector_created",
+                    "sector_name": request.sector_name,
+                    "description": request.description,
+                    "symbol_count": len(request.symbols),
+                    "enabled": request.enabled,
+                }
+            )
+
+        return ChangeResponse(
+            success=True,
+            message=f"Sector '{request.sector_name}' created with {len(request.symbols)} symbols. "
+            + (
+                "Enabled and active."
+                if request.enabled
+                else "Disabled by default - enable explicitly to trade."
+            ),
+            pending_version=override.active_version if request.enabled else None,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create sector: {e}") from e
+
+
+@app.post("/universe/proposals/constituents", response_model=ChangeResponse)
+async def create_constituent_proposal(request: CreateConstituentProposalRequest):
+    """Create a constituent change proposal from candidate or manual action.
+
+    Creates a gated proposal that requires operator approval before affecting trading.
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    try:
+        # Validate sector exists
+        if request.sector_name not in universe_registry.sectors:
+            raise HTTPException(status_code=404, detail=f"Sector '{request.sector_name}' not found")
+
+        # Validate tickers
+        for ticker in request.tickers:
+            if not ticker or not ticker.isupper():
+                raise HTTPException(status_code=400, detail=f"Invalid ticker format: {ticker}")
+
+        # Get current sector symbols for validation
+        sector = universe_registry.sectors[request.sector_name]
+        current_symbols = set(sector.symbols)
+
+        # Validation based on action
+        if request.action == "add":
+            already_present = [t for t in request.tickers if t in current_symbols]
+            if already_present:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Tickers already in sector: {', '.join(already_present)}",
+                )
+        elif request.action == "remove":
+            not_present = [t for t in request.tickers if t not in current_symbols]
+            if not_present:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Tickers not in sector: {', '.join(not_present)}",
+                )
+
+        # Create proposal
+        from src.app.universe_advisor.models import (
+            ConstituentChange,
+            ConstituentChangeAction,
+            Proposal,
+            ProposalType,
+        )
+        from src.app.universe_advisor.storage import load_proposals, save_proposals
+
+        proposal_id = str(__import__("uuid").uuid4())
+        now = datetime.now(UTC)
+        expires_at = now + timedelta(hours=24)  # 24h TTL for manual proposals
+
+        constituent_change = ConstituentChange(
+            action=ConstituentChangeAction(request.action),
+            tickers=request.tickers,
+            reason=request.rationale,
+            constraints_checked=True,
+        )
+
+        proposal = Proposal(
+            proposal_id=proposal_id,
+            sector_name=request.sector_name,
+            confidence=1.0,  # Manual proposals have full confidence
+            rationale=request.rationale,
+            supporting_headlines=[],
+            provider="manual" if request.source == "manual" else request.source,
+            created_at=now.isoformat(),
+            expires_at=expires_at.isoformat(),
+            status="NEW",
+            proposal_type=ProposalType.CONSTITUENT_CHANGE,
+            recommended_enabled=None,
+            constituent_change=constituent_change,
+        )
+
+        # Load existing proposals
+        proposals_file = Path("out/universe_proposals.json")
+        existing_data = load_proposals(proposals_file)
+
+        if existing_data:
+            # Append to existing proposals list
+            existing_data["proposals"].append(
+                {
+                    "proposal_id": proposal.proposal_id,
+                    "sector_name": proposal.sector_name,
+                    "confidence": proposal.confidence,
+                    "rationale": proposal.rationale,
+                    "supporting_headlines": proposal.supporting_headlines,
+                    "provider": proposal.provider,
+                    "created_at": proposal.created_at,
+                    "expires_at": proposal.expires_at,
+                    "status": proposal.status,
+                    "proposal_type": proposal.proposal_type.value,
+                    "recommended_enabled": proposal.recommended_enabled,
+                    "constituent_change": {
+                        "action": constituent_change.action.value,
+                        "tickers": constituent_change.tickers,
+                        "reason": constituent_change.reason,
+                        "constraints_checked": constituent_change.constraints_checked,
+                    },
+                }
+            )
+
+            # Save atomically
+            from src.app.universe_advisor.apply import save_proposals_dict
+
+            save_proposals_dict(existing_data, proposals_file)
+        else:
+            # Create new proposals file with this single proposal
+            from src.app.universe_advisor.models import ProposalSet, RegimeData, MarketRegime
+            from src.app.universe_advisor.storage import save_proposals
+
+            # Create minimal regime data
+            regime = RegimeData(
+                regime=MarketRegime.UNKNOWN,
+                spy_price=0.0,
+                spy_ma50=0.0,
+                trend="bull",
+                volatility="low",
+                volatility_value=0.0,
+                confidence=0.0,
+                timestamp=now.isoformat(),
+            )
+
+            proposal_set = ProposalSet(
+                generation_id=str(__import__("uuid").uuid4()),
+                proposals=[proposal],
+                disagreements=[],
+                regime=regime,
+                headline_count=0,
+                generated_at=now.isoformat(),
+            )
+
+            save_proposals(proposal_set, proposals_file, filter_reasons={})
+
+        # Log to ledger
+        if ledger:
+            ledger.append(
+                {
+                    "event_type": "universe_proposal_created_from_candidate"
+                    if request.source == "candidates"
+                    else "universe_proposal_created_manual",
+                    "proposal_id": proposal_id,
+                    "sector_name": request.sector_name,
+                    "action": request.action,
+                    "tickers": request.tickers,
+                    "source": request.source,
+                    "candidate_id": request.candidate_id,
+                }
+            )
+
+        return ChangeResponse(
+            success=True,
+            message=f"Proposal created to {request.action.upper()} "
+            + f"{len(request.tickers)} ticker(s) to/from {request.sector_name}. "
+            + "Awaiting approval.",
+            pending_version=None,  # No pending version until approved
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create proposal: {e}") from e
+
+
 @app.get("/universe/proposal-history")
 async def get_proposals_history(limit: int = 50):
     """Get proposal history from history file."""
@@ -1429,7 +1690,7 @@ async def approve_proposal(proposal_id: str):
 @app.post("/universe/proposals/{proposal_id}/reject", response_model=ChangeResponse)
 async def reject_proposal(proposal_id: str):
     """Reject a proposal."""
-    from src.app.universe_advisor.apply import _save_proposals_dict
+    from src.app.universe_advisor.apply import save_proposals_dict
     from src.app.universe_advisor.models import Proposal
     from src.app.universe_advisor.storage import append_to_history, load_proposals
 
@@ -1454,7 +1715,7 @@ async def reject_proposal(proposal_id: str):
             raise HTTPException(status_code=404, detail="Proposal not found")
 
         # Save directly as dict (atomic write)
-        _save_proposals_dict(data, proposals_file)
+        save_proposals_dict(data, proposals_file)
 
         # Reconstruct Proposal object for history (with enum conversions)
         from src.app.universe_advisor.models import (

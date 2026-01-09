@@ -32,20 +32,46 @@ class RegimeData:
 ProposalStatus = Literal["NEW", "APPROVED", "REJECTED", "APPLIED", "EXPIRED"]
 
 
+class ProposalType(str, Enum):
+    """Type of universe proposal."""
+
+    SECTOR_TOGGLE = "sector_toggle"  # Enable/disable entire sector
+    CONSTITUENT_CHANGE = "constituent_change"  # Add/remove tickers from sector
+
+
+class ConstituentChangeAction(str, Enum):
+    """Action for constituent change."""
+
+    ADD = "add"
+    REMOVE = "remove"
+
+
+@dataclass
+class ConstituentChange:
+    """Constituent add/remove change details."""
+
+    action: ConstituentChangeAction
+    tickers: list[str]
+    reason: str
+    constraints_checked: bool = True  # Whether validation was performed
+
+
 @dataclass
 class Proposal:
-    """Single sector enable/disable proposal."""
+    """Universe change proposal (sector toggle or constituent change)."""
 
     proposal_id: str  # UUID
     sector_name: str
-    recommended_enabled: bool
     confidence: float  # 0.0-1.0
     rationale: str  # LLM explanation
     supporting_headlines: list[str]  # Top 3-5 headlines
-    provider: str  # "openai", "anthropic", "ensemble"
+    provider: str  # "openai", "anthropic", "ensemble", "manual"
     created_at: str  # ISO timestamp
     expires_at: str  # ISO timestamp
     status: ProposalStatus
+    proposal_type: ProposalType = ProposalType.SECTOR_TOGGLE
+    recommended_enabled: bool | None = None  # For SECTOR_TOGGLE
+    constituent_change: ConstituentChange | None = None  # For CONSTITUENT_CHANGE
 
 
 @dataclass
