@@ -7,7 +7,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -38,8 +38,11 @@ from .candidates.store import get_tradeable_candidates, load_candidates
 from .config import load_config_with_yaml, validate_alpaca_credentials
 from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
+from .decision_logger import DecisionLogger, TradingDecision, create_decision_from_intent
 from .execution import AlpacaExecutor
+from .exit_advisor import ExitAdvisor
 from .ledger import CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
+from .sell_scanner import SellScanner, SellSignal
 from .strategies import MeanReversionStrategy, TrendStrategy
 from .strategy_registry import StrategyRegistry
 
@@ -55,6 +58,260 @@ def get_market_time_now() -> datetime:
         datetime object with America/New_York timezone
     """
     return datetime.now(ZoneInfo("America/New_York"))
+
+
+def _initialize_llm_provider(config):
+    """
+    Initialize LLM provider for sell scanner.
+
+    Uses same provider infrastructure as Universe Advisor.
+    Returns None if initialization fails (sell scanner will use heuristics).
+
+    Args:
+        config: Trading configuration
+
+    Returns:
+        LLMProvider instance or None
+    """
+    try:
+        from .llm.factory import create_provider
+
+        # Use primary provider from config (openai or anthropic)
+        provider_type = getattr(config, "llm_primary", "openai")
+
+        # Get model based on provider type
+        if provider_type == "openai":
+            model = getattr(config, "llm_openai_model", "gpt-4o-mini")
+        else:
+            model = getattr(config, "llm_anthropic_model", "claude-3-5-sonnet-20241022")
+
+        timeout = getattr(config, "llm_timeout", 30)
+
+        llm_provider = create_provider(provider_type=provider_type, model=model, timeout=timeout)
+
+        print(f"LLM provider initialized: {provider_type} ({model})")
+        return llm_provider
+
+    except Exception as e:
+        print(f"WARNING: Failed to initialize LLM provider: {e}")
+        print("Sell scanner will use heuristic-based analysis only")
+        return None
+
+
+def _load_recent_news_events(lookback_hours: int = 48) -> list[dict]:
+    """
+    Load recent RSS events from selector output for sell scanner.
+
+    Args:
+        lookback_hours: Hours to look back for news events
+
+    Returns:
+        List of recent event dicts
+    """
+    try:
+        events_file = Path("out/selector/events.jsonl")
+        if not events_file.exists():
+            return []
+
+        cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
+        recent_events = []
+
+        with open(events_file, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                    timestamp_str = event.get("timestamp", "")
+
+                    # Parse timestamp and filter by recency
+                    try:
+                        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    except (ValueError, AttributeError):
+                        continue
+
+                    if timestamp >= cutoff:
+                        recent_events.append(event)
+
+                except json.JSONDecodeError:
+                    continue
+
+        print(f"Loaded {len(recent_events)} recent news events (last {lookback_hours}h)")
+        return recent_events
+
+    except Exception as e:
+        print(f"WARNING: Failed to load news events: {e}")
+        return []
+
+
+def _detect_market_regime(market_data: dict) -> str:
+    """
+    Simple market regime detection using SPY data.
+
+    Args:
+        market_data: Dict of symbol -> market data
+
+    Returns:
+        Regime string (bull_low_vol, bull_high_vol, bear_low_vol, bear_high_vol, unknown)
+    """
+    try:
+        spy_data = market_data.get("SPY", {})
+        price = spy_data.get("price")
+        ma = spy_data.get("ma")
+
+        if price is None or ma is None:
+            return "unknown"
+
+        # Determine trend
+        trend = "bull" if price >= ma else "bear"
+
+        # Determine volatility (using z-score as proxy)
+        zscore = abs(spy_data.get("zscore", 0.0))
+        vol = "high_vol" if zscore > 1.5 else "low_vol"
+
+        return f"{trend}_{vol}"
+
+    except Exception as e:
+        print(f"WARNING: Market regime detection failed: {e}")
+        return "unknown"
+
+
+def _run_sell_scan(
+    sell_scanner: SellScanner,
+    broker,
+    market_data: dict,
+    news_events: list[dict],
+    market_regime: str,
+    decision_logger: DecisionLogger,
+    dry_run: bool = False,
+) -> tuple[list[SellSignal], list[dict]]:
+    """
+    Run sell scanner on current positions and return actionable signals.
+
+    Args:
+        sell_scanner: SellScanner instance
+        broker: Broker instance for position queries
+        market_data: Dict of symbol -> market data
+        news_events: Recent news events
+        market_regime: Current market regime
+        decision_logger: DecisionLogger instance
+        dry_run: Whether this is a dry-run (no actual orders)
+
+    Returns:
+        Tuple of (sell_signals, sell_orders) where sell_orders are ready to execute
+    """
+    try:
+        # Get current positions from broker
+        positions = broker.get_positions()
+
+        if not positions:
+            print("No positions to scan for sell signals")
+            return [], []
+
+        # Convert to format expected by sell scanner: {symbol: (quantity, avg_price)}
+        current_positions = {}
+        for symbol, position in positions.items():
+            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
+            avg_price = (
+                position.get("avg_entry_price", 0)
+                if isinstance(position, dict)
+                else getattr(position, "avg_entry_price", 0)
+            )
+
+            if qty > 0:  # Only include long positions
+                current_positions[symbol] = (int(qty), float(avg_price))
+
+        if not current_positions:
+            print("No long positions to scan")
+            return [], []
+
+        print(f"\nScanning {len(current_positions)} positions for sell signals...")
+
+        # Run sell scanner
+        scan_result = sell_scanner.scan_positions(
+            current_positions=current_positions, market_data=market_data, news_events=news_events
+        )
+
+        # Save scan result
+        sell_scanner.save_scan_result(scan_result)
+
+        # Process signals with confidence >= 0.70 (high confidence sells)
+        actionable_signals = [
+            signal for signal in scan_result.sell_signals if signal.confidence >= 0.70
+        ]
+
+        if not actionable_signals:
+            print(
+                f"No actionable sell signals (found {len(scan_result.sell_signals)} signals below 0.70 confidence)"
+            )
+            return scan_result.sell_signals, []
+
+        print(f"Found {len(actionable_signals)} actionable sell signals (confidence >= 0.70)")
+
+        # Convert signals to orders
+        sell_orders = []
+        for signal in actionable_signals:
+            # Get current position quantity
+            qty, avg_entry_price = current_positions.get(signal.symbol, (0, 0))
+
+            if qty == 0:
+                continue
+
+            # Determine quantity to sell based on action
+            if signal.action == "SELL_ALL":
+                sell_qty = qty
+            elif signal.action == "SELL_HALF":
+                sell_qty = qty // 2
+            else:
+                # TIGHTEN_STOP or other actions: don't create order yet
+                continue
+
+            if sell_qty > 0:
+                sell_orders.append(
+                    {
+                        "symbol": signal.symbol,
+                        "quantity": -sell_qty,  # Negative for sell
+                        "action": signal.action,
+                        "reason": signal.primary_reason,
+                        "confidence": signal.confidence,
+                        "signal": signal,
+                    }
+                )
+
+                # Log sell decision
+                current_price = market_data.get(signal.symbol, {}).get("price", avg_entry_price)
+
+                decision = TradingDecision(
+                    decision_id=f"sell_{signal.symbol}_{datetime.now(UTC).isoformat()}",
+                    timestamp=datetime.now(UTC).isoformat(),
+                    symbol=signal.symbol,
+                    action=signal.action,
+                    quantity=sell_qty,
+                    price=current_price,
+                    confidence=signal.confidence,
+                    expected_value=signal.expected_value,
+                    risk_regime=signal.risk_regime,
+                    strategy="SellScanner",
+                    primary_reason=signal.primary_reason,
+                    detailed_reasoning=signal.detailed_reasoning,
+                    supporting_data={"headlines": signal.supporting_evidence},
+                    invalidation_criteria=signal.invalidation_criteria,
+                    position_context={
+                        "quantity": qty,
+                        "avg_entry_price": avg_entry_price,
+                        "current_value": current_price * qty,
+                        "unrealized_pnl": (current_price - avg_entry_price) * qty,
+                    },
+                    execution_result="DRY_RUN" if dry_run else None,
+                )
+
+                decision_logger.log_decision(decision)
+
+        print(f"Generated {len(sell_orders)} sell orders from signals")
+        return scan_result.sell_signals, sell_orders
+
+    except Exception as e:
+        print(f"ERROR: Sell scan failed: {e}")
+        traceback.print_exc()
+        return [], []
 
 
 @dataclass
@@ -138,10 +395,9 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
         candidate_map = {}
 
     if not universe:
-        print(
-            "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
-        )
-        sys.exit(1)
+        error_msg = "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
+        print(error_msg)
+        raise ValueError(error_msg)
 
     print()
 
@@ -419,10 +675,20 @@ def run_paper_mode(
         valid, error_msg = validate_alpaca_credentials("paper", require_credentials=True)
         if not valid:
             print(error_msg)
-            sys.exit(1)
+            raise ValueError(error_msg)
 
     # Initialize ledger for event tracking
     ledger = Ledger()
+
+    # Initialize decision logger for explainability
+    print("Initializing decision logger...")
+    decision_logger = DecisionLogger()
+    print()
+
+    # Initialize LLM provider for sell scanner
+    print("Initializing LLM provider for sell scanner...")
+    llm_provider = _initialize_llm_provider(config)
+    print()
 
     # Load candidates from snapshot (if available)
     print("Loading candidates...")
@@ -466,10 +732,9 @@ def run_paper_mode(
         candidate_map = {}
 
     if not universe:
-        print(
-            "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
-        )
-        sys.exit(1)
+        error_msg = "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
+        print(error_msg)
+        raise ValueError(error_msg)
 
     print()
 
@@ -526,6 +791,111 @@ def run_paper_mode(
     # Extract prices for allocator
     current_prices = {symbol: Decimal(str(data["price"])) for symbol, data in market_data.items()}
 
+    # ============================================================================
+    # AI-Driven Sell Scanning (GOAL B)
+    # ============================================================================
+
+    # Initialize sell scanner with LLM provider and market data provider
+    print("Initializing AI sell scanner...")
+    sell_scanner = SellScanner(
+        config=config, llm_provider=llm_provider, market_data_provider=provider
+    )
+    print()
+
+    # Load recent news events for sell scanner
+    news_events = _load_recent_news_events(lookback_hours=48)
+
+    # Detect market regime
+    market_regime = _detect_market_regime(market_data)
+    print(f"Market regime: {market_regime}")
+    print()
+
+    # Run sell scan on current positions (before generating buy signals)
+    sell_signals, sell_orders = _run_sell_scan(
+        sell_scanner=sell_scanner,
+        broker=broker,
+        market_data=market_data,
+        news_events=news_events,
+        market_regime=market_regime,
+        decision_logger=decision_logger,
+        dry_run=dry_run,
+    )
+
+    # ============================================================================
+    # End AI-Driven Sell Scanning
+    # ============================================================================
+
+    # ============================================================================
+    # Exit Advisor Integration (SELL Candidate Generation)
+    # ============================================================================
+
+    # Initialize Exit Advisor to emit SELL candidates into the candidate pipeline
+    print("Initializing Exit Advisor...")
+    exit_advisor = ExitAdvisor(
+        sell_scanner=sell_scanner, cooldown_hours=4, output_dir=Path("out/exit_advisor")
+    )
+    print()
+
+    # Get current positions for exit scanning
+    try:
+        positions = broker.get_positions()
+
+        # Convert positions to format expected by exit advisor: {symbol: (quantity, avg_price)}
+        current_positions = {}
+        for symbol, position in positions.items():
+            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
+            avg_price = (
+                position.get("avg_entry_price", 0)
+                if isinstance(position, dict)
+                else getattr(position, "avg_entry_price", 0)
+            )
+
+            if qty > 0:  # Only include long positions
+                current_positions[symbol] = (int(qty), float(avg_price))
+
+        if current_positions:
+            print(f"Running Exit Advisor on {len(current_positions)} positions...")
+
+            # Scan and emit SELL candidates
+            exit_candidates = exit_advisor.scan_and_emit_candidates(
+                current_positions=current_positions,
+                market_data=market_data,
+                news_events=news_events,
+                market_regime=market_regime,
+            )
+
+            print(f"Exit Advisor generated {len(exit_candidates)} SELL candidates")
+
+            # Log exit candidates to ledger
+            if exit_candidates:
+                for candidate in exit_candidates:
+                    ledger.append(
+                        {
+                            "event_type": "exit_candidate_created",
+                            "candidate_id": candidate.candidate_id,
+                            "symbol": candidate.symbol,
+                            "action": candidate.action,
+                            "confidence": candidate.confidence,
+                            "reason": candidate.reason,
+                            "expires_at": candidate.expires_at,
+                        }
+                    )
+            print()
+        else:
+            print("No positions to scan for exit candidates")
+            exit_candidates = []
+            print()
+
+    except Exception as e:
+        print(f"WARNING: Exit Advisor scan failed: {e}")
+        traceback.print_exc()
+        exit_candidates = []
+        print()
+
+    # ============================================================================
+    # End Exit Advisor Integration
+    # ============================================================================
+
     # Initialize strategies
     strategies = [
         TrendStrategy(ma_period=20),
@@ -573,6 +943,23 @@ def run_paper_mode(
                 )
             )
 
+            # Log buy decision through decision logger (GOAL C)
+            if intent.target_quantity > 0:  # Only log buy intents
+                current_price = current_prices.get(intent.symbol, Decimal("0"))
+
+                decision = create_decision_from_intent(
+                    intent=intent,
+                    price=float(current_price),
+                    risk_regime=market_regime,
+                    execution_result=None,  # Will be updated after execution
+                )
+
+                # Enhance with strategy name
+                decision.strategy = strategy.name
+
+                # Log the decision
+                decision_logger.log_decision(decision)
+
     # Allocate capital across strategies
     print("Allocating capital across strategies...")
     allocator = Allocator(config, registry=registry, broker=broker, ledger=ledger)
@@ -605,11 +992,28 @@ def run_paper_mode(
             print(f"  - {warning}")
     print()
 
-    # Execute orders
+    # Merge sell orders into target positions (sell orders take priority)
+    merged_target_positions = dict(allocation_result.target_positions)
+
+    if sell_orders:
+        print(f"\nMerging {len(sell_orders)} sell orders into target positions...")
+        for sell_order in sell_orders:
+            symbol = sell_order["symbol"]
+            sell_qty = sell_order["quantity"]  # Negative quantity
+
+            # Sell orders override buy intents for the same symbol
+            if symbol in merged_target_positions:
+                print(f"  {symbol}: Replacing BUY intent with SELL order (quantity: {sell_qty})")
+
+            merged_target_positions[symbol] = sell_qty
+
+        print()
+
+    # Execute orders (both buy and sell)
     print("Executing orders...")
     executor = AlpacaExecutor(broker, config, dry_run=dry_run)
     execution_result = executor.reconcile_and_execute(
-        allocation_result.target_positions,
+        merged_target_positions,
         current_prices,
     )
 
@@ -780,11 +1184,21 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
     error_log = log_dir / "loop_errors.log"
 
     # Initialize runtime state for loop timing tracking
-    from .state import RuntimeState, load_runtime_state, save_runtime_state
+    from .state import load_runtime_state, save_runtime_state
 
     runtime_state = load_runtime_state()
-    runtime_state.loop_interval_seconds = sleep_seconds
-    save_runtime_state(runtime_state)
+    # Only set interval from command line if not already set in state
+    # This allows UI changes to persist across iterations
+    if runtime_state.loop_interval_seconds == 0:
+        runtime_state.loop_interval_seconds = sleep_seconds
+        save_runtime_state(runtime_state)
+    else:
+        # Use interval from state file (may have been updated by UI)
+        sleep_seconds = runtime_state.loop_interval_seconds
+        print(
+            f"Using loop interval from state: {sleep_seconds} seconds ({sleep_seconds / 3600:.1f} hours)"
+        )
+        print()
 
     print("=" * 80)
     print("LOOP MODE ENABLED")
@@ -842,6 +1256,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         # Record loop iteration start time (UTC for state tracking)
         loop_start_utc = datetime.now(UTC)
         runtime_state.last_loop_start = loop_start_utc.isoformat()
+        # Preserve loop_interval_seconds from file (may have been changed by UI)
+        preserved_state = load_runtime_state()
+        runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
         save_runtime_state(runtime_state)
 
         print(f"\n{'=' * 80}")
@@ -852,8 +1269,6 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             # Auto-generate advisor proposals if interval elapsed (best-effort)
             if config.llm_auto_generate_enabled and universe_registry is not None:
                 try:
-                    from pathlib import Path
-
                     from src.app.universe_advisor.storage import load_proposals
 
                     proposals_file = Path("out/universe_proposals.json")
@@ -862,8 +1277,6 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                     if proposals_file.exists():
                         existing = load_proposals(proposals_file)
                         if existing:
-                            from datetime import UTC, datetime
-
                             generated_at = datetime.fromisoformat(existing.get("generated_at", ""))
                             elapsed_hours = (
                                 datetime.now(UTC) - generated_at
@@ -978,8 +1391,6 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
 
                         # Mark related proposals as APPLIED
                         try:
-                            from pathlib import Path
-
                             from src.app.universe_advisor.apply import mark_applied
 
                             proposals_file = Path("out/universe_proposals.json")
@@ -1032,10 +1443,11 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             loop_end_utc = datetime.now(UTC)
             runtime_state.last_loop_end = loop_end_utc.isoformat()
             # Calculate next run time (loop_end + sleep_seconds)
-            from datetime import timedelta
-
             next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
             runtime_state.next_loop_at = next_run_utc.isoformat()
+            # Preserve loop_interval_seconds from file (may have been changed by UI)
+            preserved_state = load_runtime_state()
+            runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
             save_runtime_state(runtime_state)
 
             # Capture equity snapshot (best-effort)
@@ -1098,10 +1510,11 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             loop_end_utc = datetime.now(UTC)
             runtime_state.last_loop_end = loop_end_utc.isoformat()
             # Calculate next run time (loop_end + sleep_seconds)
-            from datetime import timedelta
-
             next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
             runtime_state.next_loop_at = next_run_utc.isoformat()
+            # Preserve loop_interval_seconds from file (may have been changed by UI)
+            preserved_state = load_runtime_state()
+            runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
             save_runtime_state(runtime_state)
 
             print(f"\n{'=' * 80}")
@@ -1111,11 +1524,24 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             print("Continuing to next iteration...")
             print(f"{'=' * 80}\n")
 
+        # Hot-reload loop interval from runtime state (allows changing interval without restart)
+        try:
+            from src.app.state import load_runtime_state
+
+            reloaded_state = load_runtime_state()
+            if reloaded_state.loop_interval_seconds != sleep_seconds:
+                old_interval = sleep_seconds
+                sleep_seconds = reloaded_state.loop_interval_seconds
+                runtime_state.loop_interval_seconds = sleep_seconds
+                print(
+                    f"Loop interval updated: {old_interval}s -> {sleep_seconds}s ({sleep_seconds / 3600:.1f} hours)"
+                )
+        except Exception as e:
+            print(f"WARNING: Failed to reload loop interval: {e}")
+
         # Sleep before next iteration
         print(f"Sleeping for {sleep_seconds} seconds ({sleep_seconds / 3600:.1f} hours)...")
         # Calculate next run time in market time
-        from datetime import timedelta
-
         next_run = get_market_time_now() + timedelta(seconds=sleep_seconds)
         print(f"Next run at: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print()

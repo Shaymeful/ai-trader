@@ -93,6 +93,16 @@ class RuntimeResponse(BaseModel):
     updated_at: str = Field(description="ISO timestamp of state file update (UTC)")
 
 
+class LoopIntervalRequest(BaseModel):
+    """Request to update loop interval."""
+
+    loop_interval_seconds: int = Field(
+        description="New loop interval in seconds",
+        ge=30,
+        le=86400,
+    )
+
+
 class AccountSummaryResponse(BaseModel):
     """Account summary response."""
 
@@ -244,6 +254,48 @@ class SelectorStatusResponse(BaseModel):
     candidates_count: int
     candidates_by_action: dict[str, int]
     last_error: str | None
+
+
+class AdvisorRunInfo(BaseModel):
+    """Advisor run information."""
+
+    run_id: str
+    advisor_type: str  # "universe_advisor" | "exit_advisor"
+    started_at: str
+    finished_at: str
+    duration_seconds: float
+    providers_used: list[str]
+    model_name: str | None
+    universe_size: int
+    news_events_count: int
+    market_regime: str | None
+    raw_ideas_generated: int
+    filtered_out: dict[str, int]
+    final_proposals_count: int
+    status: str  # "success" | "partial" | "error"
+    error_message: str | None
+    rationale_summary: list[str]
+
+
+class AdvisorRunsResponse(BaseModel):
+    """Advisor runs list response."""
+
+    runs: list[AdvisorRunInfo]
+    total_runs: int
+
+
+class AdvisorPipelineStatus(BaseModel):
+    """Pipeline status summary."""
+
+    last_universe_run: str | None
+    last_exit_run: str | None
+    universe_evaluated: int
+    universe_filtered_out: int
+    universe_final: int
+    exit_evaluated: int
+    exit_filtered_out: int
+    exit_final: int
+    top_filter_reasons: dict[str, int]
 
 
 class SectorInfo(BaseModel):
@@ -418,6 +470,40 @@ async def get_runtime():
         seconds_until_next_loop=seconds_until_next,
         updated_at=runtime_state.updated_at,
     )
+
+
+@app.post("/runtime/loop_interval", response_model=ChangeResponse)
+async def update_loop_interval(request: LoopIntervalRequest):
+    """
+    Update loop interval.
+
+    The new interval will be picked up by the runner on the next iteration.
+
+    Args:
+        request: Loop interval update request
+
+    Returns:
+        Success response
+    """
+    from src.app.state import load_runtime_state, save_runtime_state
+
+    try:
+        # Load current state
+        runtime_state = load_runtime_state()
+
+        # Update interval
+        runtime_state.loop_interval_seconds = request.loop_interval_seconds
+
+        # Save atomically
+        save_runtime_state(runtime_state)
+
+        return ChangeResponse(
+            success=True,
+            message=f"Loop interval updated to {request.loop_interval_seconds} seconds. Change will take effect on next iteration.",
+            pending_version=None,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update loop interval: {e}") from e
 
 
 @app.get("/account/summary", response_model=AccountSummaryResponse)
@@ -810,6 +896,81 @@ async def get_selector_status():
     )
 
 
+@app.get("/advisor/runs", response_model=AdvisorRunsResponse)
+async def get_advisor_runs(max_runs: int = 50):
+    """Get recent advisor runs with telemetry."""
+    from src.app.advisor_telemetry import AdvisorTelemetry
+
+    try:
+        telemetry = AdvisorTelemetry()
+        runs_data = telemetry.read_recent_runs(max_runs=max_runs)
+
+        runs = [AdvisorRunInfo(**run) for run in runs_data]
+
+        return AdvisorRunsResponse(
+            runs=runs,
+            total_runs=len(runs),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load advisor runs: {e}") from e
+
+
+@app.get("/advisor/status", response_model=AdvisorPipelineStatus)
+async def get_advisor_pipeline_status():
+    """Get advisor pipeline status summary."""
+    from src.app.advisor_telemetry import AdvisorTelemetry
+
+    try:
+        telemetry = AdvisorTelemetry()
+        runs = telemetry.read_recent_runs(max_runs=20)
+
+        # Find last runs by type
+        last_universe_run = None
+        last_exit_run = None
+        universe_stats = {"evaluated": 0, "filtered": 0, "final": 0}
+        exit_stats = {"evaluated": 0, "filtered": 0, "final": 0}
+        all_filters = {}
+
+        for run in runs:
+            advisor_type = run.get("advisor_type")
+            if advisor_type == "universe_advisor" and not last_universe_run:
+                last_universe_run = run.get("finished_at")
+                universe_stats["evaluated"] = run.get("raw_ideas_generated", 0)
+                universe_stats["filtered"] = sum(run.get("filtered_out", {}).values())
+                universe_stats["final"] = run.get("final_proposals_count", 0)
+
+                # Aggregate filter reasons
+                for reason, count in run.get("filtered_out", {}).items():
+                    all_filters[reason] = all_filters.get(reason, 0) + count
+
+            elif advisor_type == "exit_advisor" and not last_exit_run:
+                last_exit_run = run.get("finished_at")
+                exit_stats["evaluated"] = run.get("raw_ideas_generated", 0)
+                exit_stats["filtered"] = sum(run.get("filtered_out", {}).values())
+                exit_stats["final"] = run.get("final_proposals_count", 0)
+
+                # Aggregate filter reasons
+                for reason, count in run.get("filtered_out", {}).items():
+                    all_filters[reason] = all_filters.get(reason, 0) + count
+
+        # Get top 3 filter reasons
+        top_filters = dict(sorted(all_filters.items(), key=lambda x: x[1], reverse=True)[:3])
+
+        return AdvisorPipelineStatus(
+            last_universe_run=last_universe_run,
+            last_exit_run=last_exit_run,
+            universe_evaluated=universe_stats["evaluated"],
+            universe_filtered_out=universe_stats["filtered"],
+            universe_final=universe_stats["final"],
+            exit_evaluated=exit_stats["evaluated"],
+            exit_filtered_out=exit_stats["filtered"],
+            exit_final=exit_stats["final"],
+            top_filter_reasons=top_filters,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load pipeline status: {e}") from e
+
+
 @app.get("/universe/sectors", response_model=UniverseSectorsResponse)
 async def get_universe_sectors():
     """
@@ -1027,26 +1188,7 @@ async def generate_proposals_endpoint(request: GenerateRequest):
             "timeout": config.llm_timeout,
         }
 
-        # Prepare full config dict for constituent proposals
-        full_config_dict = {
-            "llm_mode": config.llm_mode,
-            "llm_primary": config.llm_primary,
-            "llm_openai_model": config.llm_openai_model,
-            "llm_anthropic_model": config.llm_anthropic_model,
-            "llm_timeout": config.llm_timeout,
-            "llm_enable_constituent_proposals": config.llm_enable_constituent_proposals,
-            "llm_allow_constituent_removals": config.llm_allow_constituent_removals,
-            "llm_max_add_per_run": config.llm_max_add_per_run,
-            "llm_max_remove_per_run": config.llm_max_remove_per_run,
-            "llm_min_confidence_add": config.llm_min_confidence_add,
-            "llm_min_confidence_remove": config.llm_min_confidence_remove,
-            "llm_cooldown_days_per_ticker": config.llm_cooldown_days_per_ticker,
-            "llm_ticker_blacklist": config.llm_ticker_blacklist,
-            "llm_rss_lookback_hours": config.llm_rss_lookback_hours,
-        }
-
         history_file = Path("out/universe_proposals_history.jsonl")
-        candidates_file = Path("out/selector/events.jsonl")
 
         proposal_set = generate_proposals(
             llm_config,
@@ -1054,9 +1196,6 @@ async def generate_proposals_endpoint(request: GenerateRequest):
             events,
             sectors,
             config.llm_proposal_ttl_minutes,
-            full_config=full_config_dict,
-            history_file=history_file,
-            candidates_file=candidates_file,
         )
 
         # Apply guardrails

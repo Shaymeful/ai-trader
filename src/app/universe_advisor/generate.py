@@ -7,6 +7,7 @@ from pathlib import Path
 
 from src.app.llm.factory import get_providers_for_mode
 
+from ..advisor_telemetry import AdvisorTelemetry, create_telemetry_context
 from .models import Disagreement, Proposal, ProposalSet, RegimeData
 
 
@@ -229,8 +230,7 @@ def _merge_ensemble_responses(
                 # Agreement → create ensemble proposal
                 avg_confidence = (openai_prop["confidence"] + anthropic_prop["confidence"]) / 2
                 combined_rationale = (
-                    f"OpenAI: {openai_prop['rationale']} | "
-                    f"Claude: {anthropic_prop['rationale']}"
+                    f"OpenAI: {openai_prop['rationale']} | Claude: {anthropic_prop['rationale']}"
                 )
 
                 proposals.append(
@@ -240,7 +240,9 @@ def _merge_ensemble_responses(
                         recommended_enabled=openai_prop["recommended_enabled"],
                         confidence=avg_confidence,
                         rationale=combined_rationale,
-                        supporting_headlines=_combine_headlines(openai_prop, anthropic_prop, events),
+                        supporting_headlines=_combine_headlines(
+                            openai_prop, anthropic_prop, events
+                        ),
                         provider="ensemble",
                         created_at=now.isoformat(),
                         expires_at=expires_at.isoformat(),
@@ -280,6 +282,7 @@ def generate_proposals(
     events: list[dict],
     sectors: dict[str, dict],
     ttl_minutes: int = 120,
+    enable_telemetry: bool = True,
 ) -> ProposalSet:
     """
     Generate proposals using configured LLM provider(s).
@@ -290,6 +293,7 @@ def generate_proposals(
         events: Recent RSS events
         sectors: Sector definitions
         ttl_minutes: Proposal time-to-live
+        enable_telemetry: Whether to log telemetry
 
     Returns:
         ProposalSet with proposals and disagreements
@@ -305,68 +309,125 @@ def generate_proposals(
         timeout=config.get("timeout", 30),
     )
 
-    prompt = build_prompt(regime, events, sectors)
-    schema = {
-        "proposals": [
-            {
-                "sector_name": "string",
-                "recommended_enabled": "boolean",
-                "confidence": "number",
-                "rationale": "string",
-                "supporting_headline_numbers": ["number"],
-            }
-        ]
-    }
+    # Start telemetry tracking
+    telemetry_context = None
+    if enable_telemetry:
+        provider_names = []
+        if mode in ["openai_only", "anthropic_only"]:
+            provider_names = [providers[0].get_provider_name()]
+        elif mode == "ensemble":
+            provider_names = ["openai", "anthropic"]
+        else:  # primary_fallback
+            provider_names = [primary]
 
-    generation_id = str(uuid.uuid4())
-    now = datetime.now(UTC)
-    expires_at = now + timedelta(minutes=ttl_minutes)
-
-    proposals = []
-    disagreements = []
-
-    if mode in ["openai_only", "anthropic_only"]:
-        # Single provider
-        provider = providers[0]
-        response = provider.generate_structured_json(prompt, schema)
-
-        for prop_data in response.get("proposals", []):
-            proposals.append(
-                _create_proposal(prop_data, events, provider.get_provider_name(), now, expires_at)
-            )
-
-    elif mode == "primary_fallback":
-        # Try primary, fallback to secondary
-        primary_provider, fallback_provider = providers
-
-        try:
-            response = primary_provider.generate_structured_json(prompt, schema)
-            provider_name = primary_provider.get_provider_name()
-        except Exception as e:
-            print(f"Primary provider failed: {e}, falling back...")
-            response = fallback_provider.generate_structured_json(prompt, schema)
-            provider_name = fallback_provider.get_provider_name()
-
-        for prop_data in response.get("proposals", []):
-            proposals.append(_create_proposal(prop_data, events, provider_name, now, expires_at))
-
-    elif mode == "ensemble":
-        # Call both providers
-        openai_provider, anthropic_provider = providers
-
-        openai_response = openai_provider.generate_structured_json(prompt, schema)
-        anthropic_response = anthropic_provider.generate_structured_json(prompt, schema)
-
-        # Merge with consensus logic
-        proposals, disagreements = _merge_ensemble_responses(
-            openai_response, anthropic_response, events, now, expires_at
+        telemetry_context = create_telemetry_context(
+            advisor_type="universe_advisor",
+            providers=provider_names,
+            model_name=config.get("openai_model") or config.get("anthropic_model"),
+            universe_size=len(sectors),
+            news_count=len(events),
+            regime=regime.regime.value if regime else None,
         )
 
-    return ProposalSet(
-        generation_id=generation_id,
-        proposals=proposals,
-        disagreements=disagreements,
-        regime=regime,
-        headline_count=len(events),
-        generated_at=now.isoformat(),
-    )
+    try:
+        prompt = build_prompt(regime, events, sectors)
+        schema = {
+            "proposals": [
+                {
+                    "sector_name": "string",
+                    "recommended_enabled": "boolean",
+                    "confidence": "number",
+                    "rationale": "string",
+                    "supporting_headline_numbers": ["number"],
+                }
+            ]
+        }
+
+        generation_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+        expires_at = now + timedelta(minutes=ttl_minutes)
+
+        proposals = []
+        disagreements = []
+        raw_ideas_count = 0
+
+        if mode in ["openai_only", "anthropic_only"]:
+            # Single provider
+            provider = providers[0]
+            response = provider.generate_structured_json(prompt, schema)
+            raw_ideas_count = len(response.get("proposals", []))
+
+            for prop_data in response.get("proposals", []):
+                proposals.append(
+                    _create_proposal(
+                        prop_data, events, provider.get_provider_name(), now, expires_at
+                    )
+                )
+
+        elif mode == "primary_fallback":
+            # Try primary, fallback to secondary
+            primary_provider, fallback_provider = providers
+
+            try:
+                response = primary_provider.generate_structured_json(prompt, schema)
+                provider_name = primary_provider.get_provider_name()
+            except Exception as e:
+                print(f"Primary provider failed: {e}, falling back...")
+                response = fallback_provider.generate_structured_json(prompt, schema)
+                provider_name = fallback_provider.get_provider_name()
+
+            raw_ideas_count = len(response.get("proposals", []))
+
+            for prop_data in response.get("proposals", []):
+                proposals.append(
+                    _create_proposal(prop_data, events, provider_name, now, expires_at)
+                )
+
+        elif mode == "ensemble":
+            # Call both providers
+            openai_provider, anthropic_provider = providers
+
+            openai_response = openai_provider.generate_structured_json(prompt, schema)
+            anthropic_response = anthropic_provider.generate_structured_json(prompt, schema)
+
+            raw_ideas_count = len(openai_response.get("proposals", [])) + len(
+                anthropic_response.get("proposals", [])
+            )
+
+            # Merge with consensus logic
+            proposals, disagreements = _merge_ensemble_responses(
+                openai_response, anthropic_response, events, now, expires_at
+            )
+
+        # Update telemetry
+        if telemetry_context:
+            telemetry_context.add_raw_ideas(raw_ideas_count)
+            if disagreements:
+                telemetry_context.add_filtered("contradiction", len(disagreements))
+            telemetry_context.set_final_count(len(proposals))
+            if proposals:
+                telemetry_context.add_rationale(
+                    f"Generated {len(proposals)} sector proposals from {len(events)} news events"
+                )
+            else:
+                telemetry_context.add_rationale("No proposals met criteria")
+
+            # Log telemetry
+            event = telemetry_context.finalize()
+            AdvisorTelemetry().log_run(event)
+
+        return ProposalSet(
+            generation_id=generation_id,
+            proposals=proposals,
+            disagreements=disagreements,
+            regime=regime,
+            headline_count=len(events),
+            generated_at=now.isoformat(),
+        )
+
+    except Exception as e:
+        if telemetry_context:
+            telemetry_context.set_status("error", str(e))
+            event = telemetry_context.finalize()
+            AdvisorTelemetry().log_run(event)
+        raise

@@ -914,6 +914,151 @@
             display: flex;
         }
 
+        /* Advisor Log Section */
+        .advisor-log-section {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .advisor-run-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            border-left: 3px solid #3b82f6;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .advisor-run-item:hover {
+            background: #1e293b;
+        }
+
+        .advisor-run-item.exit-advisor {
+            border-left-color: #10b981;
+        }
+
+        .advisor-run-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .advisor-run-type {
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+
+        .advisor-status-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .status-success {
+            background: #10b98120;
+            color: #10b981;
+        }
+
+        .status-error {
+            background: #ef444420;
+            color: #ef4444;
+        }
+
+        .status-partial {
+            background: #f59e0b20;
+            color: #f59e0b;
+        }
+
+        .advisor-run-stats {
+            display: flex;
+            gap: 1.5rem;
+            font-size: 0.85rem;
+            color: #94a3b8;
+            margin-bottom: 0.5rem;
+        }
+
+        .advisor-run-details {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #334155;
+            display: none;
+            font-size: 0.85rem;
+        }
+
+        .advisor-run-details.expanded {
+            display: block;
+        }
+
+        .advisor-detail-row {
+            display: grid;
+            grid-template-columns: 150px 1fr;
+            padding: 0.25rem 0;
+            color: #94a3b8;
+        }
+
+        .advisor-detail-label {
+            color: #64748b;
+            font-weight: 500;
+        }
+
+        .advisor-filters {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .advisor-rationale {
+            margin-top: 0.5rem;
+            padding: 0.75rem;
+            background: #1e293b;
+            border-radius: 6px;
+            border-left: 3px solid #3b82f6;
+        }
+
+        .advisor-rationale ul {
+            margin: 0.5rem 0 0 1.25rem;
+            color: #e2e8f0;
+        }
+
+        /* Pipeline Status Header */
+        .pipeline-status {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 3px solid #3b82f6;
+        }
+
+        .pipeline-status-row {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+            font-size: 0.85rem;
+        }
+
+        .pipeline-stat {
+            color: #94a3b8;
+        }
+
+        .pipeline-stat strong {
+            color: #f1f5f9;
+            margin-right: 0.25rem;
+        }
+
+        .pipeline-filter-reasons {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #334155;
+            font-size: 0.8rem;
+            color: #94a3b8;
+        }
+
         /* Candidates Section */
         .candidates-section {
             background: #1e293b;
@@ -1434,6 +1579,16 @@
                 <div class="loop-status-item">
                     <div class="loop-status-label">Loop Interval</div>
                     <div class="loop-status-value" id="loop-interval">--</div>
+                    <div style="margin-top: 0.5rem;">
+                        <input type="number" id="loop-interval-input"
+                               style="width: 80px; padding: 0.25rem; border-radius: 4px; border: 1px solid #475569; background: #0f172a; color: #f1f5f9; display: none; margin-right: 0.5rem;"
+                               placeholder="Minutes"
+                               min="1"
+                               max="1440" />
+                        <button onclick="toggleLoopIntervalEdit()" class="btn-sm btn-primary" id="loop-interval-edit-btn">Edit</button>
+                        <button onclick="saveLoopInterval()" class="btn-sm btn-success" id="loop-interval-save-btn" style="display: none;">Save</button>
+                        <button onclick="cancelLoopIntervalEdit()" class="btn-sm" id="loop-interval-cancel-btn" style="display: none;">Cancel</button>
+                    </div>
                 </div>
                 <div class="loop-status-item">
                     <div class="loop-status-label">Last Execution</div>
@@ -1613,12 +1768,70 @@
             </div>
         </div>
 
+        <!-- Advisor Log Section -->
+        <div class="advisor-log-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h2 style="margin: 0;">Advisor Log</h2>
+                <div style="color: #94a3b8; font-size: 0.85rem;">
+                    <span id="advisor-runs-count">0</span> runs logged
+                </div>
+            </div>
+
+            <div class="advisor-filters">
+                <select id="filter-advisor-type" class="filter-input" onchange="filterAdvisorRuns()">
+                    <option value="">All Types</option>
+                    <option value="universe_advisor">Universe Advisor</option>
+                    <option value="exit_advisor">Exit Advisor</option>
+                </select>
+                <select id="filter-advisor-status" class="filter-input" onchange="filterAdvisorRuns()">
+                    <option value="">All Status</option>
+                    <option value="success">Success</option>
+                    <option value="partial">Partial</option>
+                    <option value="error">Error</option>
+                </select>
+            </div>
+
+            <div id="advisor-runs-container">
+                <p style="color: #64748b; text-align: center;">Loading advisor runs...</p>
+            </div>
+        </div>
+
         <div class="candidates-section">
             <div class="candidates-header">
                 <h2 style="margin: 0;">Candidates</h2>
                 <div style="color: #94a3b8; font-size: 0.85rem;">
                     <span id="candidates-count">0</span> candidates |
                     Last generated: <span id="candidates-last-generated">N/A</span>
+                </div>
+            </div>
+
+            <!-- Pipeline Status Header -->
+            <div class="pipeline-status" id="pipeline-status" style="display: none;">
+                <div class="pipeline-status-row">
+                    <div class="pipeline-stat">
+                        <strong>Universe Advisor:</strong>
+                        <span id="pipeline-universe-time">N/A</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <strong>Exit Advisor:</strong>
+                        <span id="pipeline-exit-time">N/A</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <strong>Evaluated:</strong>
+                        <span id="pipeline-evaluated">0</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <strong>Filtered:</strong>
+                        <span id="pipeline-filtered">0</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <strong>Tradeable:</strong>
+                        <span id="pipeline-tradeable">0</span>
+                    </div>
+                </div>
+                <div class="pipeline-filter-reasons" id="pipeline-filter-reasons" style="display: none;">
+                    <strong>Top Filters:</strong>
+                    <span id="pipeline-top-filters"></span>
                 </div>
             </div>
 
@@ -2155,6 +2368,73 @@
             }
         }
 
+        function toggleLoopIntervalEdit() {
+            const input = document.getElementById('loop-interval-input');
+            const editBtn = document.getElementById('loop-interval-edit-btn');
+            const saveBtn = document.getElementById('loop-interval-save-btn');
+            const cancelBtn = document.getElementById('loop-interval-cancel-btn');
+
+            // Populate input with current value (convert hours to minutes)
+            if (window.runtimeData && window.runtimeData.loop_interval_seconds) {
+                const minutes = Math.round(window.runtimeData.loop_interval_seconds / 60);
+                input.value = minutes;
+            }
+
+            // Toggle visibility
+            input.style.display = 'inline-block';
+            saveBtn.style.display = 'inline-block';
+            cancelBtn.style.display = 'inline-block';
+            editBtn.style.display = 'none';
+            input.focus();
+        }
+
+        function cancelLoopIntervalEdit() {
+            const input = document.getElementById('loop-interval-input');
+            const editBtn = document.getElementById('loop-interval-edit-btn');
+            const saveBtn = document.getElementById('loop-interval-save-btn');
+            const cancelBtn = document.getElementById('loop-interval-cancel-btn');
+
+            // Hide edit controls
+            input.style.display = 'none';
+            saveBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+            editBtn.style.display = 'inline-block';
+        }
+
+        async function saveLoopInterval() {
+            const input = document.getElementById('loop-interval-input');
+            const minutes = parseInt(input.value);
+
+            if (isNaN(minutes) || minutes < 1 || minutes > 1440) {
+                showError('Please enter a valid interval between 1 and 1440 minutes (24 hours)');
+                return;
+            }
+
+            const seconds = minutes * 60;
+
+            try {
+                const response = await fetch('/runtime/loop_interval', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ loop_interval_seconds: seconds })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    cancelLoopIntervalEdit();
+                    // Reload loop status to show updated interval
+                    setTimeout(() => loadLoopStatus(), 500);
+                } else {
+                    showError(result.detail || 'Failed to update loop interval');
+                }
+            } catch (error) {
+                console.error('Error saving loop interval:', error);
+                showError('Failed to update loop interval');
+            }
+        }
+
         async function loadDashboard() {
             try {
                 // Load health status
@@ -2198,6 +2478,12 @@
                 candidatesData = candidatesResult.candidates;
                 renderCandidates(candidatesData);
                 updateCandidatesHeader(candidatesResult);
+
+                // Load advisor runs
+                await loadAdvisorRuns();
+
+                // Load pipeline status
+                await loadPipelineStatus();
 
                 // Load activity
                 const activityResponse = await fetch('/activity?limit=20');
@@ -2401,6 +2687,207 @@
             });
 
             renderCandidates(filtered);
+        }
+
+        // Advisor Runs Management
+        let advisorRunsData = [];
+
+        async function loadAdvisorRuns() {
+            try {
+                const response = await fetch('/advisor/runs?max_runs=30');
+                if (!response.ok) throw new Error('Failed to load advisor runs');
+
+                const data = await response.json();
+                advisorRunsData = data.runs;
+                renderAdvisorRuns(advisorRunsData);
+                document.getElementById('advisor-runs-count').textContent = data.total_runs;
+            } catch (error) {
+                console.error('Error loading advisor runs:', error);
+                document.getElementById('advisor-runs-container').innerHTML =
+                    '<p style="color: #ef4444; text-align: center;">Failed to load advisor runs</p>';
+            }
+        }
+
+        function renderAdvisorRuns(runs) {
+            const container = document.getElementById('advisor-runs-container');
+
+            if (runs.length === 0) {
+                container.innerHTML = '<p style="color: #64748b; text-align: center;">No advisor runs logged yet</p>';
+                return;
+            }
+
+            container.innerHTML = runs.map(run => {
+                const statusClass = `status-${run.status}`;
+                const advisorClass = run.advisor_type === 'exit_advisor' ? 'exit-advisor' : '';
+                const advisorLabel = run.advisor_type === 'universe_advisor' ? 'Universe Advisor' : 'Exit Advisor';
+
+                // Format timestamp
+                const finishedDate = new Date(run.finished_at);
+                const timeStr = finishedDate.toLocaleString();
+
+                // Format filter breakdown
+                const filterEntries = Object.entries(run.filtered_out || {});
+                const filterText = filterEntries.length > 0
+                    ? filterEntries.map(([reason, count]) => `${reason} (${count})`).join(', ')
+                    : 'none';
+
+                return `
+                    <div class="advisor-run-item ${advisorClass}" onclick="toggleAdvisorDetails(this)">
+                        <div class="advisor-run-header">
+                            <div>
+                                <span class="advisor-run-type">${advisorLabel}</span>
+                                <span style="color: #94a3b8; font-size: 0.85rem; margin-left: 0.5rem;">${timeStr}</span>
+                            </div>
+                            <div>
+                                <span class="advisor-status-badge ${statusClass}">
+                                    ${run.status === 'success' ? '✓' : run.status === 'error' ? '✗' : '⚠'} ${run.status.toUpperCase()}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="advisor-run-stats">
+                            <div><strong>${run.raw_ideas_generated}</strong> raw ideas</div>
+                            <div>→ <strong>${Object.values(run.filtered_out || {}).reduce((a,b) => a+b, 0)}</strong> filtered</div>
+                            <div>→ <strong>${run.final_proposals_count}</strong> final</div>
+                            <div style="color: #64748b;">| ${run.duration_seconds.toFixed(2)}s</div>
+                        </div>
+
+                        <div class="advisor-run-details">
+                            <div class="advisor-detail-row">
+                                <span class="advisor-detail-label">Run ID:</span>
+                                <span>${run.run_id}</span>
+                            </div>
+                            <div class="advisor-detail-row">
+                                <span class="advisor-detail-label">Providers:</span>
+                                <span>${run.providers_used.join(', ')}${run.model_name ? ` (${run.model_name})` : ''}</span>
+                            </div>
+                            <div class="advisor-detail-row">
+                                <span class="advisor-detail-label">Universe Size:</span>
+                                <span>${run.universe_size}</span>
+                            </div>
+                            <div class="advisor-detail-row">
+                                <span class="advisor-detail-label">News Events:</span>
+                                <span>${run.news_events_count}</span>
+                            </div>
+                            ${run.market_regime ? `
+                            <div class="advisor-detail-row">
+                                <span class="advisor-detail-label">Market Regime:</span>
+                                <span>${run.market_regime}</span>
+                            </div>
+                            ` : ''}
+                            <div class="advisor-detail-row">
+                                <span class="advisor-detail-label">Filtered:</span>
+                                <span>${filterText}</span>
+                            </div>
+                            ${run.error_message ? `
+                            <div class="advisor-detail-row">
+                                <span class="advisor-detail-label">Error:</span>
+                                <span style="color: #ef4444;">${run.error_message}</span>
+                            </div>
+                            ` : ''}
+                            ${run.rationale_summary && run.rationale_summary.length > 0 ? `
+                            <div class="advisor-rationale">
+                                <strong style="color: #3b82f6;">Rationale:</strong>
+                                <ul>
+                                    ${run.rationale_summary.map(r => `<li>${r}</li>`).join('')}
+                                </ul>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleAdvisorDetails(element) {
+            const details = element.querySelector('.advisor-run-details');
+            if (details) {
+                details.classList.toggle('expanded');
+            }
+        }
+
+        function filterAdvisorRuns() {
+            const advisorType = document.getElementById('filter-advisor-type').value;
+            const status = document.getElementById('filter-advisor-status').value;
+
+            const filtered = advisorRunsData.filter(run => {
+                if (advisorType && run.advisor_type !== advisorType) return false;
+                if (status && run.status !== status) return false;
+                return true;
+            });
+
+            renderAdvisorRuns(filtered);
+        }
+
+        // Pipeline Status Management
+        async function loadPipelineStatus() {
+            try {
+                const response = await fetch('/advisor/status');
+                if (!response.ok) throw new Error('Failed to load pipeline status');
+
+                const data = await response.json();
+                renderPipelineStatus(data);
+            } catch (error) {
+                console.error('Error loading pipeline status:', error);
+                // Hide pipeline status on error
+                document.getElementById('pipeline-status').style.display = 'none';
+            }
+        }
+
+        function renderPipelineStatus(data) {
+            const statusDiv = document.getElementById('pipeline-status');
+
+            // Only show if there's data
+            if (!data.last_universe_run && !data.last_exit_run) {
+                statusDiv.style.display = 'none';
+                return;
+            }
+
+            statusDiv.style.display = 'block';
+
+            // Format timestamps
+            const universeTime = data.last_universe_run
+                ? formatTimeAgo(new Date(data.last_universe_run))
+                : 'N/A';
+            const exitTime = data.last_exit_run
+                ? formatTimeAgo(new Date(data.last_exit_run))
+                : 'N/A';
+
+            document.getElementById('pipeline-universe-time').textContent = universeTime;
+            document.getElementById('pipeline-exit-time').textContent = exitTime;
+
+            // Calculate totals
+            const totalEvaluated = data.universe_evaluated + data.exit_evaluated;
+            const totalFiltered = data.universe_filtered_out + data.exit_filtered_out;
+            const totalTradeable = data.universe_final + data.exit_final;
+
+            document.getElementById('pipeline-evaluated').textContent = totalEvaluated;
+            document.getElementById('pipeline-filtered').textContent = totalFiltered;
+            document.getElementById('pipeline-tradeable').textContent = totalTradeable;
+
+            // Show top filter reasons
+            const filterReasons = data.top_filter_reasons;
+            if (filterReasons && Object.keys(filterReasons).length > 0) {
+                const filterText = Object.entries(filterReasons)
+                    .map(([reason, count]) => `${reason} (${count})`)
+                    .join(', ');
+                document.getElementById('pipeline-top-filters').textContent = filterText;
+                document.getElementById('pipeline-filter-reasons').style.display = 'block';
+            } else {
+                document.getElementById('pipeline-filter-reasons').style.display = 'none';
+            }
+        }
+
+        function formatTimeAgo(date) {
+            const seconds = Math.floor((new Date() - date) / 1000);
+
+            if (seconds < 60) return `${seconds}s ago`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ago`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${hours}h ago`;
+            const days = Math.floor(hours / 24);
+            return `${days}d ago`;
         }
 
         function updateAccountSummary(data) {
