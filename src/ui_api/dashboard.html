@@ -1710,6 +1710,7 @@
             <div class="advisor-tabs">
                 <button class="advisor-tab active" onclick="switchAdvisorTab('suggestions')">Suggestions</button>
                 <button class="advisor-tab" onclick="switchAdvisorTab('history')">History</button>
+                <button class="advisor-tab" onclick="switchAdvisorTab('log')">Log</button>
             </div>
 
             <!-- Suggestions Tab Content -->
@@ -1739,6 +1740,33 @@
                     <!-- Dynamically populated -->
                 </div>
             </div>
+
+            <!-- Log Tab Content -->
+            <div id="advisor-tab-log" class="advisor-tab-content">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <div style="color: #94a3b8; font-size: 0.85rem;">
+                        <span id="advisor-runs-count">0</span> runs logged
+                    </div>
+                </div>
+
+                <div class="advisor-filters">
+                    <select id="filter-advisor-type" class="filter-input" onchange="filterAdvisorRuns()">
+                        <option value="">All Types</option>
+                        <option value="universe_advisor">Universe Advisor</option>
+                        <option value="exit_advisor">Exit Advisor</option>
+                    </select>
+                    <select id="filter-advisor-status" class="filter-input" onchange="filterAdvisorRuns()">
+                        <option value="">All Status</option>
+                        <option value="success">Success</option>
+                        <option value="partial">Partial</option>
+                        <option value="error">Error</option>
+                    </select>
+                </div>
+
+                <div id="advisor-runs-container">
+                    <p style="color: #64748b; text-align: center;">Loading advisor runs...</p>
+                </div>
+            </div>
         </div>
 
         <div class="main-grid">
@@ -1765,34 +1793,6 @@
                 <div class="activity-feed" id="activity-feed">
                     <p style="color: #64748b; text-align: center;">Loading...</p>
                 </div>
-            </div>
-        </div>
-
-        <!-- Advisor Log Section -->
-        <div class="advisor-log-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                <h2 style="margin: 0;">Advisor Log</h2>
-                <div style="color: #94a3b8; font-size: 0.85rem;">
-                    <span id="advisor-runs-count">0</span> runs logged
-                </div>
-            </div>
-
-            <div class="advisor-filters">
-                <select id="filter-advisor-type" class="filter-input" onchange="filterAdvisorRuns()">
-                    <option value="">All Types</option>
-                    <option value="universe_advisor">Universe Advisor</option>
-                    <option value="exit_advisor">Exit Advisor</option>
-                </select>
-                <select id="filter-advisor-status" class="filter-input" onchange="filterAdvisorRuns()">
-                    <option value="">All Status</option>
-                    <option value="success">Success</option>
-                    <option value="partial">Partial</option>
-                    <option value="error">Error</option>
-                </select>
-            </div>
-
-            <div id="advisor-runs-container">
-                <p style="color: #64748b; text-align: center;">Loading advisor runs...</p>
             </div>
         </div>
 
@@ -2140,7 +2140,29 @@
 
             const proposalsList = document.getElementById('proposals-list');
             if (newProposals.length === 0) {
-                proposalsList.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 2rem;">No pending proposals. Click Generate.</div>';
+                // Check if there are filter reasons to display
+                if (data.filter_reasons && Object.keys(data.filter_reasons).length > 0) {
+                    const filterDisplay = Object.entries(data.filter_reasons)
+                        .map(([sector, reasons]) => `
+                            <div style="background: #1e293b; border: 1px solid #64748b; border-radius: 6px; padding: 1rem; margin-bottom: 0.5rem;">
+                                <div style="color: #f59e0b; font-weight: 600; margin-bottom: 0.5rem;">${sector}</div>
+                                <div style="color: #cbd5e1; font-size: 0.875rem;">
+                                    ${reasons.map(r => `• ${r}`).join('<br>')}
+                                </div>
+                            </div>
+                        `).join('');
+                    proposalsList.innerHTML = `
+                        <div style="color: #f59e0b; text-align: center; padding: 1rem; margin-bottom: 1rem; background: #422006; border: 1px solid #f59e0b; border-radius: 8px;">
+                            <strong>⚠ All proposals filtered by safety guardrails</strong>
+                            <div style="font-size: 0.875rem; margin-top: 0.5rem; color: #fbbf24;">
+                                ${Object.keys(data.filter_reasons).length} sectors were filtered. See details below.
+                            </div>
+                        </div>
+                        ${filterDisplay}
+                    `;
+                } else {
+                    proposalsList.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 2rem;">No pending proposals. Click Generate.</div>';
+                }
             } else {
                 proposalsList.innerHTML = newProposals.map(p => {
                     const proposalType = p.proposal_type || 'sector_toggle';
@@ -2211,9 +2233,11 @@
             });
             document.getElementById(`advisor-tab-${tab}`).classList.add('active');
 
-            // Load history when switching to history tab
+            // Load data when switching tabs
             if (tab === 'history') {
                 loadHistory();
+            } else if (tab === 'log') {
+                loadAdvisorRuns();
             }
         }
 

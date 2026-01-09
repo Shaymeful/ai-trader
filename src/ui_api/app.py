@@ -372,6 +372,9 @@ class ProposalsListResponse(BaseModel):
     regime: dict[str, Any]
     proposals: list[ProposalResponse]
     disagreements: list[DisagreementResponse]
+    filter_reasons: dict[str, list[str]] = Field(
+        default_factory=dict, description="Sectors filtered by guardrails with reasons"
+    )
 
 
 class GenerateRequest(BaseModel):
@@ -1109,11 +1112,13 @@ async def get_proposals():
             regime={},
             proposals=[],
             disagreements=[],
+            filter_reasons={},
         )
 
     # Convert to response models
     proposals = [ProposalResponse(**p) for p in data.get("proposals", [])]
     disagreements = [DisagreementResponse(**d) for d in data.get("disagreements", [])]
+    filter_reasons = data.get("filter_reasons", {})
 
     return ProposalsListResponse(
         generation_id=data.get("generation_id"),
@@ -1122,6 +1127,7 @@ async def get_proposals():
         regime=data.get("regime", {}),
         proposals=proposals,
         disagreements=disagreements,
+        filter_reasons=filter_reasons,
     )
 
 
@@ -1190,13 +1196,18 @@ async def generate_proposals_endpoint(request: GenerateRequest):
 
         history_file = Path("out/universe_proposals_history.jsonl")
 
+        # Generate proposals (with telemetry disabled - we'll log after guardrails)
         proposal_set = generate_proposals(
             llm_config,
             regime,
             events,
             sectors,
             config.llm_proposal_ttl_minutes,
+            enable_telemetry=False,
         )
+
+        # Track pre-guardrail count for telemetry
+        pre_guardrail_count = len(proposal_set.proposals)
 
         # Apply guardrails
         guardrails_config = {
@@ -1204,11 +1215,66 @@ async def generate_proposals_endpoint(request: GenerateRequest):
             "max_sector_toggles_per_day": config.llm_max_sector_toggles_per_day,
             "cooldown_days": config.llm_cooldown_days,
         }
-        proposal_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+        proposal_set, filter_reasons = apply_guardrails(
+            proposal_set, guardrails_config, history_file
+        )
 
-        # Save
+        # Log telemetry AFTER guardrails (so counts are accurate)
+        from src.app.advisor_telemetry import AdvisorTelemetry, create_telemetry_context
+
+        provider_mode = config.llm_mode
+        provider_names = []
+        if provider_mode == "ensemble":
+            provider_names = ["openai", "anthropic"]
+        else:
+            provider_names = [config.llm_primary]
+
+        telemetry_context = create_telemetry_context(
+            advisor_type="universe_advisor",
+            providers=provider_names,
+            model_name=config.llm_openai_model or config.llm_anthropic_model,
+            universe_size=len(sectors),
+            news_count=len(events),
+            regime=regime.regime.value,
+        )
+
+        telemetry_context.add_raw_ideas(pre_guardrail_count)
+
+        # Add filtering details
+        if filter_reasons:
+            for _sector_name, reasons in filter_reasons.items():
+                for reason in reasons:
+                    # Extract filter category from reason string
+                    if "confidence" in reason.lower():
+                        telemetry_context.add_filtered("confidence_too_low", 1)
+                    elif "cooldown" in reason.lower():
+                        telemetry_context.add_filtered("cooldown", 1)
+                    elif "max toggles" in reason.lower():
+                        telemetry_context.add_filtered("max_toggles_per_day", 1)
+                    elif "expired" in reason.lower():
+                        telemetry_context.add_filtered("expired", 1)
+
+        telemetry_context.set_final_count(len(proposal_set.proposals))
+
+        if proposal_set.proposals:
+            telemetry_context.add_rationale(
+                f"Generated {len(proposal_set.proposals)} sector proposals from {len(events)} news events"
+            )
+        else:
+            if filter_reasons:
+                filtered_sectors = ", ".join(filter_reasons.keys())
+                telemetry_context.add_rationale(
+                    f"All {pre_guardrail_count} proposals filtered: {filtered_sectors}"
+                )
+            else:
+                telemetry_context.add_rationale("No proposals met criteria")
+
+        event = telemetry_context.finalize()
+        AdvisorTelemetry().log_run(event)
+
+        # Save (with filter reasons for UI display)
         proposals_file = Path("out/universe_proposals.json")
-        save_proposals(proposal_set, proposals_file)
+        save_proposals(proposal_set, proposals_file, filter_reasons)
 
         # Log to ledger
         if ledger:
@@ -1218,14 +1284,23 @@ async def generate_proposals_endpoint(request: GenerateRequest):
                     "generation_id": proposal_set.generation_id,
                     "proposal_count": len(proposal_set.proposals),
                     "disagreement_count": len(proposal_set.disagreements),
+                    "filtered_count": len(filter_reasons),
                     "regime": regime.regime.value,
                     "headline_count": len(events),
                 }
             )
 
+        # Build message
+        message_parts = [f"Generated {len(proposal_set.proposals)} proposals"]
+        if len(proposal_set.disagreements) > 0:
+            message_parts.append(f"{len(proposal_set.disagreements)} disagreements")
+        if filter_reasons:
+            filtered_sectors = ", ".join(filter_reasons.keys())
+            message_parts.append(f"Filtered {len(filter_reasons)} sectors: {filtered_sectors}")
+
         return ChangeResponse(
             success=True,
-            message=f"Generated {len(proposal_set.proposals)} proposals, {len(proposal_set.disagreements)} disagreements.",
+            message=", ".join(message_parts) + ".",
             pending_version=None,
         )
 
