@@ -8,12 +8,15 @@ from tempfile import NamedTemporaryFile
 from .models import Proposal, ProposalSet
 
 
-def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
+def save_proposals(
+    proposal_set: ProposalSet, file_path: Path, filter_reasons: dict[str, list[str]] | None = None
+) -> None:
     """Save proposals to JSON file (atomic write).
-    
+
     Args:
         proposal_set: Proposals to save
         file_path: Path to JSON file
+        filter_reasons: Optional dict of sector_name -> list of filter reasons
     """
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -62,6 +65,10 @@ def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
         ],
     }
 
+    # Add filter reasons if provided
+    if filter_reasons:
+        data["filter_reasons"] = filter_reasons
+
     # Atomic write
     with NamedTemporaryFile(
         mode="w",
@@ -78,10 +85,10 @@ def save_proposals(proposal_set: ProposalSet, file_path: Path) -> None:
 
 def load_proposals(file_path: Path) -> dict | None:
     """Load proposals from JSON file.
-    
+
     Args:
         file_path: Path to JSON file
-        
+
     Returns:
         Proposals dict or None if file doesn't exist
     """
@@ -104,7 +111,7 @@ def append_to_history(
     history_file: Path,
 ) -> None:
     """Append proposal action to history file (append-only).
-    
+
     Args:
         proposal: Proposal being acted upon
         action: Action taken (APPROVED or REJECTED)

@@ -8,10 +8,10 @@ from .models import ProposalSet
 
 def load_history(history_file: Path) -> list[dict]:
     """Load proposal history from JSONL file.
-    
+
     Args:
         history_file: Path to history JSONL file
-        
+
     Returns:
         List of history entries
     """
@@ -36,7 +36,7 @@ def apply_guardrails(
     proposal_set: ProposalSet,
     config: dict,  # Guardrails config
     history_file: Path,
-) -> ProposalSet:
+) -> tuple[ProposalSet, dict[str, list[str]]]:
     """
     Apply safety guardrails to proposals.
 
@@ -52,7 +52,8 @@ def apply_guardrails(
         history_file: Path to history file
 
     Returns:
-        Filtered proposal set
+        Tuple of (filtered proposal set, filter reasons dict)
+        Filter reasons maps sector_name -> list of reasons
     """
     min_confidence = config.get("min_confidence", 0.70)
     max_toggles_per_day = config.get("max_sector_toggles_per_day", 1)
@@ -65,7 +66,6 @@ def apply_guardrails(
 
     # Count recent toggles per sector
     cutoff_day = now - timedelta(days=1)
-    cutoff_cooldown = now - timedelta(days=cooldown_days)
 
     toggles_today = {}
     last_toggle_by_sector = {}
@@ -96,28 +96,32 @@ def apply_guardrails(
 
     # Filter proposals
     filtered_proposals = []
+    filter_reasons = {}  # sector_name -> list of reasons
 
     for proposal in proposal_set.proposals:
+        reasons = []
+
         # Check confidence
         if proposal.confidence < min_confidence:
-            print(
-                f"FILTERED: {proposal.sector_name} - confidence {proposal.confidence} < {min_confidence}"
-            )
-            continue
+            reason = f"confidence {proposal.confidence:.2f} < {min_confidence}"
+            reasons.append(reason)
+            print(f"FILTERED: {proposal.sector_name} - {reason}")
 
         # Check expiry
         try:
             expires = datetime.fromisoformat(proposal.expires_at.replace("Z", "+00:00"))
             if now >= expires:
-                print(f"FILTERED: {proposal.sector_name} - expired")
-                continue
+                reason = "expired"
+                reasons.append(reason)
+                print(f"FILTERED: {proposal.sector_name} - {reason}")
         except ValueError:
             pass
 
         # Check max toggles per day
         if toggles_today.get(proposal.sector_name, 0) >= max_toggles_per_day:
-            print(f"FILTERED: {proposal.sector_name} - max toggles/day exceeded")
-            continue
+            reason = f"max toggles/day ({max_toggles_per_day}) exceeded"
+            reasons.append(reason)
+            print(f"FILTERED: {proposal.sector_name} - {reason}")
 
         # Check cooldown
         last_toggle_str = last_toggle_by_sector.get(proposal.sector_name)
@@ -125,14 +129,20 @@ def apply_guardrails(
             try:
                 last_toggle = datetime.fromisoformat(last_toggle_str.replace("Z", "+00:00"))
                 if now - last_toggle < timedelta(days=cooldown_days):
-                    print(f"FILTERED: {proposal.sector_name} - cooldown active")
-                    continue
+                    days_ago = (now - last_toggle).days
+                    days_remaining = cooldown_days - days_ago
+                    reason = f"{cooldown_days}-day cooldown active (last toggle {days_ago}d ago, {days_remaining}d remaining)"
+                    reasons.append(reason)
+                    print(f"FILTERED: {proposal.sector_name} - {reason}")
             except ValueError:
                 pass
 
-        filtered_proposals.append(proposal)
+        if reasons:
+            filter_reasons[proposal.sector_name] = reasons
+        else:
+            filtered_proposals.append(proposal)
 
-    return ProposalSet(
+    filtered_set = ProposalSet(
         generation_id=proposal_set.generation_id,
         proposals=filtered_proposals,
         disagreements=proposal_set.disagreements,
@@ -140,3 +150,5 @@ def apply_guardrails(
         headline_count=proposal_set.headline_count,
         generated_at=proposal_set.generated_at,
     )
+
+    return filtered_set, filter_reasons
