@@ -5462,6 +5462,118 @@ This:
 - Preserves enabled status
 - Waits for activation on next loop tick
 
+**Complete Constituent Change Workflow:**
+
+The constituent change workflow supports adding or removing specific tickers from sectors without disabling the entire sector:
+
+1. **Proposal Creation** (`POST /universe/proposals/constituents`):
+   ```json
+   {
+     "sector_name": "mega_cap_tech",
+     "action": "add",  // or "remove"
+     "tickers": ["NFLX"],
+     "source": "manual",
+     "rationale": "Add streaming tech leader"
+   }
+   ```
+   - Creates proposal with status "NEW"
+   - Validates sector exists in UniverseRegistry
+   - Stores in `out/universe_proposals.json`
+
+2. **Proposal Approval** (`POST /universe/proposals/{id}/approve`):
+   - Validates proposal status is "NEW"
+   - Calls `apply_proposal()` which determines proposal type:
+     - **For CONSTITUENT_CHANGE**: Calls `universe_registry.stage_constituent_change()`
+     - **For SECTOR_TOGGLE**: Calls `universe_registry.stage_change()`
+   - **Critical Implementation**: The `apply_proposal()` function MUST check `proposal.proposal_type` and call the appropriate staging method. Calling `stage_change()` for constituent changes causes `enabled` field to be set to `None` instead of maintaining the boolean value.
+   - Sets `pending_version` in UniverseRegistry
+   - Updates proposal status to "APPROVED"
+   - Appends to history file: `universe_proposals_history.jsonl`
+   - Returns new `pending_version` number
+
+3. **Staged Changes**:
+   - Registry file `out/universe_overrides.json` updated:
+     ```json
+     {
+       "mega_cap_tech": {
+         "enabled": true,  // Preserved (NOT set to null)
+         "active_version": 4,
+         "pending_version": 5,  // New pending version
+         "tickers": ["AAPL", ..., "NFLX"]  // NFLX added
+       }
+     }
+     ```
+   - Ticker list modified in-memory
+   - Changes not active for trading yet
+
+4. **Activation** (at next runner loop tick):
+   - `universe_registry.check_and_activate_pending()` called
+   - Promotes `pending_version` to `active_version`
+   - Clears `pending_version` field
+   - Returns activated changes: `[(sector_name, old_version, new_version)]`
+
+5. **Mark Applied**:
+   - Runner calls `mark_applied(sector_name, ...)`
+   - Updates proposal status from "APPROVED" to "APPLIED"
+   - Appends final status to history file
+   - Changes now active for trading
+
+**API Response Models:**
+
+The `ConstituentChangeResponse` model defines the structure for constituent change data in API responses:
+
+```python
+class ConstituentChangeResponse(BaseModel):
+    action: str  # "add" or "remove"
+    tickers: list[str]
+    reason: str
+    constraints_checked: bool = True  # Validation flag
+```
+
+**Critical Bug Fix (2026-01-09):**
+
+Two bugs were fixed in commit `b85d601`:
+
+1. **Pydantic Validation Error** (`src/ui_api/app.py:330`):
+   - **Issue**: `ConstituentChangeResponse.constraints_checked` was typed as `dict[str, bool]` but data contained `bool`
+   - **Impact**: GET `/universe/proposals` returned 500 error, blocking dashboard display
+   - **Fix**: Changed type to `bool = True` to match data model
+
+2. **Wrong Staging Method** (`src/app/universe_advisor/apply.py:29-41`):
+   - **Issue**: `apply_proposal()` always called `stage_change()` regardless of proposal type
+   - **Impact**:
+     - Tickers were NOT added/removed from sectors
+     - `enabled` field set to `None` causing subsequent API errors
+     - Pending version staged but no actual changes applied
+   - **Fix**: Check `proposal.proposal_type` and call appropriate method:
+     ```python
+     if proposal.proposal_type == "constituent_change" and proposal.constituent_change:
+         new_version = universe_registry.stage_constituent_change(
+             proposal.sector_name,
+             proposal.constituent_change.action.value,
+             proposal.constituent_change.tickers,
+         )
+     else:
+         new_version = universe_registry.stage_change(
+             proposal.sector_name,
+             proposal.recommended_enabled,
+         )
+     ```
+
+**Verification Tests:**
+
+Both ADD and REMOVE actions tested and verified:
+
+- **ADD Test**: Added NFLX to mega_cap_tech
+  - Ticker count: 10 → 11
+  - Status transitions: NEW → APPROVED → APPLIED
+  - NFLX present in final ticker list: ✅
+
+- **REMOVE Test**: Removed NFLX from mega_cap_tech
+  - Ticker count: 11 → 10
+  - Status transitions: NEW → APPROVED → APPLIED
+  - NFLX absent from final ticker list: ✅
+
 **Rejection Flow:**
 1. Operator clicks "Reject" on proposal
 2. API endpoint updates status to "REJECTED"
