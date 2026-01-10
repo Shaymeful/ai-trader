@@ -1340,12 +1340,12 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                                 "cooldown_days": config.llm_cooldown_days,
                             }
                             history_file = Path("out/universe_proposals_history.jsonl")
-                            proposal_set = apply_guardrails(
+                            proposal_set, filter_reasons = apply_guardrails(
                                 proposal_set, guardrails_config, history_file
                             )
 
                             # Save
-                            save_proposals(proposal_set, proposals_file)
+                            save_proposals(proposal_set, proposals_file, filter_reasons)
 
                             # Log to ledger
                             ledger.append(

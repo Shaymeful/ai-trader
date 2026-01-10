@@ -332,7 +332,7 @@ def test_apply_guardrails_confidence_filter(temp_dir, sample_regime):
     }
 
     history_file = temp_dir / "history.jsonl"
-    filtered_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+    filtered_set, _ = apply_guardrails(proposal_set, guardrails_config, history_file)
 
     assert len(filtered_set.proposals) == 0  # Filtered out
 
@@ -381,7 +381,7 @@ def test_apply_guardrails_cooldown(temp_dir, sample_regime):
         "cooldown_days": 3,
     }
 
-    filtered_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+    filtered_set, _ = apply_guardrails(proposal_set, guardrails_config, history_file)
 
     assert len(filtered_set.proposals) == 0  # Filtered due to cooldown
 
@@ -496,7 +496,7 @@ def test_apply_guardrails_ttl_expired(temp_dir, sample_regime):
     }
 
     history_file = temp_dir / "history.jsonl"
-    filtered_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+    filtered_set, _ = apply_guardrails(proposal_set, guardrails_config, history_file)
 
     assert len(filtered_set.proposals) == 0  # Filtered due to expiry
 
@@ -545,7 +545,7 @@ def test_apply_guardrails_max_toggles_per_day(temp_dir, sample_regime):
         "cooldown_days": 3,
     }
 
-    filtered_set = apply_guardrails(proposal_set, guardrails_config, history_file)
+    filtered_set, _ = apply_guardrails(proposal_set, guardrails_config, history_file)
 
     assert len(filtered_set.proposals) == 0  # Filtered due to max toggles
 
