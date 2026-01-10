@@ -166,6 +166,7 @@ class UniverseRegistry:
         # 3. Update or create override
         if sector_name in self.overrides:
             override = self.overrides[sector_name]
+            override.enabled = enabled  # Update enabled state
             override.pending_version = (override.active_version or 0) + 1
         else:
             override = SectorOverride(
