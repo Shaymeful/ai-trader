@@ -6,9 +6,9 @@ timeframe: "1h"
 
 # Risk management caps
 risk:
-  max_order_usd: 100
-  max_daily_loss_usd: 250
-  max_gross_exposure_usd: 10000
+  max_order_usd: 2500          # Increased from $100 to allow meaningful position sizes
+  max_daily_loss_usd: 250      # Maintained as safety net
+  max_gross_exposure_usd: 50000  # Increased from $10k to allow multiple positions
 
 # Execution settings
 execution:
@@ -70,7 +70,7 @@ llm:
   timeout_seconds: 30
 
   # Safety guardrails
-  min_confidence: 0.70
+  min_confidence: 0.60  # Lowered from 0.70 to allow more proposals
   proposal_ttl_minutes: 120
   max_sector_toggles_per_day: 1
   cooldown_days: 3
@@ -86,9 +86,9 @@ llm:
   # Constituent change proposals
   enable_constituent_proposals: true
   allow_constituent_removals: false
-  max_add_per_run: 2
+  max_add_per_run: 3  # Increased from 2 to allow more new candidates
   max_remove_per_run: 1
-  min_confidence_add: 0.80
+  min_confidence_add: 0.70  # Lowered from 0.80 to allow more adds
   min_confidence_remove: 0.85
-  cooldown_days_per_ticker: 7
+  cooldown_days_per_ticker: 5  # Reduced from 7 to allow faster re-evaluation
   ticker_blacklist: []

@@ -191,6 +191,6 @@ stopwords:
 candidates_enrichment_enabled: true  # Set to true to enable OpenAI enrichment
 candidates_llm_provider: openai  # openai or anthropic
 candidates_llm_model: gpt-4o-mini  # Cost-effective model for enrichment
-candidates_min_confidence: 0.70  # Filter out candidates below this confidence
+candidates_min_confidence: 0.60  # Lowered from 0.70 to allow more candidates
 candidates_max_count: 20  # Cap total candidates returned
 candidates_llm_timeout: 30  # API timeout in seconds

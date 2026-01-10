@@ -14,8 +14,8 @@ strategies:
       sma_fast_period: 10
       sma_slow_period: 20
     risk_limits:
-      max_position_size: 5000  # Max $ per position
-      max_positions: 3          # Max concurrent positions
+      max_position_size: 8000   # Increased from 5000 to allow larger positions
+      max_positions: 10         # Increased from 3 to allow more concurrent positions
       max_daily_loss: 500       # Max daily loss for this strategy
 
   - strategy_id: "MeanRev_Z1.0"
@@ -27,28 +27,28 @@ strategies:
       sma_fast_period: 5
       sma_slow_period: 15
     risk_limits:
-      max_position_size: 3000
-      max_positions: 5
+      max_position_size: 6000  # Increased from 3000
+      max_positions: 10        # Increased from 5
       max_daily_loss: 300
 
   - strategy_id: "Momentum_MACD"
     name: "Momentum (MACD-like)"
     description: "SMA crossover with 12/26 periods for momentum"
-    enabled: false  # Disabled by default
-    weight: 0.3     # 30% of available capital when enabled
+    enabled: true   # Enabled to increase activity
+    weight: 0.3     # 30% of available capital
     params:
       sma_fast_period: 12
       sma_slow_period: 26
     risk_limits:
-      max_position_size: 4000
-      max_positions: 4
+      max_position_size: 6000  # Increased from 4000
+      max_positions: 10        # Increased from 4
       max_daily_loss: 400
 
 # Global settings applied to all strategies
 global:
   # These are account-wide limits (enforced separately from per-strategy limits)
   max_daily_loss: 1000          # Account-wide daily loss limit
-  max_total_positions: 10       # Max positions across all strategies
+  max_total_positions: 20       # Increased from 10 to allow more concurrent positions
   max_order_notional: 10000     # Max single order size
 
   # Market data and execution settings
