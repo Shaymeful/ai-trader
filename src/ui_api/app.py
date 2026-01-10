@@ -327,7 +327,7 @@ class ConstituentChangeResponse(BaseModel):
     action: str  # "add" or "remove"
     tickers: list[str]
     reason: str
-    constraints_checked: dict[str, bool]
+    constraints_checked: bool = True
 
 
 class ProposalResponse(BaseModel):
@@ -1272,7 +1272,7 @@ async def create_constituent_proposal(request: CreateConstituentProposalRequest)
             save_proposals_dict(existing_data, proposals_file)
         else:
             # Create new proposals file with this single proposal
-            from src.app.universe_advisor.models import ProposalSet, RegimeData, MarketRegime
+            from src.app.universe_advisor.models import MarketRegime, ProposalSet, RegimeData
             from src.app.universe_advisor.storage import save_proposals
 
             # Create minimal regime data

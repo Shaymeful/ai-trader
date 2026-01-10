@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import Proposal
-from .storage import append_to_history, load_proposals, save_proposals
+from .storage import append_to_history, load_proposals
 
 
 def apply_proposal(
@@ -26,11 +26,20 @@ def apply_proposal(
     Returns:
         New pending_version from registry
     """
-    # Stage change in UniverseRegistry
-    new_version = universe_registry.stage_change(
-        proposal.sector_name,
-        proposal.recommended_enabled,
-    )
+    # Stage change in UniverseRegistry based on proposal type
+    if proposal.proposal_type == "constituent_change" and proposal.constituent_change:
+        # For constituent changes, add/remove tickers
+        new_version = universe_registry.stage_constituent_change(
+            proposal.sector_name,
+            proposal.constituent_change.action.value,
+            proposal.constituent_change.tickers,
+        )
+    else:
+        # For sector toggle, enable/disable sector
+        new_version = universe_registry.stage_change(
+            proposal.sector_name,
+            proposal.recommended_enabled,
+        )
 
     # Update proposal status to APPROVED
     proposal.status = "APPROVED"
@@ -52,7 +61,7 @@ def apply_proposal(
 
 def save_proposals_dict(data: dict, file_path: Path) -> None:
     """Save proposals dict to file (helper for apply_proposal).
-    
+
     Args:
         data: Proposals dict
         file_path: Path to JSON file
