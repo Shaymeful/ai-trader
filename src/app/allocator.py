@@ -114,9 +114,15 @@ class Allocator:
 
         # 1. Get account equity
         try:
-            account_state = self.broker.client.get_account()
-            account_dict = {"equity": str(account_state.equity)}
-            equity = allocation.get_total_equity(account_dict)
+            # Check if broker has client attribute (AlpacaBroker) vs MockBroker
+            if hasattr(self.broker, 'client'):
+                account_state = self.broker.client.get_account()
+                account_dict = {"equity": str(account_state.equity)}
+                equity = allocation.get_total_equity(account_dict)
+            else:
+                # MockBroker in dry-run mode - use mock equity
+                self.logger.info("MockBroker detected - using mock equity for allocation")
+                equity = Decimal("100000.00")  # Mock $100k equity for dry-run
         except Exception as e:
             self.logger.error(f"Failed to fetch account equity: {e}")
             warnings.append(f"Failed to fetch equity: {e} - falling back to legacy mode")
@@ -164,7 +170,7 @@ class Allocator:
 
             self.ledger.append(
                 AllocationWeightsComputedEvent(
-                    equity=equity,
+                    equity=float(equity),  # Convert Decimal to float for JSON serialization
                     sum_enabled_weights=weight_summary["sum_enabled_weights"],
                     normalized_weights=weight_summary["normalized_weights"],
                     configured_weights=weight_summary["configured_weights"],
@@ -176,7 +182,7 @@ class Allocator:
         strategy_budgets = {}
         for strategy_id in weight_summary["enabled_ids"]:
             normalized_weight = weight_summary["normalized_weights"][strategy_id]
-            budget = allocation.compute_strategy_budget(equity, normalized_weight)
+            budget = allocation.compute_strategy_budget(float(equity), normalized_weight)
             strategy_budgets[strategy_id] = Decimal(str(budget))
             self.logger.info(
                 f"{strategy_id}: budget=${budget:.2f} (weight={normalized_weight:.3f})"
@@ -189,7 +195,7 @@ class Allocator:
                 self.ledger.append(
                     StrategyBudgetComputedEvent(
                         strategy_id=strategy_id,
-                        equity=equity,
+                        equity=float(equity),  # Convert Decimal to float for JSON serialization
                         normalized_weight=normalized_weight,
                         budget=budget,
                     )
