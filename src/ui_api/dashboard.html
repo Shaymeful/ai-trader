@@ -613,6 +613,36 @@
             cursor: not-allowed;
         }
 
+        /* Button variants */
+        .btn-sm {
+            padding: 0.35rem 0.75rem;
+            font-size: 0.8rem;
+        }
+
+        .btn-primary {
+            background: #3b82f6;
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+
+        .btn-success {
+            background: #10b981;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+        }
+
+        .btn-warning:hover {
+            background: #d97706;
+        }
+
         /* Activity Feed */
         .activity-feed {
             background: #1e293b;
@@ -1575,6 +1605,11 @@
                 <div class="loop-status-item">
                     <div class="loop-status-label">Next Loop In</div>
                     <div class="loop-status-value loop-countdown" id="next-loop-countdown">--</div>
+                    <div style="margin-top: 0.5rem;">
+                        <button onclick="triggerLoopNow()" class="btn-sm btn-warning" id="trigger-loop-btn">
+                            ⚡ Trigger Now
+                        </button>
+                    </div>
                 </div>
                 <div class="loop-status-item">
                     <div class="loop-status-label">Loop Interval</div>
@@ -2510,6 +2545,40 @@
             } catch (error) {
                 console.error('Error saving loop interval:', error);
                 showError('Failed to update loop interval');
+            }
+        }
+
+        async function triggerLoopNow() {
+            const triggerBtn = document.getElementById('trigger-loop-btn');
+
+            // Disable button to prevent double-clicks
+            triggerBtn.disabled = true;
+            triggerBtn.textContent = 'Triggering...';
+
+            try {
+                const response = await fetch('/runtime/trigger_loop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message);
+                    // Reload loop status to show updated countdown
+                    setTimeout(() => loadLoopStatus(), 500);
+                } else {
+                    showError(result.detail || 'Failed to trigger loop');
+                }
+            } catch (error) {
+                console.error('Error triggering loop:', error);
+                showError('Failed to trigger loop');
+            } finally {
+                // Re-enable button after 5 seconds
+                setTimeout(() => {
+                    triggerBtn.disabled = false;
+                    triggerBtn.textContent = '⚡ Trigger Now';
+                }, 5000);
             }
         }
 

@@ -6020,6 +6020,89 @@ if runtime_state.next_loop_at:
     seconds_until_next = int(delta)
 ```
 
+### Runtime Control Endpoints
+
+**POST /runtime/loop_interval** - Update loop interval
+
+**Module:** `src/ui_api/app.py:update_loop_interval()`
+
+**Request:**
+```json
+{
+  "loop_interval_seconds": 300
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Loop interval updated to 300 seconds. Change will take effect on next iteration.",
+  "pending_version": null
+}
+```
+
+**Behavior:**
+- Loads current RuntimeState from `state/runtime.json`
+- Updates `loop_interval_seconds` field
+- Saves atomically
+- Runner hot-reloads interval at start of next iteration (line 1528-1540 in runner.py)
+- No restart required
+
+---
+
+**POST /runtime/trigger_loop** - Trigger immediate loop execution
+
+**Module:** `src/ui_api/app.py:trigger_loop_now()`
+
+**Request:** No body required
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Loop trigger sent. Next iteration will start within 5 seconds.",
+  "pending_version": null
+}
+```
+
+**Behavior:**
+- Creates trigger flag file at `state/trigger_loop.flag`
+- Runner checks for this flag every 5 seconds during sleep
+- When detected, runner immediately starts next iteration
+- Flag file is automatically deleted after triggering
+- Safe to call multiple times (flag deleted on trigger)
+- Does not affect configured loop interval
+
+**Runner Implementation:**
+
+The runner uses an interruptible sleep mechanism that checks for early wake-up requests:
+
+```python
+# In src/app/runner.py (line 1549-1565):
+trigger_flag = Path("state/trigger_loop.flag")
+sleep_remaining = sleep_seconds
+check_interval = 5  # Check every 5 seconds
+
+while sleep_remaining > 0:
+    # Check if early wake-up requested
+    if trigger_flag.exists():
+        print("\n*** Early wake-up triggered! Starting next iteration immediately ***")
+        trigger_flag.unlink()  # Remove flag
+        break
+
+    # Sleep for shorter interval or remaining time
+    sleep_duration = min(check_interval, sleep_remaining)
+    time.sleep(sleep_duration)
+    sleep_remaining -= sleep_duration
+```
+
+**Use Cases:**
+- Immediately apply new loop interval without waiting
+- Trigger execution after configuration changes
+- Test trading logic without waiting for scheduled time
+- Respond to market events quickly
+
 ### Dashboard UI
 
 **Module:** `src/ui_api/dashboard.html`
@@ -6038,10 +6121,23 @@ Located between Account Summary and Performance sections.
         <div class="loop-status-item">
             <div class="loop-status-label">Next Loop In</div>
             <div class="loop-status-value loop-countdown" id="next-loop-countdown">--</div>
+            <!-- NEW: Trigger Now button -->
+            <div style="margin-top: 0.5rem;">
+                <button onclick="triggerLoopNow()" class="btn-sm btn-warning" id="trigger-loop-btn">
+                    ⚡ Trigger Now
+                </button>
+            </div>
         </div>
         <div class="loop-status-item">
             <div class="loop-status-label">Loop Interval</div>
             <div class="loop-status-value" id="loop-interval">--</div>
+            <!-- Loop interval edit controls -->
+            <div style="margin-top: 0.5rem;">
+                <input type="number" id="loop-interval-input" />
+                <button onclick="toggleLoopIntervalEdit()" class="btn-sm btn-primary">Edit</button>
+                <button onclick="saveLoopInterval()" class="btn-sm btn-success">Save</button>
+                <button onclick="cancelLoopIntervalEdit()" class="btn-sm">Cancel</button>
+            </div>
         </div>
         <div class="loop-status-item">
             <div class="loop-status-label">Last Execution</div>
@@ -6057,17 +6153,17 @@ Located between Account Summary and Performance sections.
 
 **JavaScript Functions:**
 
-1. **loadLoopStatus()** (line 2059):
+1. **loadLoopStatus()** (line 2347):
    - Fetches runtime state from `/runtime` endpoint
    - Updates all display elements
    - Starts 1-second countdown timer
 
-2. **updateLoopStatusDisplay(data)** (line 2081):
+2. **updateLoopStatusDisplay(data)** (line 2372):
    - Formats loop interval as hours (e.g., "1.0h")
    - Converts UTC timestamps to local time for display
    - Stores data globally for countdown updates
 
-3. **updateLoopCountdown()** (line 2117):
+3. **updateLoopCountdown()** (line 2405):
    - Runs every second via `setInterval`
    - Calculates time remaining until next loop
    - Formats countdown based on time scale:
@@ -6076,9 +6172,17 @@ Located between Account Summary and Performance sections.
      - >= 1 hour: "2h 15m"
    - Shows "Overdue (Xm)" if past scheduled time (in warning color)
 
+4. **triggerLoopNow()** (line 2551):
+   - Calls `POST /runtime/trigger_loop` endpoint
+   - Disables button during trigger (prevents double-clicks)
+   - Shows success message when trigger sent
+   - Re-enables button after 5 seconds
+   - Reloads loop status to show countdown reset
+
 **Visual Styling:**
 - `.loop-countdown`: Green color (#10b981) for normal countdown
 - `.loop-overdue`: Amber color (#f59e0b) for overdue indication
+- `.btn-warning`: Amber button (#f59e0b) for trigger action
 - Grid layout with 4 items (responsive to screen size)
 - Consistent with other dashboard sections (dark theme)
 
@@ -6087,6 +6191,7 @@ Located between Account Summary and Performance sections.
 - Live countdown: Updates every 1 second client-side
 - Refresh: Full reload fetches latest state from server
 - Auto-refresh: Works with existing 10-second dashboard refresh
+- Trigger button: Disabled for 5 seconds after click to prevent spamming
 
 ### Testing
 
@@ -6109,9 +6214,17 @@ Located between Account Summary and Performance sections.
 ### Implementation Files
 
 - `src/app/state.py`: RuntimeState model, load/save functions (line 421-500)
-- `src/app/runner.py`: Timing instrumentation at loop boundaries (lines 783, 843, 1032, 1098)
-- `src/ui_api/app.py`: GET /runtime endpoint (line 387-420)
-- `src/ui_api/dashboard.html`: Loop Status section UI and countdown logic (lines 1032-1071 CSS, 1424-1447 HTML, 2056-2156 JavaScript)
+- `src/app/runner.py`:
+  - Timing instrumentation at loop boundaries (lines 783, 843, 1032, 1098)
+  - Interruptible sleep with trigger flag checking (line 1549-1565)
+- `src/ui_api/app.py`:
+  - GET /runtime endpoint (line 462-495)
+  - POST /runtime/loop_interval endpoint (line 498-529)
+  - POST /runtime/trigger_loop endpoint (line 532-557)
+- `src/ui_api/dashboard.html`:
+  - Loop Status section UI (lines 1032-1071 CSS, 1575-1602 HTML)
+  - Button styles (lines 617-644 CSS for btn-sm, btn-primary, btn-success, btn-warning)
+  - JavaScript functions (lines 2347-2583 including triggerLoopNow)
 - `tests/test_runtime_state.py`: Comprehensive unit tests (10 tests)
 
 ### Design Decisions
@@ -6141,6 +6254,13 @@ Located between Account Summary and Performance sections.
    - All state updates wrapped in try/except
    - Never blocks loop iteration
    - Pure observability feature
+
+6. **Interruptible Sleep:**
+   - Runner checks for trigger flag every 5 seconds during sleep
+   - Balance between responsiveness and CPU efficiency
+   - Flag-based approach (not threading/signals) for Windows compatibility
+   - Automatic flag cleanup prevents stale triggers
+   - Does not interrupt running iteration (waits until sleep period)
 
 ---
 

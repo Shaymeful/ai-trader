@@ -1539,7 +1539,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         except Exception as e:
             print(f"WARNING: Failed to reload loop interval: {e}")
 
-        # Sleep before next iteration
+        # Sleep before next iteration (with interruptible sleep for early wake-up)
         print(f"Sleeping for {sleep_seconds} seconds ({sleep_seconds / 3600:.1f} hours)...")
         # Calculate next run time in market time
         next_run = get_market_time_now() + timedelta(seconds=sleep_seconds)
@@ -1547,7 +1547,23 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         print()
 
         try:
-            time.sleep(sleep_seconds)
+            # Use interruptible sleep that checks for trigger flag every 5 seconds
+            trigger_flag = Path("state/trigger_loop.flag")
+            sleep_remaining = sleep_seconds
+            check_interval = 5  # Check every 5 seconds
+
+            while sleep_remaining > 0:
+                # Check if early wake-up requested
+                if trigger_flag.exists():
+                    print("\n*** Early wake-up triggered! Starting next iteration immediately ***")
+                    trigger_flag.unlink()  # Remove flag
+                    break
+
+                # Sleep for shorter interval or remaining time
+                sleep_duration = min(check_interval, sleep_remaining)
+                time.sleep(sleep_duration)
+                sleep_remaining -= sleep_duration
+
         except KeyboardInterrupt:
             print("\n\nKeyboard interrupt received. Shutting down loop mode...")
             print(f"Total iterations completed: {iteration}")

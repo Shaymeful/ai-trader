@@ -529,6 +529,34 @@ async def update_loop_interval(request: LoopIntervalRequest):
         raise HTTPException(status_code=500, detail=f"Failed to update loop interval: {e}") from e
 
 
+@app.post("/runtime/trigger_loop", response_model=ChangeResponse)
+async def trigger_loop_now():
+    """
+    Trigger the next loop iteration immediately.
+
+    Creates a trigger flag file that the runner checks during sleep.
+    The runner will wake up within 5 seconds and start the next iteration immediately.
+
+    Returns:
+        Success response
+    """
+    try:
+        trigger_flag = Path("state/trigger_loop.flag")
+        trigger_flag.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create trigger flag
+        with open(trigger_flag, "w", encoding="utf-8") as f:
+            f.write(datetime.now(UTC).isoformat())
+
+        return ChangeResponse(
+            success=True,
+            message="Loop trigger sent. Next iteration will start within 5 seconds.",
+            pending_version=None,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to trigger loop: {e}") from e
+
+
 @app.get("/account/summary", response_model=AccountSummaryResponse)
 async def get_account_summary():
     """
