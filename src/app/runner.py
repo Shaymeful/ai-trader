@@ -896,6 +896,59 @@ def run_paper_mode(
     # End Exit Advisor Integration
     # ============================================================================
 
+    # Convert exit candidates to sell orders for position reconciliation
+    exit_sell_orders = []
+    if exit_candidates:
+        print(f"Converting {len(exit_candidates)} exit candidates to sell orders...")
+
+        for candidate in exit_candidates:
+            # Get current position quantity for this symbol
+            qty, avg_entry_price = current_positions.get(candidate.symbol, (0, 0))
+
+            if qty > 0:
+                # Create sell order for the position (SELL_ALL for exit candidates)
+                exit_sell_orders.append(
+                    {
+                        "symbol": candidate.symbol,
+                        "quantity": -qty,  # Negative for sell (close entire position)
+                        "action": "SELL_ALL",  # Exit candidates are always full exits
+                        "reason": candidate.reason,
+                        "confidence": candidate.confidence,
+                        "signal": None,  # Exit candidates don't have sell signals
+                    }
+                )
+                print(f"  {candidate.symbol}: SELL {qty} shares (confidence={candidate.confidence:.2f}, reason={candidate.reason})")
+            else:
+                print(f"  {candidate.symbol}: No position to sell (skipped)")
+
+        print()
+
+    # Merge exit candidates and sell orders
+    combined_sell_orders = sell_orders + exit_sell_orders
+    if exit_sell_orders:
+        print(f"Combined {len(sell_orders)} sell scanner orders + {len(exit_sell_orders)} exit advisor orders = {len(combined_sell_orders)} total sell orders")
+        print()
+
+    # Merge exit candidates into the candidate pipeline for visibility
+    if exit_candidates:
+        print(f"Merging {len(exit_candidates)} exit candidates into candidate pipeline...")
+
+        # Add exit candidate symbols to universe
+        exit_symbols = [c.symbol for c in exit_candidates]
+        universe_set = set(universe)
+
+        for symbol in exit_symbols:
+            if symbol not in universe_set:
+                universe.append(symbol)
+                universe_set.add(symbol)
+                print(f"  Added {symbol} to universe from exit candidate")
+
+        # Add exit candidates to candidate_map
+        for candidate in exit_candidates:
+            candidate_map[candidate.symbol] = candidate.candidate_id
+
+        print()
+
     # Initialize strategies
     strategies = [
         TrendStrategy(ma_period=20),
@@ -995,9 +1048,9 @@ def run_paper_mode(
     # Merge sell orders into target positions (sell orders take priority)
     merged_target_positions = dict(allocation_result.target_positions)
 
-    if sell_orders:
-        print(f"\nMerging {len(sell_orders)} sell orders into target positions...")
-        for sell_order in sell_orders:
+    if combined_sell_orders:
+        print(f"\nMerging {len(combined_sell_orders)} sell orders into target positions...")
+        for sell_order in combined_sell_orders:
             symbol = sell_order["symbol"]
             sell_qty = sell_order["quantity"]  # Negative quantity
 
@@ -1409,6 +1462,38 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                             print(f"WARNING: Failed to mark proposals as applied: {e}")
 
                     print()
+
+            # Export active universe to file for selector (always export, not just on changes)
+            if universe_registry is not None:
+                resolution = universe_registry.resolve()
+                universe_active_file = Path("out/universe_active.json")
+                universe_active_file.parent.mkdir(parents=True, exist_ok=True)
+
+                universe_active_data = {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "source": resolution.source,
+                    "symbols": resolution.symbols,
+                    "sectors": {},
+                }
+
+                # Add enabled sector details
+                for sector_name, sector_config in universe_registry.sectors.items():
+                    if sector_config.enabled:
+                        universe_active_data["sectors"][sector_name] = {
+                            "enabled": True,
+                            "symbols": sector_config.symbols,
+                            "version": sector_config.version,
+                        }
+
+                with open(universe_active_file, "w", encoding="utf-8") as f:
+                    import json
+
+                    json.dump(universe_active_data, f, indent=2)
+
+                print(f"Exported active universe to {universe_active_file}")
+                print(f"  Symbols: {', '.join(resolution.symbols)}")
+                print(f"  Source: {resolution.source}")
+                print()
 
             # Run the appropriate mode
             if mode == "shadow":

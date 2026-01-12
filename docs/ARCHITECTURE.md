@@ -204,12 +204,95 @@ qty = int(notional / price)  # Floor to whole shares (e.g., 33 shares)
 
 **Implementation**: `allocation.compute_qty_from_notional(price, notional, allow_fractional)`
 
+### Capital Utilization & Target Allocation
+
+**Purpose**: Control what percentage of capital to deploy and apply operator-configured capital limits
+
+**Configuration Parameters** (`config/config.yaml`):
+```yaml
+risk:
+  target_utilization_pct: 0.97  # Target 97% capital deployment (0.95-0.99 recommended)
+  use_total_capital_as_equity_cap: true  # Use UI-configured total_capital as cap
+
+execution:
+  allow_fractional: true  # Enable fractional shares for top-off pass
+```
+
+**Effective Equity Cap Calculation**:
+```python
+# 1. Get broker equity
+account = broker.client.get_account()
+broker_equity = float(account.equity)
+
+# 2. Load operator-configured total_capital (if exists)
+from src.app.account_summary import get_total_capital
+total_capital = get_total_capital()  # From out/account_summary.json
+
+# 3. Apply cap
+if use_total_capital_as_equity_cap and total_capital:
+    effective_cap = min(broker_equity, total_capital)
+else:
+    effective_cap = broker_equity
+
+# 4. Apply target utilization
+budget_base = effective_cap * target_utilization_pct
+
+# Example:
+# broker_equity = $30,000
+# total_capital = $30,000 (configured in UI)
+# target_utilization_pct = 0.97
+# effective_cap = min(30000, 30000) = $30,000
+# budget_base = 30000 * 0.97 = $29,100
+```
+
+**Total Capital Source**: `out/account_summary.json`
+- Created by UI when operator sets capital limits via `POST /account/summary`
+- Contains operator's configured `total_capital` value
+- Acts as a safety cap to prevent over-allocation
+
+**Top-Off Pass**:
+
+After initial allocation, remaining budget is distributed to highest-conviction BUY intents:
+
+```python
+# 1. Calculate used notional
+used_notional = sum(abs(qty) * price for symbol, qty in target_positions.items())
+
+# 2. Calculate remaining budget
+remaining_budget = budget_base - used_notional
+
+# 3. Distribute if above threshold ($50)
+if remaining_budget > 50:
+    # Find highest-conviction BUY intents
+    buy_candidates = sorted_by_conviction(intents, action="buy")
+
+    # Distribute proportionally by conviction
+    for candidate in buy_candidates:
+        proportion = candidate.conviction / total_conviction
+        additional_notional = remaining_budget * proportion
+        additional_qty = compute_qty_from_notional(
+            price, additional_notional, allow_fractional=config.allow_fractional
+        )
+        target_positions[symbol] += additional_qty
+```
+
+**Benefits**:
+- Achieves 95-99% capital deployment (configurable)
+- Uses fractional shares to minimize cash drag
+- Prioritizes highest-conviction opportunities for remaining funds
+- Respects operator-configured capital limits from UI
+
+**Files**:
+- Config: `config/config.yaml` (risk and execution sections)
+- Helper: `src/app/account_summary.py` (loads total_capital from UI)
+- Implementation: `src/app/allocator.py` (_allocate_with_registry method)
+
 ### Ledger Events
 
 Allocation engine emits detailed events for audit trail:
 
 **AllocationWeightsComputedEvent**:
-- Total equity used
+- Total equity used (after utilization target applied)
 - Configured vs normalized weights
 - Enabled strategy IDs
 
@@ -273,6 +356,175 @@ Allocation engine emits detailed events for audit trail:
   - Quantity rounding (fractional vs whole shares)
   - Multi-strategy netting
   - Attribution tracking
+
+---
+
+## Exit Advisor: Position Exit Management
+
+### Overview
+
+The **Exit Advisor** integrates with the SellScanner to generate **SELL candidates** that feed into the candidate pipeline. This enables automated position exits based on:
+- Stop loss triggers (price drops below threshold)
+- Negative sentiment (adverse news or market regime shifts)
+- Technical deterioration (broken support levels)
+- Risk regime changes (volatility spikes, correlation breakdowns)
+
+Exit candidates are merged with selector candidates and converted to SELL orders that override BUY intents during position reconciliation.
+
+### Architecture
+
+**Flow**:
+```
+1. Runner loads current positions from broker
+2. ExitAdvisor.scan_and_emit_candidates() analyzes positions
+3. SellScanner evaluates each position for exit criteria
+4. Exit candidates generated with action="sell", confidence, reason
+5. Exit candidates merged into candidate pipeline (universe + candidate_map)
+6. Exit candidates converted to sell_orders (negative quantity)
+7. Sell orders merged into target_positions, overriding BUY intents
+8. Executor reconciles positions and generates SELL orders
+```
+
+**Integration Points**:
+- **Runner** (`src/app/runner.py:run_paper_mode`): Calls ExitAdvisor before strategy execution
+- **Exit Advisor** (`src/app/exit_advisor.py`): Wraps SellScanner with cooldowns and telemetry
+- **Sell Scanner** (`src/app/sell_scanner.py`): Core logic for analyzing positions
+- **Position Reconciliation**: Sell orders override allocation targets (line 1048-1063 in runner.py)
+
+### Exit Candidate Generation
+
+**Scan Process**:
+```python
+# 1. Get current positions
+positions = broker.get_positions()
+current_positions = {symbol: (qty, avg_entry_price) for symbol, position in positions.items()}
+
+# 2. Initialize Exit Advisor
+from src.app.exit_advisor import ExitAdvisor
+exit_advisor = ExitAdvisor(sell_scanner=sell_scanner, cooldown_hours=4)
+
+# 3. Scan positions for exit signals
+exit_candidates = exit_advisor.scan_and_emit_candidates(
+    current_positions=current_positions,
+    market_data=market_data,
+    news_events=news_events,
+    market_regime=market_regime,
+)
+
+# 4. Convert to sell orders
+for candidate in exit_candidates:
+    qty, avg_entry_price = current_positions.get(candidate.symbol, (0, 0))
+    if qty > 0:
+        exit_sell_orders.append({
+            "symbol": candidate.symbol,
+            "quantity": -qty,  # Negative for SELL (close entire position)
+            "action": "SELL_ALL",
+            "reason": candidate.reason,
+            "confidence": candidate.confidence,
+        })
+
+# 5. Merge sell orders into target positions (overrides BUY intents)
+for sell_order in combined_sell_orders:
+    merged_target_positions[symbol] = sell_order["quantity"]
+```
+
+### Exit Candidate Schema
+
+**ExitCandidate** (`src/app/exit_advisor.py`):
+```python
+@dataclass
+class ExitCandidate:
+    candidate_id: str          # "exit-YYYYMMDDHHmmss-SYMBOL"
+    created_at: str            # ISO timestamp
+    expires_at: str            # ISO timestamp (2-4h TTL)
+    symbol: str
+    action: str                # "sell"
+    confidence: float          # 0.0-1.0 (filtered >= 0.60)
+    horizon: str               # "intraday" (urgent) or "swing"
+    sector: str | None
+    event_type: str            # "exit_advisor"
+    tags: list[str]            # ["exit", "sell_all", regime]
+    reason: str                # Human-readable reason (e.g., "SELL_ALL: Stop loss triggered")
+```
+
+### Cooldown Policy
+
+**Purpose**: Prevent repeated exit signals for same symbol
+
+**Implementation**:
+- Per-symbol cooldown: 4 hours (configurable)
+- Tracks last scan time in `out/exit_advisor/events.jsonl`
+- Filters positions on cooldown before scanning
+- Cooldown updated when exit candidate is generated
+
+**Example**:
+```python
+# Symbol AAPL generated exit signal at 10:00 AM
+# Next scan at 11:00 AM: AAPL skipped (on cooldown until 2:00 PM)
+# Next scan at 3:00 PM: AAPL eligible for scanning again
+```
+
+### Confidence Filtering
+
+**Threshold**: 0.60 (60% confidence minimum)
+- Filters out low-confidence signals before candidate creation
+- Lower than SellScanner's 0.70 threshold for direct execution
+- Allows exit overlay to capture more defensive exits
+
+**Actions Supported**:
+- **SELL_ALL**: Close entire position (urgent, 2h TTL, "intraday" horizon)
+- **SELL_HALF**: Reduce position by 50% (4h TTL, "swing" horizon)
+- **HOLD**: No action (filtered out before candidate creation)
+
+### Telemetry & Logging
+
+**Events Logged** (`out/exit_advisor/events.jsonl`):
+```json
+{
+  "timestamp": "2026-01-12T10:30:00Z",
+  "event_type": "exit_signal",
+  "scan_id": "scan-20260112103000",
+  "symbol": "AAPL",
+  "action": "SELL_ALL",
+  "confidence": 0.85,
+  "primary_reason": "Stop loss triggered (-5.2%)",
+  "risk_regime": "elevated_volatility"
+}
+```
+
+**Telemetry Context**:
+- Advisor type: "exit_advisor"
+- Positions scanned
+- Exit candidates generated
+- Filter reasons (cooldown, confidence_too_low, hold_signal)
+
+### Integration with Candidate Pipeline
+
+**Merge Strategy**:
+1. Exit candidates added to `candidate_map` for strategy visibility
+2. Exit symbols added to `universe` if not already present
+3. Strategies generate intents for all symbols in universe (including exit symbols)
+4. Exit sell orders override any BUY intents during reconciliation
+
+**Priority**: SELL orders always take priority over BUY intents
+```python
+# If strategy wants to BUY 10 shares but exit advisor wants to SELL
+# → SELL order wins, position is closed
+merged_target_positions[symbol] = sell_order["quantity"]  # Overrides BUY intent
+```
+
+### Configuration
+
+**No direct config parameters** - uses SellScanner config:
+- LLM provider and model (via config.yaml llm section)
+- Market data provider for price/technicals
+- Cooldown hours: 4 (hardcoded in ExitAdvisor init)
+
+**Files**:
+- Exit Advisor: `src/app/exit_advisor.py`
+- Sell Scanner: `src/app/sell_scanner.py`
+- Integration: `src/app/runner.py` (lines 832-930, 1048-1063)
+- Output: `out/exit_advisor/events.jsonl`
 
 ---
 
@@ -3213,6 +3465,88 @@ else:
 2. **Restart bot:**
    - Will use base config from `config/config.yaml`
    - No code changes needed for rollback
+
+### Active Universe Export
+
+**Purpose**: Export the resolved active universe to a file so external components (like the RSS Selector) can use the same trading universe as the runner.
+
+**Export File**: `out/universe_active.json`
+
+**When Exported**: Every loop iteration in `run_paper_mode` after `check_and_activate_pending()` (runner.py lines 1466-1496)
+
+**File Format**:
+```json
+{
+  "timestamp": "2026-01-12T10:30:00.000000+00:00",
+  "source": "registry",
+  "symbols": ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMD", "META", "GOOGL", "TSLA"],
+  "sectors": {
+    "core_index": {
+      "enabled": true,
+      "symbols": ["SPY", "QQQ"],
+      "version": 1
+    },
+    "mega_cap_tech": {
+      "enabled": true,
+      "symbols": ["AAPL", "MSFT", "NVDA", "AMD", "META", "GOOGL", "TSLA"],
+      "version": 1
+    }
+  }
+}
+```
+
+**File Characteristics**:
+- Overwritten every loop iteration (not appended)
+- Contains timestamp for freshness checking
+- Only includes **enabled** sectors
+- Source field indicates where symbols came from ("registry", "config", or "candidates")
+
+**RSS Selector Integration**:
+
+The RSS Selector (`src/app/selector/rss_selector.py`) automatically loads the active universe at initialization:
+
+```python
+def _load_active_universe(self) -> None:
+    """Load active universe from runner export and update symbol allowlist."""
+    universe_file = Path("out/universe_active.json")
+
+    if not universe_file.exists():
+        return  # Use configured allowlist
+
+    with open(universe_file, encoding="utf-8") as f:
+        universe_data = json.load(f)
+
+    # Check staleness (>24 hours old)
+    timestamp_str = universe_data.get("timestamp")
+    if timestamp_str:
+        age_hours = calculate_age(timestamp_str)
+        if age_hours > 24:
+            print("WARNING: Active universe file is stale, using configured allowlist")
+            return
+
+    # Extract symbols and update allowlist
+    symbols = universe_data.get("symbols", [])
+    if self.config.safety.get("require_symbol_allowlist"):
+        self.config.safety["symbol_allowlist"] = symbols
+        print(f"Loaded active universe: {len(symbols)} symbols")
+```
+
+**Benefits**:
+1. **Consistency**: Selector generates candidates only for actively traded symbols
+2. **Dynamic Updates**: UI sector toggles automatically propagate to selector
+3. **Staleness Detection**: Warns if universe file is > 24 hours old
+4. **Fallback Safety**: Uses configured allowlist if file missing or stale
+
+**Integration Points**:
+- Export: `src/app/runner.py` (lines 1466-1496)
+- Import: `src/app/selector/rss_selector.py` (_load_active_universe method)
+- Registry: `src/app/universe_registry.py` (resolve method)
+
+**Staleness Handling**:
+- File checked for freshness at selector startup
+- Age > 24 hours → Warning logged, uses configured allowlist
+- Missing file → Silent fallback to configured allowlist
+- Invalid JSON → Warning logged, uses configured allowlist
 
 3. **Or use Reset button:**
    - Click "Reset to Defaults" in dashboard

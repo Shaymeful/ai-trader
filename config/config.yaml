@@ -9,10 +9,16 @@ risk:
   max_order_usd: 2500          # Increased from $100 to allow meaningful position sizes
   max_daily_loss_usd: 250      # Maintained as safety net
   max_gross_exposure_usd: 50000  # Increased from $10k to allow multiple positions
+  target_utilization_pct: 0.97  # Target 97% capital utilization (0.95-0.99 recommended)
+  use_total_capital_as_equity_cap: true  # Use total_capital from account_summary.json as cap
 
 # Execution settings
 execution:
   allow_fractional: true  # Enable fractional share orders (paper mode only)
+  order_style: "limit"  # Order type: "limit" or "market"
+  limit_offset_bps_buy: 10  # Buy limit offset in basis points (0.10%)
+  limit_offset_bps_sell: 10  # Sell limit offset in basis points (0.10%)
+  allow_market_in_paper: true  # Allow market orders in paper mode for faster fills
 
 # Performance tracking (Shadow PnL)
 performance:
@@ -85,10 +91,15 @@ llm:
 
   # Constituent change proposals
   enable_constituent_proposals: true
-  allow_constituent_removals: false
+  allow_constituent_removals: true  # Enable removal proposals for underperforming tickers
   max_add_per_run: 3  # Increased from 2 to allow more new candidates
   max_remove_per_run: 1
   min_confidence_add: 0.70  # Lowered from 0.80 to allow more adds
   min_confidence_remove: 0.85
   cooldown_days_per_ticker: 5  # Reduced from 7 to allow faster re-evaluation
   ticker_blacklist: []
+
+  # Removal rubric (triggers removal proposals)
+  removal_min_failed_eligibility_checks: 5  # Remove if ticker fails eligibility N times
+  removal_min_days_no_activity: 14  # Remove if no trades/signals for N days
+  removal_stale_negative_news_confidence: 0.80  # Remove if negative news confidence > N

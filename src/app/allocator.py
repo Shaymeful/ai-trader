@@ -13,7 +13,7 @@ from src.app.strategies import PositionIntent
 class AllocationResult:
     """Result of portfolio allocation."""
 
-    target_positions: dict[str, int]  # symbol -> target quantity (aggregated across strategies)
+    target_positions: dict[str, int | float]  # symbol -> target quantity (int or float for fractional shares)
     strategy_budgets: dict[str, Decimal]  # strategy_name -> allocated budget
     warnings: list[str]  # Any warnings during allocation
     weight_summary: dict | None = None  # Weight normalization summary (if using registry)
@@ -145,7 +145,30 @@ class Allocator:
 
             return self._allocate_legacy(strategy_intents, current_prices)
 
-        self.logger.info(f"Account equity: ${equity:.2f}")
+        # 1a. Apply effective equity cap and target utilization
+        from src.app.account_summary import get_effective_equity_cap, get_total_capital
+
+        broker_equity = equity
+        total_capital = get_total_capital()
+
+        # Compute effective cap (min of broker equity and total_capital if configured)
+        effective_equity_cap = get_effective_equity_cap(
+            broker_equity=float(broker_equity),
+            use_total_capital_as_cap=self.config.use_total_capital_as_equity_cap,
+        )
+
+        # Apply target utilization percentage
+        target_util_pct = self.config.target_utilization_pct
+        budget_base = float(effective_equity_cap) * target_util_pct
+
+        # Log capital allocation details
+        self.logger.info(
+            f"Capital Allocation: broker_equity=${float(broker_equity):.2f}, "
+            f"total_capital={'$' + f'{float(total_capital):.2f}' if total_capital else 'N/A'}, "
+            f"effective_cap=${float(effective_equity_cap):.2f}, "
+            f"target_util={target_util_pct:.2%}, "
+            f"budget_base=${budget_base:.2f}"
+        )
 
         # 2. Get enabled strategies from registry and compute normalized weights
         enabled_strategies = self.registry.get_enabled_strategies()
@@ -158,7 +181,7 @@ class Allocator:
                 strategy_budgets={},
                 warnings=["No enabled strategies in registry"],
                 weight_summary=weight_summary,
-                equity_used=equity,
+                equity_used=float(effective_equity_cap),
             )
 
         self.logger.info(f"Enabled strategies: {weight_summary['enabled_ids']}")
@@ -170,7 +193,7 @@ class Allocator:
 
             self.ledger.append(
                 AllocationWeightsComputedEvent(
-                    equity=float(equity),  # Convert Decimal to float for JSON serialization
+                    equity=budget_base,  # Use budget_base (after utilization target applied)
                     sum_enabled_weights=weight_summary["sum_enabled_weights"],
                     normalized_weights=weight_summary["normalized_weights"],
                     configured_weights=weight_summary["configured_weights"],
@@ -178,11 +201,11 @@ class Allocator:
                 )
             )
 
-        # 3. Compute per-strategy budgets
+        # 3. Compute per-strategy budgets using budget_base (not raw equity)
         strategy_budgets = {}
         for strategy_id in weight_summary["enabled_ids"]:
             normalized_weight = weight_summary["normalized_weights"][strategy_id]
-            budget = allocation.compute_strategy_budget(float(equity), normalized_weight)
+            budget = allocation.compute_strategy_budget(budget_base, normalized_weight)
             strategy_budgets[strategy_id] = Decimal(str(budget))
             self.logger.info(
                 f"{strategy_id}: budget=${budget:.2f} (weight={normalized_weight:.3f})"
@@ -195,7 +218,7 @@ class Allocator:
                 self.ledger.append(
                     StrategyBudgetComputedEvent(
                         strategy_id=strategy_id,
-                        equity=float(equity),  # Convert Decimal to float for JSON serialization
+                        equity=budget_base,  # Use budget_base (after utilization target applied)
                         normalized_weight=normalized_weight,
                         budget=budget,
                     )
@@ -221,17 +244,17 @@ class Allocator:
                 strategy_budgets=strategy_budgets,
                 warnings=warnings,
                 weight_summary=weight_summary,
-                equity_used=equity,
+                equity_used=float(effective_equity_cap),
             )
 
         netted_results = allocation.net_intents_by_symbol(all_intents, market_data, strategy_map)
         self.logger.info(f"Netted {len(all_intents)} intents into {len(netted_results)} symbols")
 
         # 6. Convert netted notionals to target quantities
-        aggregated_targets: dict[str, int] = {}
+        aggregated_targets: dict[str, int | float] = {}
         for symbol, net_data in netted_results.items():
             net_quantity = net_data["net_quantity"]
-            # Round to integer for final target (executor handles fractional if supported)
+            # Round to integer for initial target (may be upgraded to fractional in top-off pass)
             target_qty = int(net_quantity)
             if target_qty != 0:
                 aggregated_targets[symbol] = target_qty
@@ -260,6 +283,93 @@ class Allocator:
                     )
                 )
 
+        # 6a. Top-off pass: distribute remaining budget to highest-conviction BUY intents
+        # Calculate used notional from current allocation
+        used_notional = sum(
+            abs(qty) * float(current_prices.get(symbol, Decimal("0")))
+            for symbol, qty in aggregated_targets.items()
+            if symbol in current_prices
+        )
+
+        remaining_budget = budget_base - used_notional
+        top_off_threshold = 50.0  # Minimum remaining budget to trigger top-off
+
+        if remaining_budget > top_off_threshold:
+            self.logger.info(
+                f"Top-off pass: ${remaining_budget:.2f} remaining budget "
+                f"(used ${used_notional:.2f} of ${budget_base:.2f})"
+            )
+
+            # Find BUY intents (positive quantity) sorted by conviction (highest first)
+            buy_candidates = []
+            for symbol, net_data in netted_results.items():
+                if net_data["final_direction"] == "buy" and symbol in current_prices:
+                    # Find the highest conviction from contributing intents
+                    max_conviction = 0.0
+                    for contrib in net_data["contributing_intents"]:
+                        intent = contrib["intent"]
+                        if intent.target_quantity > 0 and intent.conviction > max_conviction:
+                            max_conviction = intent.conviction
+
+                    if max_conviction > 0:
+                        buy_candidates.append({
+                            "symbol": symbol,
+                            "conviction": max_conviction,
+                            "price": float(current_prices[symbol]),
+                            "current_notional": net_data["net_notional"],
+                        })
+
+            if buy_candidates:
+                # Sort by conviction (highest first)
+                buy_candidates.sort(key=lambda x: x["conviction"], reverse=True)
+
+                # Distribute remaining budget proportionally by conviction
+                total_conviction = sum(c["conviction"] for c in buy_candidates)
+                distributed = 0.0
+
+                for candidate in buy_candidates:
+                    # Allocate proportion of remaining budget based on conviction
+                    proportion = candidate["conviction"] / total_conviction
+                    additional_notional = remaining_budget * proportion
+
+                    # Convert to quantity
+                    additional_qty = allocation.compute_qty_from_notional(
+                        price=candidate["price"],
+                        notional=additional_notional,
+                        allow_fractional=self.config.allow_fractional,
+                        min_qty=0,
+                    )
+
+                    if additional_qty > 0:
+                        symbol = candidate["symbol"]
+                        current_qty = aggregated_targets.get(symbol, 0)
+
+                        # Add fractional or whole shares
+                        if self.config.allow_fractional:
+                            # Use float for fractional shares
+                            new_qty = float(current_qty) + float(additional_qty)
+                            aggregated_targets[symbol] = new_qty
+                        else:
+                            # Use int for whole shares
+                            new_qty = int(current_qty) + int(additional_qty)
+                            aggregated_targets[symbol] = new_qty
+
+                        distributed += additional_notional
+
+                        self.logger.info(
+                            f"Top-off: {symbol} +{additional_qty} shares "
+                            f"(${additional_notional:.2f}, conviction={candidate['conviction']:.2f})"
+                        )
+
+                self.logger.info(f"Top-off complete: distributed ${distributed:.2f} of ${remaining_budget:.2f}")
+            else:
+                self.logger.info("Top-off skipped: no BUY candidates available")
+        else:
+            self.logger.info(
+                f"Top-off skipped: remaining budget ${remaining_budget:.2f} "
+                f"below threshold ${top_off_threshold:.2f}"
+            )
+
         # 7. Apply risk caps
         final_targets = self._apply_risk_caps(aggregated_targets, current_prices, warnings)
 
@@ -268,7 +378,7 @@ class Allocator:
             strategy_budgets=strategy_budgets,
             warnings=warnings,
             weight_summary=weight_summary,
-            equity_used=equity,
+            equity_used=float(effective_equity_cap),
         )
 
     def _allocate_legacy(
@@ -333,10 +443,10 @@ class Allocator:
 
     def _apply_risk_caps(
         self,
-        targets: dict[str, int],
+        targets: dict[str, int | float],
         prices: dict[str, Decimal],
         warnings: list[str],
-    ) -> dict[str, int]:
+    ) -> dict[str, int | float]:
         """
         Apply risk caps to target positions.
 
@@ -344,12 +454,12 @@ class Allocator:
         This method only enforces max_positions_notional (total portfolio cap).
 
         Args:
-            targets: Dict of symbol -> target quantity
+            targets: Dict of symbol -> target quantity (int or float for fractional shares)
             prices: Dict of symbol -> current price
             warnings: List to append warnings to
 
         Returns:
-            Capped target positions
+            Capped target positions (preserving int or float type)
         """
         capped_targets = {}
         total_notional = Decimal("0")

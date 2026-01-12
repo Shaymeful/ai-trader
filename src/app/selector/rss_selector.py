@@ -76,6 +76,9 @@ class RSSSelector:
         self.config = SelectorConfig(**self.config_dict)
         self.eastern = ZoneInfo("America/New_York")
 
+        # Load active universe from runner export (if available) and update allowlist
+        self._load_active_universe()
+
         # Symbol extraction pattern: (SYMBOL) or SYMBOL: or $SYMBOL
         self.symbol_pattern = re.compile(r"\(([A-Z]{1,5})\)|([A-Z]{1,5}):|\$([A-Z]{1,5})\b")
 
@@ -96,6 +99,59 @@ class RSSSelector:
 
         with open(self.config_path, encoding="utf-8") as f:
             return yaml.safe_load(f)
+
+    def _load_active_universe(self) -> None:
+        """
+        Load active universe from runner export and update symbol allowlist.
+
+        The runner exports the active universe (from UI-created sectors) to
+        out/universe_active.json. If this file exists and is recent, use it
+        to update the symbol allowlist so the selector only generates candidates
+        for symbols in the active trading universe.
+
+        Falls back to configured allowlist if file is missing or stale.
+        """
+        universe_file = Path("out/universe_active.json")
+
+        if not universe_file.exists():
+            # No active universe file - use configured allowlist
+            return
+
+        try:
+            with open(universe_file, encoding="utf-8") as f:
+                universe_data = json.load(f)
+
+            # Check if file is recent (within last 24 hours)
+            timestamp_str = universe_data.get("timestamp")
+            if timestamp_str:
+                file_timestamp = datetime.fromisoformat(timestamp_str)
+                age_hours = (datetime.now(file_timestamp.tzinfo or self.eastern) - file_timestamp).total_seconds() / 3600
+
+                if age_hours > 24:
+                    print(f"WARNING: Active universe file is {age_hours:.1f} hours old (stale), using configured allowlist")
+                    return
+
+            # Extract symbols from active universe
+            symbols = universe_data.get("symbols", [])
+            if not symbols:
+                print("WARNING: Active universe file has no symbols, using configured allowlist")
+                return
+
+            # Update allowlist in config if require_symbol_allowlist is enabled
+            if self.config.safety.get("require_symbol_allowlist"):
+                print(f"Loaded active universe from {universe_file}: {len(symbols)} symbols")
+                print(f"  Source: {universe_data.get('source', 'unknown')}")
+                self.config.safety["symbol_allowlist"] = symbols
+                # Also update config_dict for consistency
+                if "safety" not in self.config_dict:
+                    self.config_dict["safety"] = {}
+                self.config_dict["safety"]["symbol_allowlist"] = symbols
+            else:
+                print(f"Active universe available ({len(symbols)} symbols) but allowlist not required")
+
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            print(f"WARNING: Failed to load active universe from {universe_file}: {e}")
+            print("Using configured allowlist")
 
     def fetch_rss_feed(self, feed_url: str, timeout: int = 10) -> str:
         """Fetch RSS feed content."""
