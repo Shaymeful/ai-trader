@@ -1342,13 +1342,16 @@ async def create_constituent_proposal(request: CreateConstituentProposalRequest)
                 }
             )
 
-        return ChangeResponse(
+        # Return response with proposal_id for UI tracking
+        response = ChangeResponse(
             success=True,
             message=f"Proposal created to {request.action.upper()} "
             + f"{len(request.tickers)} ticker(s) to/from {request.sector_name}. "
             + "Awaiting approval.",
             pending_version=None,  # No pending version until approved
         )
+        # Add proposal_id to response dict (ChangeResponse doesn't have it as a field)
+        return {**response.model_dump(), "proposal_id": proposal_id}
 
     except HTTPException:
         raise
