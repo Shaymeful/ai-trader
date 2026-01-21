@@ -1546,6 +1546,21 @@
         .btn-view-edit:hover {
             background: #2563eb;
         }
+
+        .btn-exit-disabled {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            width: 100%;
+        }
+
+        .btn-exit-disabled:hover {
+            background: #dc2626;
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
 </head>
@@ -2198,6 +2213,13 @@
                                     style="margin-top: 0.5rem;">
                                 Edit Tickers
                             </button>
+                            ${!sector.enabled ? `
+                            <button class="btn-exit-disabled"
+                                    onclick="exitDisabledPositions('${sector.sector_name}')"
+                                    style="margin-top: 0.5rem; background: #ef4444;">
+                                Exit Disabled Positions
+                            </button>
+                            ` : ''}
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox"
@@ -2235,6 +2257,131 @@
                 showError('Failed to update sector');
                 loadDashboard();
             }
+        }
+
+        async function exitDisabledPositions(sectorName) {
+            try {
+                const response = await fetch(`/universe/sectors/${sectorName}/disabled-positions`);
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    showError(error.detail || 'Failed to get positions');
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.total_positions === 0) {
+                    showSuccess('No positions found in this sector');
+                    return;
+                }
+
+                // Build modal content showing positions
+                let modalContent = `
+                    <h3>Positions in ${sectorName.replace(/_/g, ' ')}</h3>
+                    <p style="margin: 1rem 0; color: #94a3b8;">${data.message}</p>
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="border-bottom: 2px solid #334155;">
+                                    <th style="text-align: left; padding: 0.5rem;">Symbol</th>
+                                    <th style="text-align: right; padding: 0.5rem;">Qty</th>
+                                    <th style="text-align: right; padding: 0.5rem;">Avg Price</th>
+                                    <th style="text-align: right; padding: 0.5rem;">Current</th>
+                                    <th style="text-align: right; padding: 0.5rem;">Value</th>
+                                    <th style="text-align: right; padding: 0.5rem;">P&L</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+
+                data.positions.forEach(pos => {
+                    const pnlColor = pos.unrealized_pnl > 0 ? '#10b981' : pos.unrealized_pnl < 0 ? '#ef4444' : '#94a3b8';
+                    const pnlSign = pos.unrealized_pnl > 0 ? '+' : '';
+
+                    modalContent += `
+                        <tr style="border-bottom: 1px solid #1e293b;">
+                            <td style="padding: 0.5rem;">${pos.symbol}</td>
+                            <td style="text-align: right; padding: 0.5rem;">${pos.quantity}</td>
+                            <td style="text-align: right; padding: 0.5rem;">$${pos.avg_entry_price.toFixed(2)}</td>
+                            <td style="text-align: right; padding: 0.5rem;">${pos.current_price ? '$' + pos.current_price.toFixed(2) : 'N/A'}</td>
+                            <td style="text-align: right; padding: 0.5rem;">${pos.current_value ? '$' + pos.current_value.toFixed(2) : 'N/A'}</td>
+                            <td style="text-align: right; padding: 0.5rem; color: ${pnlColor};">
+                                ${pos.unrealized_pnl !== null ? pnlSign + '$' + pos.unrealized_pnl.toFixed(2) : 'N/A'}
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                modalContent += `
+                            </tbody>
+                        </table>
+                    </div>
+                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 2px solid #334155;">
+                        <p><strong>Total Positions:</strong> ${data.total_positions}</p>
+                        <p><strong>Total Value:</strong> ${data.total_value ? '$' + data.total_value.toFixed(2) : 'N/A'}</p>
+                    </div>
+                    <div style="margin-top: 1rem; padding: 1rem; background: #1e293b; border-radius: 4px;">
+                        <p style="margin: 0; font-size: 0.9rem; color: #cbd5e1;">
+                            <strong>Note:</strong> Exit Advisor will evaluate these positions on the next loop iteration
+                            to find optimal exit opportunities based on market conditions.
+                        </p>
+                    </div>
+                `;
+
+                // Show modal (reuse existing modal or create simple alert)
+                showInfoModal(modalContent);
+
+            } catch (error) {
+                console.error('Error getting disabled positions:', error);
+                showError('Failed to get positions for sector');
+            }
+        }
+
+        function showInfoModal(htmlContent) {
+            // Simple modal implementation
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.8);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+            `;
+
+            const modalInner = document.createElement('div');
+            modalInner.style.cssText = `
+                background: #0f172a;
+                padding: 2rem;
+                border-radius: 8px;
+                max-width: 800px;
+                max-height: 80vh;
+                overflow-y: auto;
+                box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+                color: #f1f5f9;
+            `;
+            modalInner.innerHTML = htmlContent + `
+                <button onclick="this.closest('[style*=fixed]').remove()"
+                        style="margin-top: 1.5rem; padding: 0.75rem 1.5rem; background: #3b82f6;
+                               border: none; border-radius: 4px; color: white; cursor: pointer;">
+                    Close
+                </button>
+            `;
+
+            modal.appendChild(modalInner);
+            document.body.appendChild(modal);
+
+            // Close on background click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
         }
 
         async function resetUniverse() {

@@ -399,6 +399,28 @@ class CreateSectorRequest(BaseModel):
     enabled: bool = Field(default=False, description="Whether sector is enabled (default false)")
 
 
+class DisabledSectorPosition(BaseModel):
+    """Position in a disabled sector."""
+
+    symbol: str
+    quantity: int
+    avg_entry_price: float
+    current_price: float | None
+    current_value: float | None
+    unrealized_pnl: float | None
+
+
+class DisabledSectorPositionsResponse(BaseModel):
+    """Response for disabled sector positions."""
+
+    sector_name: str
+    sector_enabled: bool
+    positions: list[DisabledSectorPosition]
+    total_positions: int
+    total_value: float | None
+    message: str
+
+
 class CreateConstituentProposalRequest(BaseModel):
     """Request to create a constituent change proposal."""
 
@@ -1190,6 +1212,109 @@ async def create_sector(request: CreateSectorRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create sector: {e}") from e
+
+
+@app.get("/universe/sectors/{sector_name}/disabled-positions", response_model=DisabledSectorPositionsResponse)
+async def get_disabled_sector_positions(sector_name: str):
+    """
+    Get positions in a disabled sector for manual exit review.
+
+    This endpoint identifies positions that exist in a disabled sector.
+    The Exit Advisor will evaluate these positions on the next loop iteration
+    to find optimal exit opportunities.
+
+    Args:
+        sector_name: Sector name to check
+
+    Returns:
+        DisabledSectorPositionsResponse with positions in the sector
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    # Check if sector exists
+    if sector_name not in universe_registry.sectors:
+        raise HTTPException(status_code=404, detail=f"Sector '{sector_name}' not found")
+
+    sector_config = universe_registry.sectors[sector_name]
+
+    try:
+        # Initialize broker to get current positions
+        from src.app.config import Config
+        from src.broker.base import AlpacaBroker, MockBroker
+
+        config = Config.from_yaml("config/config.yaml")
+
+        # Use real broker if credentials available, otherwise mock
+        if config.alpaca_api_key:
+            broker = AlpacaBroker(
+                api_key=config.alpaca_api_key,
+                secret_key=config.alpaca_secret_key,
+                trading_base_url=config.alpaca_trading_base_url,
+            )
+        else:
+            broker = MockBroker()
+
+        # Get current positions: dict[str, tuple[int, Decimal]]
+        all_positions = broker.get_positions()
+
+        # Filter to positions in this sector
+        sector_symbols = set(sector_config.symbols)
+        positions_in_sector = []
+        total_value = 0.0
+
+        for symbol, (qty, avg_price) in all_positions.items():
+            if symbol in sector_symbols:
+                # Get current price
+                try:
+                    quote = broker.get_quote(symbol)
+                    current_price = float(quote.last)
+                    current_value = current_price * qty
+                    unrealized_pnl = (current_price - float(avg_price)) * qty
+                except Exception:
+                    current_price = None
+                    current_value = None
+                    unrealized_pnl = None
+
+                position = DisabledSectorPosition(
+                    symbol=symbol,
+                    quantity=qty,
+                    avg_entry_price=float(avg_price),
+                    current_price=current_price,
+                    current_value=current_value,
+                    unrealized_pnl=unrealized_pnl,
+                )
+                positions_in_sector.append(position)
+
+                if current_value:
+                    total_value += current_value
+
+        # Build message
+        if not positions_in_sector:
+            message = f"No positions found in sector '{sector_name}'"
+        elif sector_config.enabled:
+            message = f"Found {len(positions_in_sector)} position(s) in ENABLED sector '{sector_name}'"
+        else:
+            message = (
+                f"Found {len(positions_in_sector)} position(s) in DISABLED sector '{sector_name}'. "
+                "Exit Advisor will evaluate these positions on the next loop iteration."
+            )
+
+        return DisabledSectorPositionsResponse(
+            sector_name=sector_name,
+            sector_enabled=sector_config.enabled,
+            positions=positions_in_sector,
+            total_positions=len(positions_in_sector),
+            total_value=total_value if total_value > 0 else None,
+            message=message,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get positions for sector: {e}"
+        ) from e
 
 
 @app.post("/universe/proposals/constituents", response_model=ChangeResponse)
