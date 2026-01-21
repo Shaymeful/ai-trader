@@ -42,9 +42,12 @@ from .decision_logger import DecisionLogger, TradingDecision, create_decision_fr
 from .execution import AlpacaExecutor
 from .exit_advisor import ExitAdvisor
 from .ledger import CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
+from .portfolio_reconciler import PortfolioReconciler
+from .sell_reasons import SellReason
 from .sell_scanner import SellScanner, SellSignal
 from .strategies import MeanReversionStrategy, TrendStrategy
 from .strategy_registry import StrategyRegistry
+from .ticker_exclusions import TickerExclusionManager
 
 
 def get_market_time_now() -> datetime:
@@ -206,18 +209,9 @@ def _run_sell_scan(
             print("No positions to scan for sell signals")
             return [], []
 
-        # Convert to format expected by sell scanner: {symbol: (quantity, avg_price)}
-        current_positions = {}
-        for symbol, position in positions.items():
-            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
-            avg_price = (
-                position.get("avg_entry_price", 0)
-                if isinstance(position, dict)
-                else getattr(position, "avg_entry_price", 0)
-            )
-
-            if qty > 0:  # Only include long positions
-                current_positions[symbol] = (int(qty), float(avg_price))
+        # broker.get_positions() returns dict[str, tuple[int, Decimal]]
+        # Format is already what sell scanner expects: {symbol: (quantity, avg_price)}
+        current_positions = {symbol: (qty, float(avg_price)) for symbol, (qty, avg_price) in positions.items()}
 
         if not current_positions:
             print("No long positions to scan")
@@ -511,7 +505,28 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
     )
 
     # Extract current prices for allocator
+    print("\n[BEFORE PRICE EXTRACTION]")
     current_prices = {symbol: Decimal(str(data["price"])) for symbol, data in market_data.items()}
+    print(f"[AFTER PRICE EXTRACTION] Got {len(current_prices)} prices from market_data")
+
+    # CRITICAL: Fetch prices for positions NOT in current universe
+    # (needed for reconciliation sells of legacy positions)
+    current_positions_symbols = set(broker.get_positions().keys())
+    missing_price_symbols = current_positions_symbols - set(current_prices.keys())
+    print(f"\n[PRICE FETCH DIAGNOSTIC]")
+    print(f"  Current positions: {current_positions_symbols}")
+    print(f"  Current prices keys: {set(current_prices.keys())}")
+    print(f"  Missing prices: {missing_price_symbols}")
+    if missing_price_symbols:
+        print(f"Fetching prices for {len(missing_price_symbols)} positions not in universe: {missing_price_symbols}")
+        for symbol in missing_price_symbols:
+            try:
+                quote = broker.get_quote(symbol)
+                current_prices[symbol] = quote.last
+                print(f"  {symbol}: ${quote.last:.2f}")
+            except Exception as e:
+                print(f"  {symbol}: Failed to get price - {e}")
+                # Use a fallback or skip (will be filtered by executor)
 
     # Run allocator to get strategy budgets
     allocator = Allocator(config)
@@ -791,6 +806,23 @@ def run_paper_mode(
     # Extract prices for allocator
     current_prices = {symbol: Decimal(str(data["price"])) for symbol, data in market_data.items()}
 
+    # CRITICAL: Fetch prices for positions NOT in current universe
+    # (needed for reconciliation sells of legacy positions)
+    print(f"\n[PRICE FETCH] Checking for positions without prices...")
+    current_positions_symbols = set(broker.get_positions().keys())
+    missing_price_symbols = current_positions_symbols - set(current_prices.keys())
+    print(f"[PRICE FETCH] Current positions: {current_positions_symbols}")
+    print(f"[PRICE FETCH] Missing prices: {missing_price_symbols}")
+    if missing_price_symbols:
+        print(f"Fetching prices for {len(missing_price_symbols)} positions not in universe: {missing_price_symbols}")
+        for symbol in missing_price_symbols:
+            try:
+                quote = broker.get_quote(symbol)
+                current_prices[symbol] = quote.last
+                print(f"  {symbol}: ${quote.last:.2f}")
+            except Exception as e:
+                print(f"  {symbol}: Failed to get price - {e}")
+
     # ============================================================================
     # AI-Driven Sell Scanning (GOAL B)
     # ============================================================================
@@ -826,6 +858,104 @@ def run_paper_mode(
     # ============================================================================
 
     # ============================================================================
+    # Portfolio Reconciliation (Capital Cap + Universe Alignment)
+    # ============================================================================
+
+    # Initialize ticker exclusion manager
+    print("Initializing ticker exclusion manager...")
+    exclusion_manager = TickerExclusionManager()
+    print(f"Loaded {len(exclusion_manager.exclusions)} ticker exclusions")
+    print()
+
+    # Initialize portfolio reconciler
+    print("Running portfolio reconciliation...")
+    reconciler = PortfolioReconciler(
+        config=config,
+        universe_registry=universe_registry,
+        excluded_tickers=exclusion_manager.get_excluded_dict(),
+    )
+
+    # Get current positions for reconciliation
+    try:
+        positions = broker.get_positions()
+
+        # broker.get_positions() returns dict[str, tuple[int, Decimal]]
+        # Format is already what reconciler expects: {symbol: (quantity, avg_price)}
+        reconcile_positions = positions.copy()
+
+        # Run reconciliation
+        reconcile_result = reconciler.reconcile(reconcile_positions, current_prices)
+
+        print(f"Reconciliation complete:")
+        print(f"  Current exposure: ${reconcile_result.current_exposure:,.2f}")
+        print(f"  Capital cap: ${reconcile_result.cap:,.2f}")
+        print(f"  Target exposure: ${reconcile_result.target_exposure:,.2f}")
+        print(f"  Violations: {len(reconcile_result.violations)}")
+        print(f"  Sell intents: {len(reconcile_result.sell_intents)}")
+
+        # Convert reconciliation sell intents to orders
+        reconcile_sell_orders = []
+        for intent in reconcile_result.sell_intents:
+            # Get position details
+            if intent.symbol not in reconcile_positions:
+                continue
+
+            qty, avg_entry_price = reconcile_positions[intent.symbol]
+            current_price = current_prices.get(intent.symbol, avg_entry_price)
+
+            reconcile_sell_orders.append(
+                {
+                    "symbol": intent.symbol,
+                    "quantity": -intent.quantity,  # Negative for sell
+                    "action": "SELL_ALL" if intent.quantity >= qty else "SELL_PARTIAL",
+                    "reason": intent.reason.value,
+                    "confidence": 1.0,  # Reconciliation sells are mandatory
+                    "signal": None,
+                    "reconcile_context": intent.context,
+                }
+            )
+
+            # Log reconciliation sell decision
+            decision = TradingDecision(
+                decision_id=f"reconcile_sell_{intent.symbol}_{datetime.now(UTC).isoformat()}",
+                timestamp=datetime.now(UTC).isoformat(),
+                symbol=intent.symbol,
+                action=f"RECONCILE_SELL_{intent.reason.value}",
+                quantity=intent.quantity,
+                price=float(current_price),
+                confidence=1.0,
+                expected_value=0.0,
+                risk_regime=market_regime,
+                strategy="PortfolioReconciler",
+                primary_reason=intent.reason.value,
+                detailed_reasoning=intent.context.get("rationale", "Portfolio reconciliation sell"),
+                supporting_data=intent.context,
+                invalidation_criteria="N/A - mandatory reconciliation sell",
+                position_context={
+                    "quantity": qty,
+                    "avg_entry_price": float(avg_entry_price),
+                    "current_value": float(current_price * qty),
+                    "unrealized_pnl": float((current_price - avg_entry_price) * qty),
+                },
+                execution_result="DRY_RUN" if dry_run else None,
+            )
+
+            decision_logger.log_decision(decision)
+
+        print(f"Generated {len(reconcile_sell_orders)} reconciliation sell orders")
+        print()
+
+    except Exception as e:
+        print(f"WARNING: Portfolio reconciliation failed: {e}")
+        traceback.print_exc()
+        reconcile_sell_orders = []
+        print()
+
+    # ============================================================================
+    # End Portfolio Reconciliation
+    # ============================================================================
+
+    # ============================================================================
     # Exit Advisor Integration (SELL Candidate Generation)
     # ============================================================================
 
@@ -840,18 +970,9 @@ def run_paper_mode(
     try:
         positions = broker.get_positions()
 
-        # Convert positions to format expected by exit advisor: {symbol: (quantity, avg_price)}
-        current_positions = {}
-        for symbol, position in positions.items():
-            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
-            avg_price = (
-                position.get("avg_entry_price", 0)
-                if isinstance(position, dict)
-                else getattr(position, "avg_entry_price", 0)
-            )
-
-            if qty > 0:  # Only include long positions
-                current_positions[symbol] = (int(qty), float(avg_price))
+        # broker.get_positions() returns dict[str, tuple[int, Decimal]]
+        # Format is already what exit advisor expects: {symbol: (quantity, avg_price)}
+        current_positions = {symbol: (qty, float(avg_price)) for symbol, (qty, avg_price) in positions.items()}
 
         if current_positions:
             print(f"Running Exit Advisor on {len(current_positions)} positions...")
@@ -993,13 +1114,60 @@ def run_paper_mode(
     print()
 
     # Merge sell orders into target positions (sell orders take priority)
+    # Priority: 1) Reconciliation sells (mandatory), 2) Scanner sells (signal-based)
     merged_target_positions = dict(allocation_result.target_positions)
 
+    # DIAGNOSTIC: Log initial state
+    print("="*80)
+    print("ORDER MERGE DIAGNOSTICS")
+    print("="*80)
+    print(f"Initial buy intents from allocator: {len(allocation_result.target_positions)}")
+    print(f"Reconciliation sell orders to merge: {len(reconcile_sell_orders)}")
+    print(f"Scanner sell orders to merge: {len(sell_orders) if sell_orders else 0}")
+
+    # First, merge reconciliation sells (highest priority)
+    reconcile_symbols = set()  # Track which symbols have reconciliation sells
+    if reconcile_sell_orders:
+        print(f"\nMerging {len(reconcile_sell_orders)} reconciliation sell orders into target positions...")
+        for sell_order in reconcile_sell_orders:
+            print(f"  DEBUG: Reconcile sell order = {sell_order}")
+        for sell_order in reconcile_sell_orders:
+            symbol = sell_order["symbol"]
+            sell_qty = sell_order["quantity"]  # Negative quantity (e.g., -7751 to sell 7751 shares)
+            reason = sell_order["reason"]
+            action = sell_order.get("action", "SELL_PARTIAL")
+
+            # Calculate target position: current + sell_qty (sell_qty is negative)
+            # For SELL_ALL, target should be 0
+            if action == "SELL_ALL":
+                target_position = 0
+            else:
+                # Get current position from reconcile_positions
+                current_qty = reconcile_positions.get(symbol, (0, Decimal("0")))[0]
+                target_position = current_qty + sell_qty  # sell_qty is negative, so this reduces position
+
+            # Reconciliation sells override buy intents for the same symbol
+            if symbol in merged_target_positions:
+                print(f"  {symbol}: Replacing BUY intent with RECONCILE SELL (reason: {reason}, current={reconcile_positions.get(symbol, (0, 0))[0]}, target={target_position})")
+            else:
+                print(f"  {symbol}: Adding RECONCILE SELL (reason: {reason}, current={reconcile_positions.get(symbol, (0, 0))[0]}, target={target_position})")
+
+            merged_target_positions[symbol] = target_position
+            reconcile_symbols.add(symbol)
+
+        print()
+
+    # Second, merge scanner sells (only if not already selling via reconciliation)
     if sell_orders:
-        print(f"\nMerging {len(sell_orders)} sell orders into target positions...")
+        print(f"\nMerging {len(sell_orders)} scanner sell orders into target positions...")
         for sell_order in sell_orders:
             symbol = sell_order["symbol"]
             sell_qty = sell_order["quantity"]  # Negative quantity
+
+            # Skip if reconciliation already scheduled sell for this symbol
+            if symbol in reconcile_symbols:
+                print(f"  {symbol}: SKIPPED (reconciliation sell takes priority)")
+                continue
 
             # Sell orders override buy intents for the same symbol
             if symbol in merged_target_positions:
@@ -1010,7 +1178,24 @@ def run_paper_mode(
         print()
 
     # Execute orders (both buy and sell)
-    print("Executing orders...")
+    print("="*80)
+    print("EXECUTION PHASE")
+    print("="*80)
+    print(f"Total positions to execute: {len(merged_target_positions)}")
+    print(f"Dry-run mode: {dry_run}")
+
+    sell_count = sum(1 for qty in merged_target_positions.values() if qty < 0)
+    buy_count = sum(1 for qty in merged_target_positions.values() if qty > 0)
+    print(f"  - Sell orders: {sell_count}")
+    print(f"  - Buy orders: {buy_count}")
+
+    if sell_count > 0:
+        print("\nSELL ORDERS TO EXECUTE:")
+        for symbol, qty in merged_target_positions.items():
+            if qty < 0:
+                print(f"  {symbol}: qty={qty} (SELL {abs(qty)} shares)")
+
+    print("\nExecuting orders...")
     executor = AlpacaExecutor(broker, config, dry_run=dry_run)
     execution_result = executor.reconcile_and_execute(
         merged_target_positions,

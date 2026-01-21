@@ -105,7 +105,15 @@ class AlpacaExecutor:
             target_positions, current_positions, current_prices
         )
 
+        print(f"\n[EXECUTOR DIAGNOSTIC] Generated {len(order_instructions)} order instructions")
+        for instr in order_instructions:
+            print(f"  - {instr.symbol}: {instr.side.name} {instr.quantity} @ ${instr.limit_price:.2f} (risk_reducing={instr.is_risk_reducing})")
+
         self.logger.info(f"Generated {len(order_instructions)} order instructions")
+
+        # DIAGNOSTIC: Log order instructions
+        for instr in order_instructions:
+            self.logger.info(f"  Order instruction: {instr.symbol} {instr.side.name} {instr.quantity} @ ${instr.limit_price} (risk_reducing={instr.is_risk_reducing})")
 
         # Print reconciliation summary
         print("\nReconciliation:")
@@ -159,10 +167,12 @@ class AlpacaExecutor:
             delta = target_qty - current_qty
 
             if delta == 0:
+                self.logger.debug(f"{symbol}: delta=0, skipping (no change needed)")
                 continue  # No change needed
 
             if symbol not in current_prices:
-                self.logger.warning(f"{symbol}: No price available, skipping")
+                self.logger.warning(f"{symbol}: No price available, skipping (target={target_qty}, current={current_qty}, delta={delta})")
+                print(f"  [EXECUTOR] {symbol}: SKIPPED - no price available (target={target_qty}, current={current_qty})")
                 continue
 
             price = current_prices[symbol]
@@ -189,7 +199,9 @@ class AlpacaExecutor:
                 is_risk_reducing=is_risk_reducing,
             )
             instructions.append(instruction)
+            self.logger.info(f"Generated instruction: {symbol} {side.name} qty={quantity} @ ${limit_price:.2f} (risk_reducing={is_risk_reducing})")
 
+        self.logger.info(f"Total instructions generated: {len(instructions)}")
         return instructions
 
     def _slice_order(self, instruction: OrderInstruction, price: Decimal) -> list[OrderSlice]:
@@ -315,6 +327,11 @@ class AlpacaExecutor:
 
         self.logger.info(f"Current portfolio exposure: ${current_exposure:.2f}")
         print(f"\nExecution (max_order_usd=${self.config.max_order_notional}):")
+
+        # DIAGNOSTIC: Log all instructions before processing
+        self.logger.info(f"Processing {len(instructions)} order instructions:")
+        for instr in instructions:
+            self.logger.info(f"  {instr.symbol}: {instr.side.name} {instr.quantity} @ ${instr.limit_price}")
 
         for instruction in instructions:
             price = current_prices.get(instruction.symbol, Decimal("0"))

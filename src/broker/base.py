@@ -605,16 +605,26 @@ class AlpacaBroker(Broker):
         Returns:
             Dictionary mapping symbol to (quantity, avg_price) tuples
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         positions_dict = {}
         try:
             positions = self.client.get_all_positions()
+            logger.info(f"AlpacaBroker.get_positions(): Retrieved {len(positions)} positions from Alpaca")
             for pos in positions:
-                qty = int(pos.qty)
+                logger.info(f"  Processing {pos.symbol}: qty={pos.qty}, avg_entry_price={pos.avg_entry_price}")
+                # CRITICAL FIX: pos.qty is a string that may contain decimals
+                # Convert to float first, then to int (truncates fractional shares)
+                qty = int(float(pos.qty))
                 avg_price = Decimal(str(pos.avg_entry_price))
                 positions_dict[pos.symbol] = (qty, avg_price)
-        except Exception:
+                logger.info(f"  Added {pos.symbol}: qty={qty}, avg_price={avg_price}")
+        except Exception as e:
             # If we can't get positions, return empty dict
-            pass
+            logger.error(f"AlpacaBroker.get_positions() FAILED: {e}", exc_info=True)
+
+        logger.info(f"AlpacaBroker.get_positions(): Returning {len(positions_dict)} positions")
         return positions_dict
 
     def get_quote(self, symbol: str) -> Quote:
