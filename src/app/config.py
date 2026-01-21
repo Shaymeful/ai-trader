@@ -126,6 +126,20 @@ class Config(BaseModel):
         default=True, description="Allow market orders in paper mode for faster fills"
     )
 
+    # Order hygiene settings
+    cancel_stale_orders: bool = Field(
+        default=True, description="Cancel/replace stale open orders before placing new ones"
+    )
+    max_open_orders_per_symbol_side: int = Field(
+        default=1, description="Maximum open orders allowed per (symbol, side) pair"
+    )
+    order_price_tolerance_pct: float = Field(
+        default=0.001, description="Price tolerance (0.1%) for considering orders equivalent"
+    )
+    order_qty_tolerance: float = Field(
+        default=0.0001, description="Quantity tolerance for fractional shares"
+    )
+
     # Performance tracking (Shadow PnL)
     performance_min_samples: int = Field(
         default=20, description="Minimum samples before strategy weight updates"
@@ -494,6 +508,15 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 config.limit_offset_bps_sell = int(execution["limit_offset_bps_sell"])
             if "allow_market_in_paper" in execution:
                 config.allow_market_in_paper = bool(execution["allow_market_in_paper"])
+            # Order hygiene settings
+            if "cancel_stale_orders" in execution:
+                config.cancel_stale_orders = bool(execution["cancel_stale_orders"])
+            if "max_open_orders_per_symbol_side" in execution:
+                config.max_open_orders_per_symbol_side = int(execution["max_open_orders_per_symbol_side"])
+            if "order_price_tolerance_pct" in execution:
+                config.order_price_tolerance_pct = float(execution["order_price_tolerance_pct"])
+            if "order_qty_tolerance" in execution:
+                config.order_qty_tolerance = float(execution["order_qty_tolerance"])
 
         # Apply performance tracking parameters from YAML
         if "performance" in yaml_config:

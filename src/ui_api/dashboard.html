@@ -2535,9 +2535,16 @@
             const countdownEl = document.getElementById('next-loop-countdown');
 
             if (diffSeconds <= 0) {
-                // Overdue
-                const overdueMins = Math.ceil(Math.abs(diffSeconds) / 60);
-                countdownEl.textContent = `Overdue (${overdueMins}m)`;
+                // Overdue or error
+                if (window.runtimeData.last_error) {
+                    // Show error message instead of generic "overdue"
+                    countdownEl.textContent = `Error: ${window.runtimeData.last_error}`;
+                    countdownEl.title = `Last error at ${new Date(window.runtimeData.last_error_at).toLocaleString()}`;
+                } else {
+                    const overdueMins = Math.ceil(Math.abs(diffSeconds) / 60);
+                    countdownEl.textContent = `Overdue (${overdueMins}m)`;
+                    countdownEl.title = '';
+                }
                 countdownEl.classList.remove('loop-countdown');
                 countdownEl.classList.add('loop-overdue');
             } else if (diffSeconds < 60) {

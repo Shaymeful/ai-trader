@@ -42,6 +42,17 @@ class ExecutionResult:
     total_risk_used: Decimal  # Total notional of orders placed
 
 
+@dataclass
+class OrderHygieneAction:
+    """Record of order hygiene action taken."""
+
+    symbol: str
+    side: str
+    action: str  # "canceled", "skipped", "replaced"
+    reason: str
+    order_id: str | None = None
+
+
 class AlpacaExecutor:
     """
     Executor for placing orders on Alpaca paper trading.
@@ -253,7 +264,7 @@ class AlpacaExecutor:
 
         # Calculate total slices needed
         total_qty = instruction.quantity
-        total_slices = (total_qty + max_qty_per_slice - 1) // max_qty_per_slice  # Ceiling division
+        total_slices = int((total_qty + max_qty_per_slice - 1) // max_qty_per_slice)  # Ceiling division
 
         # Create slices
         slices = []
@@ -280,6 +291,179 @@ class AlpacaExecutor:
 
         return slices
 
+    def _perform_order_hygiene(
+        self,
+        instructions: list[OrderInstruction],
+        current_prices: dict[str, Decimal],
+    ) -> tuple[list[OrderInstruction], list[OrderHygieneAction]]:
+        """
+        Perform order hygiene: cancel stale/duplicate open orders and filter instructions.
+
+        UPDATED POLICY (Fixed for order slicing):
+        - For each new instruction, cancel ALL existing open orders for that (symbol, side)
+        - This prevents order accumulation when slicing creates multiple orders
+        - Exception: Skip the new instruction if a matching order already exists
+
+        Args:
+            instructions: List of new OrderInstruction objects to place
+            current_prices: Dict of symbol -> current price
+
+        Returns:
+            Tuple of (filtered_instructions, hygiene_actions)
+        """
+        hygiene_actions: list[OrderHygieneAction] = []
+
+        if not self.config.cancel_stale_orders:
+            # Hygiene disabled, return all instructions unchanged
+            return instructions, hygiene_actions
+
+        # Fetch open orders from broker
+        try:
+            open_orders = self.broker.get_open_orders_detailed()
+        except Exception as e:
+            self.logger.error(f"Failed to fetch open orders for hygiene: {e}")
+            # If we can't fetch open orders, proceed with all instructions (fail-open)
+            return instructions, hygiene_actions
+
+        # Build index: (symbol, side) -> list of open orders
+        open_orders_index: dict[tuple[str, str], list[dict]] = {}
+        for order in open_orders:
+            key = (order["symbol"], order["side"])
+            if key not in open_orders_index:
+                open_orders_index[key] = []
+            open_orders_index[key].append(order)
+
+        # Calculate reserved notional from open BUY orders (for exposure tracking later)
+        reserved_notional = Decimal("0")
+        for order in open_orders:
+            if order["side"] == "BUY" and order["limit_price"]:
+                reserved_notional += Decimal(str(order["qty"])) * order["limit_price"]
+
+        self.logger.info(f"Reserved notional from {len(open_orders)} open orders: ${reserved_notional:.2f}")
+
+        # Process each new instruction
+        filtered_instructions = []
+
+        for instruction in instructions:
+            key = (instruction.symbol, instruction.side.name)
+            existing_orders = open_orders_index.get(key, [])
+
+            if not existing_orders:
+                # No existing orders for this (symbol, side), proceed with instruction
+                filtered_instructions.append(instruction)
+                continue
+
+            # NEW POLICY: Check if ANY existing order matches the new instruction
+            # If so, skip the new instruction entirely (avoid duplicates)
+            matches_existing = False
+            for existing_order in existing_orders:
+                if self._orders_match(instruction, existing_order, current_prices):
+                    # Found matching order, skip new instruction
+                    matches_existing = True
+                    hygiene_actions.append(
+                        OrderHygieneAction(
+                            symbol=instruction.symbol,
+                            side=instruction.side.name,
+                            action="skipped",
+                            reason="Matching open order already exists",
+                            order_id=existing_order["order_id"],
+                        )
+                    )
+                    self.logger.info(
+                        f"{instruction.symbol} {instruction.side.name}: Skipping new order, "
+                        f"matching open order {existing_order['order_id']} already exists"
+                    )
+                    break
+
+            if matches_existing:
+                continue  # Skip this instruction
+
+            # NEW POLICY: If we're placing a new order, cancel ALL existing orders for this (symbol, side)
+            # This prevents accumulation when order slicing creates multiple orders from one instruction
+            self.logger.info(
+                f"{instruction.symbol} {instruction.side.name}: Canceling {len(existing_orders)} "
+                f"existing order(s) before placing new order (prevents accumulation)"
+            )
+
+            for existing_order in existing_orders:
+                order_id = existing_order["order_id"]
+                try:
+                    if not self.dry_run:
+                        self.broker.client.cancel_order_by_id(order_id)
+                    hygiene_actions.append(
+                        OrderHygieneAction(
+                            symbol=instruction.symbol,
+                            side=instruction.side.name,
+                            action="canceled",
+                            reason=f"Clearing existing orders before new placement (found {len(existing_orders)})",
+                            order_id=order_id,
+                        )
+                    )
+                    self.logger.info(
+                        f"{instruction.symbol} {instruction.side.name}: Canceled order {order_id}"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to cancel order {order_id} for {instruction.symbol}: {e}"
+                    )
+
+            # Place new instruction as replacement (may get sliced into multiple orders later)
+            filtered_instructions.append(instruction)
+            hygiene_actions.append(
+                OrderHygieneAction(
+                    symbol=instruction.symbol,
+                    side=instruction.side.name,
+                    action="replaced",
+                    reason=f"Replaced {len(existing_orders)} existing order(s) with new instruction",
+                    order_id=None,
+                )
+            )
+
+        return filtered_instructions, hygiene_actions
+
+    def _orders_match(
+        self,
+        instruction: OrderInstruction,
+        existing_order: dict,
+        current_prices: dict[str, Decimal],
+    ) -> bool:
+        """
+        Check if a new order instruction matches an existing open order.
+
+        Orders match if:
+        - Quantity is within tolerance
+        - Limit price is within tolerance (or both are None for market orders)
+
+        Args:
+            instruction: New order instruction
+            existing_order: Existing open order dict
+            current_prices: Current prices for reference
+
+        Returns:
+            True if orders match within tolerances
+        """
+        # Check quantity
+        qty_diff = abs(instruction.quantity - existing_order["qty"])
+        qty_tolerance = self.config.order_qty_tolerance
+        if qty_diff > qty_tolerance:
+            return False
+
+        # Check price
+        if instruction.limit_price is None and existing_order["limit_price"] is None:
+            # Both market orders, consider them matching
+            return True
+
+        if instruction.limit_price is None or existing_order["limit_price"] is None:
+            # One is limit, one is market, don't match
+            return False
+
+        # Both have limit prices, check tolerance
+        price_diff = abs(instruction.limit_price - existing_order["limit_price"])
+        price_tolerance_pct = Decimal(str(self.config.order_price_tolerance_pct))
+        price_tolerance = existing_order["limit_price"] * price_tolerance_pct
+
+        return price_diff <= price_tolerance
+
     def _execute_orders(
         self,
         instructions: list[OrderInstruction],
@@ -290,9 +474,10 @@ class AlpacaExecutor:
         Execute order instructions with risk enforcement and slicing.
 
         Policy:
+        - Perform order hygiene first (cancel stale/duplicate orders)
         - Orders exceeding max_order_notional are sliced into smaller orders
         - Risk-reducing sells always proceed (with slicing if needed)
-        - Risk-increasing orders subject to max_positions_notional cap
+        - Risk-increasing orders subject to max_positions_notional cap (including reserved notional)
 
         Args:
             instructions: List of OrderInstruction objects
@@ -306,24 +491,50 @@ class AlpacaExecutor:
         orders_skipped = []
         total_risk_used = Decimal("0")
 
-        # Calculate current exposure
+        # STEP 1: Perform order hygiene (cancel stale/duplicate orders, filter instructions)
+        filtered_instructions, hygiene_actions = self._perform_order_hygiene(
+            instructions, current_prices
+        )
+
+        # Print hygiene summary
+        if hygiene_actions:
+            print("\nOrder Hygiene:")
+            for action in hygiene_actions:
+                print(f"  {action.symbol} {action.side}: {action.action} - {action.reason}")
+
+        # Calculate current exposure from positions
         current_exposure = sum(
             abs(qty) * current_prices.get(symbol, Decimal("0"))
             for symbol, (qty, _) in current_positions.items()
             if symbol in current_prices
         )
 
+        # Calculate reserved notional from remaining open BUY orders (after hygiene)
+        # This accounts for orders we didn't cancel that will consume buying power when filled
+        reserved_notional = Decimal("0")
+        try:
+            remaining_open_orders = self.broker.get_open_orders_detailed()
+            for order in remaining_open_orders:
+                if order["side"] == "BUY" and order["limit_price"]:
+                    reserved_notional += Decimal(str(order["qty"])) * order["limit_price"]
+        except Exception as e:
+            self.logger.warning(f"Failed to calculate reserved notional: {e}")
+
         self.logger.info(f"Current portfolio exposure: ${current_exposure:.2f}")
+        self.logger.info(f"Reserved notional (open orders): ${reserved_notional:.2f}")
+        self.logger.info(f"Total exposure (positions + reserved): ${current_exposure + reserved_notional:.2f}")
+
         print(f"\nExecution (max_order_usd=${self.config.max_order_notional}):")
 
-        for instruction in instructions:
+        # Use filtered instructions after hygiene
+        for instruction in filtered_instructions:
             price = current_prices.get(instruction.symbol, Decimal("0"))
             if price == 0:
                 self.logger.warning(f"{instruction.symbol}: No price available, skipping")
                 orders_skipped.append((instruction.symbol, "No price available"))
                 continue
 
-            order_notional = instruction.quantity * (instruction.limit_price or price)
+            order_notional = Decimal(str(instruction.quantity)) * (instruction.limit_price or price)
 
             # Slice order if it exceeds cap
             order_slices = self._slice_order(instruction, price)
@@ -357,14 +568,16 @@ class AlpacaExecutor:
                     slice_instruction.limit_price or price
                 )
 
-                # For risk-increasing orders, check total exposure cap
+                # For risk-increasing orders, check total exposure cap (including reserved notional)
                 # Risk-reducing orders always proceed
                 if not slice_instruction.is_risk_reducing:
-                    new_exposure = current_exposure + slice_notional
+                    # Include reserved notional from other open orders in exposure calculation
+                    new_exposure = current_exposure + reserved_notional + slice_notional
                     if new_exposure > self.config.max_positions_notional:
                         reason = (
-                            f"Total exposure ${new_exposure:.2f} would exceed "
-                            f"max ${self.config.max_positions_notional}"
+                            f"Total exposure ${new_exposure:.2f} (positions: ${current_exposure:.2f} + "
+                            f"reserved: ${reserved_notional:.2f} + new: ${slice_notional:.2f}) "
+                            f"would exceed max ${self.config.max_positions_notional}"
                         )
                         self.logger.warning(f"{slice_instruction.symbol}: {reason}")
                         orders_skipped.append((slice_instruction.symbol, reason))

@@ -159,16 +159,54 @@ class Allocator:
 
         # Apply target utilization percentage
         target_util_pct = self.config.target_utilization_pct
-        budget_base = float(effective_equity_cap) * target_util_pct
+        target_budget = float(effective_equity_cap) * target_util_pct
 
-        # Log capital allocation details
-        self.logger.info(
-            f"Capital Allocation: broker_equity=${float(broker_equity):.2f}, "
-            f"total_capital={'$' + f'{float(total_capital):.2f}' if total_capital else 'N/A'}, "
-            f"effective_cap=${float(effective_equity_cap):.2f}, "
-            f"target_util={target_util_pct:.2%}, "
-            f"budget_base=${budget_base:.2f}"
-        )
+        # Calculate current commitments (positions + reserved in open orders)
+        # We need to subtract these from target_budget to get available budget for new orders
+        try:
+            # Get current position values
+            account_positions = self.broker.get_positions()
+            current_positions_value = 0.0
+            for pos in account_positions:
+                current_positions_value += abs(float(pos.qty)) * float(pos.current_price)
+
+            # Get reserved notional from open BUY orders
+            reserved_notional = 0.0
+            try:
+                open_orders = self.broker.get_open_orders_detailed()
+                for order in open_orders:
+                    if order["side"] == "BUY" and order["limit_price"]:
+                        reserved_notional += float(order["qty"]) * float(order["limit_price"])
+            except Exception as e:
+                self.logger.warning(f"Failed to get open orders for budget calculation: {e}")
+
+            # Calculate available budget
+            budget_base = max(0.0, target_budget - current_positions_value - reserved_notional)
+
+            # Log capital allocation details
+            self.logger.info(
+                f"Capital Allocation: broker_equity=${float(broker_equity):.2f}, "
+                f"total_capital={'$' + f'{float(total_capital):.2f}' if total_capital else 'N/A'}, "
+                f"effective_cap=${float(effective_equity_cap):.2f}, "
+                f"target_util={target_util_pct:.2%}, "
+                f"target_budget=${target_budget:.2f}"
+            )
+            self.logger.info(
+                f"Current commitments: positions=${current_positions_value:.2f}, "
+                f"reserved_orders=${reserved_notional:.2f}, "
+                f"available_budget=${budget_base:.2f}"
+            )
+        except Exception as e:
+            # Fallback to target_budget if we can't get current commitments
+            self.logger.warning(f"Failed to calculate current commitments: {e}, using target budget")
+            budget_base = target_budget
+            self.logger.info(
+                f"Capital Allocation: broker_equity=${float(broker_equity):.2f}, "
+                f"total_capital={'$' + f'{float(total_capital):.2f}' if total_capital else 'N/A'}, "
+                f"effective_cap=${float(effective_equity_cap):.2f}, "
+                f"target_util={target_util_pct:.2%}, "
+                f"budget_base=${budget_base:.2f}"
+            )
 
         # 2. Get enabled strategies from registry and compute normalized weights
         enabled_strategies = self.registry.get_enabled_strategies()
@@ -470,7 +508,7 @@ class Allocator:
                 continue
 
             price = prices[symbol]
-            notional = abs(qty) * price
+            notional = abs(Decimal(str(qty))) * price
 
             # Note: max_order_notional is now enforced by executor via order slicing
             # We only enforce max_positions_notional here (total portfolio cap)
@@ -482,7 +520,7 @@ class Allocator:
                     # Can fit some shares
                     max_qty_within_budget = int(remaining_budget / price)
                     qty = max_qty_within_budget if qty > 0 else -max_qty_within_budget
-                    notional = abs(qty) * price
+                    notional = abs(Decimal(str(qty))) * price
                     warnings.append(f"{symbol}: Reduced to {qty} shares to fit within total budget")
                 else:
                     # Can't fit any shares

@@ -20,6 +20,12 @@ execution:
   limit_offset_bps_sell: 10  # Sell limit offset in basis points (0.10%)
   allow_market_in_paper: true  # Allow market orders in paper mode for faster fills
 
+  # Order hygiene settings
+  cancel_stale_orders: true  # Cancel/replace stale open orders before placing new ones
+  max_open_orders_per_symbol_side: 1  # Maximum open orders allowed per (symbol, side) pair
+  order_price_tolerance_pct: 0.001  # 0.1% tolerance for considering orders equivalent
+  order_qty_tolerance: 0.0001  # Quantity tolerance for fractional shares
+
 # Performance tracking (Shadow PnL)
 performance:
   min_samples: 20   # Minimum samples required before strategy weight updates

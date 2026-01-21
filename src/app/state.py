@@ -442,6 +442,12 @@ class RuntimeState(BaseModel):
     next_loop_at: str | None = Field(
         default=None, description="ISO timestamp of next scheduled loop iteration (UTC)"
     )
+    last_error: str | None = Field(
+        default=None, description="Last error message from failed iteration (None if last run succeeded)"
+    )
+    last_error_at: str | None = Field(
+        default=None, description="ISO timestamp of last error (UTC)"
+    )
     updated_at: str = Field(description="ISO timestamp of last state update (UTC)")
 
 

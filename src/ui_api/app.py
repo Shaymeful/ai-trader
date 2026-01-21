@@ -90,6 +90,8 @@ class RuntimeResponse(BaseModel):
     seconds_until_next_loop: int | None = Field(
         description="Seconds until next loop (negative if overdue)"
     )
+    last_error: str | None = Field(description="Last error message (None if last run succeeded)")
+    last_error_at: str | None = Field(description="ISO timestamp of last error (UTC)")
     updated_at: str = Field(description="ISO timestamp of state file update (UTC)")
 
 
@@ -491,6 +493,8 @@ async def get_runtime():
         last_loop_end=runtime_state.last_loop_end,
         next_loop_at=runtime_state.next_loop_at,
         seconds_until_next_loop=seconds_until_next,
+        last_error=runtime_state.last_error,
+        last_error_at=runtime_state.last_error_at,
         updated_at=runtime_state.updated_at,
     )
 

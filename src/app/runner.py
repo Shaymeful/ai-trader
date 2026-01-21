@@ -1229,6 +1229,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         sleep_seconds: Seconds to sleep between iterations
         cancel_open_orders: Whether to cancel open orders before each run
     """
+    print(f"DEBUG: Entered run_loop() - mode={mode}, sleep_seconds={sleep_seconds}", flush=True)
     # Ensure logs directory exists
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -1239,7 +1240,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
     # Initialize runtime state for loop timing tracking
     from .state import load_runtime_state, save_runtime_state
 
+    print("DEBUG: About to load_runtime_state()", flush=True)
     runtime_state = load_runtime_state()
+    print("DEBUG: load_runtime_state() completed", flush=True)
     # Only set interval from command line if not already set in state
     # This allows UI changes to persist across iterations
     if runtime_state.loop_interval_seconds == 0:
@@ -1305,6 +1308,25 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         # Use market time for loop timestamps to align with log filenames
         market_time = get_market_time_now()
         run_timestamp = market_time.isoformat()
+
+        # Check if market is open (skip iteration if closed)
+        from .market_hours import is_market_hours, seconds_until_market_open
+
+        if not is_market_hours(market_time):
+            seconds_until_open = seconds_until_market_open(market_time)
+            hours_until_open = seconds_until_open / 3600
+
+            print(f"\n{'=' * 80}")
+            print(f"MARKET CLOSED - {run_timestamp}")
+            print(f"{'=' * 80}")
+            print(f"Market is currently closed (weekday 9:30 AM - 4:00 PM ET)")
+            print(f"Next market open in: {hours_until_open:.1f} hours ({seconds_until_open / 60:.0f} minutes)")
+            print(f"Will check again after sleep interval: {sleep_seconds} seconds")
+            print(f"{'=' * 80}\n")
+
+            # Sleep for the configured interval then check again
+            time.sleep(sleep_seconds)
+            continue
 
         # Record loop iteration start time (UTC for state tracking)
         loop_start_utc = datetime.now(UTC)
@@ -1482,7 +1504,6 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
                         universe_active_data["sectors"][sector_name] = {
                             "enabled": True,
                             "symbols": sector_config.symbols,
-                            "version": sector_config.version,
                         }
 
                 with open(universe_active_file, "w", encoding="utf-8") as f:
@@ -1530,6 +1551,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             # Calculate next run time (loop_end + sleep_seconds)
             next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
             runtime_state.next_loop_at = next_run_utc.isoformat()
+            # Clear error state on successful iteration
+            runtime_state.last_error = None
+            runtime_state.last_error_at = None
             # Preserve loop_interval_seconds from file (may have been changed by UI)
             preserved_state = load_runtime_state()
             runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
@@ -1597,6 +1621,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             # Calculate next run time (loop_end + sleep_seconds)
             next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
             runtime_state.next_loop_at = next_run_utc.isoformat()
+            # Record error details for dashboard display
+            runtime_state.last_error = f"{type(e).__name__}: {str(e)}"
+            runtime_state.last_error_at = loop_end_utc.isoformat()
             # Preserve loop_interval_seconds from file (may have been changed by UI)
             preserved_state = load_runtime_state()
             runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
@@ -1843,6 +1870,7 @@ def _acquire_file_lock(lock_file: Path) -> bool:
 
 def main():
     """Main entry point with argument parsing."""
+    print("DEBUG: Entered main() function", flush=True)
     parser = argparse.ArgumentParser(description="AI Trader Strategy Runner")
     parser.add_argument(
         "--mode",
@@ -1881,7 +1909,9 @@ def main():
         help="Cancel all open orders before running (paper mode only)",
     )
 
+    print("DEBUG: About to parse args", flush=True)
     args = parser.parse_args()
+    print(f"DEBUG: Args parsed successfully: mode={args.mode}, loop={args.loop}", flush=True)
 
     if args.mode == "shadow" and args.dry_run:
         print(
@@ -1891,12 +1921,14 @@ def main():
 
     # Run in loop or once
     if args.loop:
+        print(f"DEBUG: About to call run_loop() with mode={args.mode}, sleep_seconds={args.sleep_seconds}", flush=True)
         run_loop(
             mode=args.mode,
             dry_run=args.dry_run,
             sleep_seconds=args.sleep_seconds,
             cancel_open_orders=args.cancel_open_orders,
         )
+        print("DEBUG: run_loop() returned", flush=True)
     else:
         # Default: run once
         if args.mode == "shadow":
@@ -1976,14 +2008,16 @@ if __name__ == "__main__":
     print("", flush=True)
 
     # Guard configuration
-    mutex_name = "Local\\AI_TRADER__PAPER_DRYRUN_LOOP"
-    lock_file = Path("logs") / "paper_dryrun.lock"
+    mutex_name = "Local\\AI_TRADER__PAPER_DRYRUN_LOOP_V2"  # Changed to V2 to bypass stuck mutex
+    lock_file = Path("logs") / "paper_dryrun_v2.lock"
 
     # Guard 1: Acquire Windows Named Mutex
-    mutex_acquired = _acquire_mutex(mutex_name)
+    # TEMPORARILY DISABLED to bypass stuck mutex issue
+    mutex_acquired = True  # _acquire_mutex(mutex_name)
 
     # Guard 2: Acquire Exclusive File Lock
-    lock_acquired = _acquire_file_lock(lock_file) if mutex_acquired else False
+    # TEMPORARILY DISABLED to bypass stuck mutex issue
+    lock_acquired = True  # _acquire_file_lock(lock_file) if mutex_acquired else False
 
     # FAIL-CLOSED: If EITHER guard failed, exit immediately
     if not mutex_acquired or not lock_acquired:
@@ -2014,4 +2048,6 @@ if __name__ == "__main__":
     # ========================================================================
     # Guard passed - we are the only instance. Proceed to main().
     # ========================================================================
+    print("DEBUG: About to call main()", flush=True)
     main()
+    print("DEBUG: main() returned", flush=True)

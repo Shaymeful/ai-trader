@@ -60,7 +60,7 @@ param(
     [switch]$DryRun,
 
     [Parameter(Mandatory=$false)]
-    [int]$SleepSeconds = 3600,
+    [int]$SleepSeconds = 0,  # Default 0 = use runtime state interval
 
     [Parameter(Mandatory=$false)]
     [switch]$CreatePauseFlag,
