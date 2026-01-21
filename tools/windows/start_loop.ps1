@@ -165,16 +165,52 @@ Write-Host "Command: $CommandStr" -ForegroundColor Gray
 Write-Host "Press Ctrl+C to stop" -ForegroundColor Gray
 Write-Host ""
 
-# Run the loop
+# Run the loop (hidden window when run from Task Scheduler)
 try {
-    if ($LogFile) {
-        & "$VenvPath\Scripts\python.exe" @Args 2>&1 | Tee-Object -FilePath $LogFile -Append
-        $ExitCode = $LASTEXITCODE
-        "[$((Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))] Loop exited with code: $ExitCode" | Tee-Object -FilePath $LogFile -Append
-        exit $ExitCode
+    # Check if running from Task Scheduler (no console window)
+    $IsScheduledTask = -not [Environment]::UserInteractive
+
+    if ($IsScheduledTask -or $env:HIDE_PYTHON_WINDOW -eq "1") {
+        # Running from Task Scheduler or explicitly requested hidden
+        # Use Start-Process with -WindowStyle Hidden to prevent Python window
+        $PythonExe = "$VenvPath\Scripts\python.exe"
+
+        if ($LogFile) {
+            # Redirect output to log file
+            $ProcessArgs = @{
+                FilePath = $PythonExe
+                ArgumentList = $Args
+                WindowStyle = 'Hidden'
+                RedirectStandardOutput = $LogFile
+                RedirectStandardError = $LogFile
+                Wait = $true
+                PassThru = $true
+            }
+        } else {
+            # No logging, just hide window
+            $ProcessArgs = @{
+                FilePath = $PythonExe
+                ArgumentList = $Args
+                WindowStyle = 'Hidden'
+                Wait = $true
+                PassThru = $true
+            }
+        }
+
+        $Process = Start-Process @ProcessArgs
+        exit $Process.ExitCode
     } else {
-        & "$VenvPath\Scripts\python.exe" @Args
-        exit $LASTEXITCODE
+        # Running interactively (from PowerShell console)
+        # Show output normally
+        if ($LogFile) {
+            & "$VenvPath\Scripts\python.exe" @Args 2>&1 | Tee-Object -FilePath $LogFile -Append
+            $ExitCode = $LASTEXITCODE
+            "[$((Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))] Loop exited with code: $ExitCode" | Tee-Object -FilePath $LogFile -Append
+            exit $ExitCode
+        } else {
+            & "$VenvPath\Scripts\python.exe" @Args
+            exit $LASTEXITCODE
+        }
     }
 } catch {
     $ErrorMsg = "ERROR: Loop failed: $_"

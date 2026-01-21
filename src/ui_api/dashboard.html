@@ -1105,6 +1105,43 @@
             margin-bottom: 1rem;
         }
 
+        .candidate-tabs {
+            display: flex;
+            gap: 1.5rem;
+            border-bottom: 2px solid #334155;
+            margin-bottom: 1.5rem;
+        }
+
+        .candidate-tab {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+
+        .candidate-tab:hover {
+            color: #cbd5e1;
+        }
+
+        .candidate-tab.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+
+        .candidate-tab-content {
+            display: none;
+        }
+
+        .candidate-tab-content.active {
+            display: block;
+        }
+
         .candidates-filters {
             display: flex;
             gap: 0.75rem;
@@ -1840,6 +1877,18 @@
                 </div>
             </div>
 
+            <!-- Candidate Tabs -->
+            <div class="candidate-tabs">
+                <button class="candidate-tab active" onclick="switchCandidateTab('current')">
+                    Current
+                </button>
+                <button class="candidate-tab" onclick="switchCandidateTab('history')">
+                    History
+                </button>
+            </div>
+
+            <!-- Current Candidates Tab -->
+            <div id="candidate-tab-current" class="candidate-tab-content active">
             <!-- Pipeline Status Header -->
             <div class="pipeline-status" id="pipeline-status" style="display: none;">
                 <div class="pipeline-status-row">
@@ -1932,6 +1981,21 @@
                     </tbody>
                 </table>
             </div>
+            </div>
+            <!-- End Current Tab -->
+
+            <!-- History Tab -->
+            <div id="candidate-tab-history" class="candidate-tab-content">
+                <div style="margin-bottom: 1rem; color: #94a3b8; font-size: 0.9rem;">
+                    Showing candidates that were loaded into the universe in previous sessions.
+                </div>
+                <div id="candidate-history-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div style="text-align: center; color: #64748b; padding: 2rem;">
+                        Loading history...
+                    </div>
+                </div>
+            </div>
+            <!-- End History Tab -->
         </div>
     </div>
 
@@ -2377,6 +2441,94 @@
                     </div>
                 `;
             }).join('');
+        }
+
+        // Candidate Tab Switching
+        function switchCandidateTab(tab) {
+            // Update tab buttons
+            document.querySelectorAll('.candidate-tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.candidate-tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`candidate-tab-${tab}`).classList.add('active');
+
+            // Load history when switching to history tab
+            if (tab === 'history') {
+                loadCandidateHistory();
+            }
+        }
+
+        async function loadCandidateHistory() {
+            const historyList = document.getElementById('candidate-history-list');
+            historyList.innerHTML = '<div style="text-align: center; color: #64748b; padding: 2rem;">Loading history...</div>';
+
+            try {
+                // Fetch activity events from the ledger
+                const response = await fetch('/activity?limit=200');
+                if (!response.ok) throw new Error('Failed to load activity');
+
+                const data = await response.json();
+
+                // Filter for candidate_loaded events
+                const candidateEvents = data.events.filter(event => event.event_type === 'candidate_loaded');
+
+                if (candidateEvents.length === 0) {
+                    historyList.innerHTML = '<div style="text-align: center; color: #64748b; padding: 2rem;">No candidate history found</div>';
+                    return;
+                }
+
+                // Group by date
+                const grouped = {};
+                candidateEvents.forEach(event => {
+                    const date = event.timestamp.split('T')[0];
+                    if (!grouped[date]) grouped[date] = [];
+                    grouped[date].push(event);
+                });
+
+                // Render grouped history
+                let html = '';
+                Object.keys(grouped).sort().reverse().forEach(date => {
+                    html += `<div style="margin-bottom: 1.5rem;">`;
+                    html += `<h4 style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.75rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem;">${date}</h4>`;
+
+                    grouped[date].forEach(event => {
+                        const details = event.details || {};
+                        const symbol = details.symbol || '?';
+                        const action = details.action || 'unknown';
+                        const confidence = details.confidence || 0;
+                        const reason = details.reason || 'No reason provided';
+                        const time = event.timestamp.split('T')[1]?.substring(0, 8) || '';
+
+                        const actionClass = action === 'buy' ? 'action-buy' : action === 'sell' ? 'action-sell' : 'action-watch';
+
+                        html += `
+                            <div class="history-item" style="background: #0f172a; border-radius: 8px; padding: 1rem; border: 1px solid #334155; margin-bottom: 0.75rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                                    <div>
+                                        <span class="candidate-symbol">${symbol}</span>
+                                        <span class="candidate-action ${actionClass}" style="margin-left: 0.5rem;">${action.toUpperCase()}</span>
+                                        <span style="margin-left: 0.5rem; color: #94a3b8; font-size: 0.85rem;">Confidence: ${confidence.toFixed(2)}</span>
+                                    </div>
+                                    <span style="color: #64748b; font-size: 0.85rem;">${time}</span>
+                                </div>
+                                <div style="color: #94a3b8; font-size: 0.85rem;">${reason}</div>
+                            </div>
+                        `;
+                    });
+
+                    html += `</div>`;
+                });
+
+                historyList.innerHTML = html;
+            } catch (error) {
+                console.error('Failed to load candidate history:', error);
+                historyList.innerHTML = '<div style="text-align: center; color: #ef4444; padding: 2rem;">Failed to load history</div>';
+            }
         }
 
         // Loop Status Management
