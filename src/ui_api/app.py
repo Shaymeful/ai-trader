@@ -90,6 +90,8 @@ class RuntimeResponse(BaseModel):
     seconds_until_next_loop: int | None = Field(
         description="Seconds until next loop (negative if overdue)"
     )
+    last_error: str | None = Field(description="Last error message (None if last run succeeded)")
+    last_error_at: str | None = Field(description="ISO timestamp of last error (UTC)")
     updated_at: str = Field(description="ISO timestamp of state file update (UTC)")
 
 
@@ -491,6 +493,8 @@ async def get_runtime():
         last_loop_end=runtime_state.last_loop_end,
         next_loop_at=runtime_state.next_loop_at,
         seconds_until_next_loop=seconds_until_next,
+        last_error=runtime_state.last_error,
+        last_error_at=runtime_state.last_error_at,
         updated_at=runtime_state.updated_at,
     )
 
@@ -1342,13 +1346,16 @@ async def create_constituent_proposal(request: CreateConstituentProposalRequest)
                 }
             )
 
-        return ChangeResponse(
+        # Return response with proposal_id for UI tracking
+        response = ChangeResponse(
             success=True,
             message=f"Proposal created to {request.action.upper()} "
             + f"{len(request.tickers)} ticker(s) to/from {request.sector_name}. "
             + "Awaiting approval.",
             pending_version=None,  # No pending version until approved
         )
+        # Add proposal_id to response dict (ChangeResponse doesn't have it as a field)
+        return {**response.model_dump(), "proposal_id": proposal_id}
 
     except HTTPException:
         raise

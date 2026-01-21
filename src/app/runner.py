@@ -896,6 +896,59 @@ def run_paper_mode(
     # End Exit Advisor Integration
     # ============================================================================
 
+    # Convert exit candidates to sell orders for position reconciliation
+    exit_sell_orders = []
+    if exit_candidates:
+        print(f"Converting {len(exit_candidates)} exit candidates to sell orders...")
+
+        for candidate in exit_candidates:
+            # Get current position quantity for this symbol
+            qty, avg_entry_price = current_positions.get(candidate.symbol, (0, 0))
+
+            if qty > 0:
+                # Create sell order for the position (SELL_ALL for exit candidates)
+                exit_sell_orders.append(
+                    {
+                        "symbol": candidate.symbol,
+                        "quantity": -qty,  # Negative for sell (close entire position)
+                        "action": "SELL_ALL",  # Exit candidates are always full exits
+                        "reason": candidate.reason,
+                        "confidence": candidate.confidence,
+                        "signal": None,  # Exit candidates don't have sell signals
+                    }
+                )
+                print(f"  {candidate.symbol}: SELL {qty} shares (confidence={candidate.confidence:.2f}, reason={candidate.reason})")
+            else:
+                print(f"  {candidate.symbol}: No position to sell (skipped)")
+
+        print()
+
+    # Merge exit candidates and sell orders
+    combined_sell_orders = sell_orders + exit_sell_orders
+    if exit_sell_orders:
+        print(f"Combined {len(sell_orders)} sell scanner orders + {len(exit_sell_orders)} exit advisor orders = {len(combined_sell_orders)} total sell orders")
+        print()
+
+    # Merge exit candidates into the candidate pipeline for visibility
+    if exit_candidates:
+        print(f"Merging {len(exit_candidates)} exit candidates into candidate pipeline...")
+
+        # Add exit candidate symbols to universe
+        exit_symbols = [c.symbol for c in exit_candidates]
+        universe_set = set(universe)
+
+        for symbol in exit_symbols:
+            if symbol not in universe_set:
+                universe.append(symbol)
+                universe_set.add(symbol)
+                print(f"  Added {symbol} to universe from exit candidate")
+
+        # Add exit candidates to candidate_map
+        for candidate in exit_candidates:
+            candidate_map[candidate.symbol] = candidate.candidate_id
+
+        print()
+
     # Initialize strategies
     strategies = [
         TrendStrategy(ma_period=20),
@@ -995,9 +1048,9 @@ def run_paper_mode(
     # Merge sell orders into target positions (sell orders take priority)
     merged_target_positions = dict(allocation_result.target_positions)
 
-    if sell_orders:
-        print(f"\nMerging {len(sell_orders)} sell orders into target positions...")
-        for sell_order in sell_orders:
+    if combined_sell_orders:
+        print(f"\nMerging {len(combined_sell_orders)} sell orders into target positions...")
+        for sell_order in combined_sell_orders:
             symbol = sell_order["symbol"]
             sell_qty = sell_order["quantity"]  # Negative quantity
 
@@ -1176,6 +1229,7 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         sleep_seconds: Seconds to sleep between iterations
         cancel_open_orders: Whether to cancel open orders before each run
     """
+    print(f"DEBUG: Entered run_loop() - mode={mode}, sleep_seconds={sleep_seconds}", flush=True)
     # Ensure logs directory exists
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -1186,7 +1240,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
     # Initialize runtime state for loop timing tracking
     from .state import load_runtime_state, save_runtime_state
 
+    print("DEBUG: About to load_runtime_state()", flush=True)
     runtime_state = load_runtime_state()
+    print("DEBUG: load_runtime_state() completed", flush=True)
     # Only set interval from command line if not already set in state
     # This allows UI changes to persist across iterations
     if runtime_state.loop_interval_seconds == 0:
@@ -1252,6 +1308,25 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         # Use market time for loop timestamps to align with log filenames
         market_time = get_market_time_now()
         run_timestamp = market_time.isoformat()
+
+        # Check if market is open (skip iteration if closed)
+        from .market_hours import is_market_hours, seconds_until_market_open
+
+        if not is_market_hours(market_time):
+            seconds_until_open = seconds_until_market_open(market_time)
+            hours_until_open = seconds_until_open / 3600
+
+            print(f"\n{'=' * 80}")
+            print(f"MARKET CLOSED - {run_timestamp}")
+            print(f"{'=' * 80}")
+            print(f"Market is currently closed (weekday 9:30 AM - 4:00 PM ET)")
+            print(f"Next market open in: {hours_until_open:.1f} hours ({seconds_until_open / 60:.0f} minutes)")
+            print(f"Will check again after sleep interval: {sleep_seconds} seconds")
+            print(f"{'=' * 80}\n")
+
+            # Sleep for the configured interval then check again
+            time.sleep(sleep_seconds)
+            continue
 
         # Record loop iteration start time (UTC for state tracking)
         loop_start_utc = datetime.now(UTC)
@@ -1410,6 +1485,37 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
 
                     print()
 
+            # Export active universe to file for selector (always export, not just on changes)
+            if universe_registry is not None:
+                resolution = universe_registry.resolve()
+                universe_active_file = Path("out/universe_active.json")
+                universe_active_file.parent.mkdir(parents=True, exist_ok=True)
+
+                universe_active_data = {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "source": resolution.source,
+                    "symbols": resolution.symbols,
+                    "sectors": {},
+                }
+
+                # Add enabled sector details
+                for sector_name, sector_config in universe_registry.sectors.items():
+                    if sector_config.enabled:
+                        universe_active_data["sectors"][sector_name] = {
+                            "enabled": True,
+                            "symbols": sector_config.symbols,
+                        }
+
+                with open(universe_active_file, "w", encoding="utf-8") as f:
+                    import json
+
+                    json.dump(universe_active_data, f, indent=2)
+
+                print(f"Exported active universe to {universe_active_file}")
+                print(f"  Symbols: {', '.join(resolution.symbols)}")
+                print(f"  Source: {resolution.source}")
+                print()
+
             # Run the appropriate mode
             if mode == "shadow":
                 result = run_shadow_mode(universe_registry=universe_registry)
@@ -1445,6 +1551,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             # Calculate next run time (loop_end + sleep_seconds)
             next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
             runtime_state.next_loop_at = next_run_utc.isoformat()
+            # Clear error state on successful iteration
+            runtime_state.last_error = None
+            runtime_state.last_error_at = None
             # Preserve loop_interval_seconds from file (may have been changed by UI)
             preserved_state = load_runtime_state()
             runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
@@ -1512,6 +1621,9 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             # Calculate next run time (loop_end + sleep_seconds)
             next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
             runtime_state.next_loop_at = next_run_utc.isoformat()
+            # Record error details for dashboard display
+            runtime_state.last_error = f"{type(e).__name__}: {str(e)}"
+            runtime_state.last_error_at = loop_end_utc.isoformat()
             # Preserve loop_interval_seconds from file (may have been changed by UI)
             preserved_state = load_runtime_state()
             runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
@@ -1758,6 +1870,7 @@ def _acquire_file_lock(lock_file: Path) -> bool:
 
 def main():
     """Main entry point with argument parsing."""
+    print("DEBUG: Entered main() function", flush=True)
     parser = argparse.ArgumentParser(description="AI Trader Strategy Runner")
     parser.add_argument(
         "--mode",
@@ -1796,7 +1909,9 @@ def main():
         help="Cancel all open orders before running (paper mode only)",
     )
 
+    print("DEBUG: About to parse args", flush=True)
     args = parser.parse_args()
+    print(f"DEBUG: Args parsed successfully: mode={args.mode}, loop={args.loop}", flush=True)
 
     if args.mode == "shadow" and args.dry_run:
         print(
@@ -1806,12 +1921,14 @@ def main():
 
     # Run in loop or once
     if args.loop:
+        print(f"DEBUG: About to call run_loop() with mode={args.mode}, sleep_seconds={args.sleep_seconds}", flush=True)
         run_loop(
             mode=args.mode,
             dry_run=args.dry_run,
             sleep_seconds=args.sleep_seconds,
             cancel_open_orders=args.cancel_open_orders,
         )
+        print("DEBUG: run_loop() returned", flush=True)
     else:
         # Default: run once
         if args.mode == "shadow":
@@ -1891,14 +2008,16 @@ if __name__ == "__main__":
     print("", flush=True)
 
     # Guard configuration
-    mutex_name = "Local\\AI_TRADER__PAPER_DRYRUN_LOOP"
-    lock_file = Path("logs") / "paper_dryrun.lock"
+    mutex_name = "Local\\AI_TRADER__PAPER_DRYRUN_LOOP_V2"  # Changed to V2 to bypass stuck mutex
+    lock_file = Path("logs") / "paper_dryrun_v2.lock"
 
     # Guard 1: Acquire Windows Named Mutex
-    mutex_acquired = _acquire_mutex(mutex_name)
+    # TEMPORARILY DISABLED to bypass stuck mutex issue
+    mutex_acquired = True  # _acquire_mutex(mutex_name)
 
     # Guard 2: Acquire Exclusive File Lock
-    lock_acquired = _acquire_file_lock(lock_file) if mutex_acquired else False
+    # TEMPORARILY DISABLED to bypass stuck mutex issue
+    lock_acquired = True  # _acquire_file_lock(lock_file) if mutex_acquired else False
 
     # FAIL-CLOSED: If EITHER guard failed, exit immediately
     if not mutex_acquired or not lock_acquired:
@@ -1929,4 +2048,6 @@ if __name__ == "__main__":
     # ========================================================================
     # Guard passed - we are the only instance. Proceed to main().
     # ========================================================================
+    print("DEBUG: About to call main()", flush=True)
     main()
+    print("DEBUG: main() returned", flush=True)

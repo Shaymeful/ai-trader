@@ -1098,6 +1098,44 @@
             border: 1px solid #334155;
         }
 
+        .candidates-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #334155;
+        }
+
+        .candidates-tab {
+            padding: 0.75rem 1.5rem;
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+
+        .candidates-tab:hover {
+            color: #cbd5e1;
+            background: #1e293b;
+        }
+
+        .candidates-tab.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+
+        .candidates-tab-content {
+            display: none;
+        }
+
+        .candidates-tab-content.active {
+            display: block;
+        }
+
         .candidates-header {
             display: flex;
             justify-content: space-between;
@@ -1840,7 +1878,19 @@
                 </div>
             </div>
 
-            <!-- Pipeline Status Header -->
+            <!-- Tabs -->
+            <div class="candidates-tabs">
+                <button class="candidates-tab active" onclick="switchCandidatesTab('active')">
+                    Active (<span id="active-candidates-count">0</span>)
+                </button>
+                <button class="candidates-tab" onclick="switchCandidatesTab('history')">
+                    History (<span id="history-candidates-count">0</span>)
+                </button>
+            </div>
+
+            <!-- Active Candidates Tab -->
+            <div id="active-candidates-tab" class="candidates-tab-content active">
+                <!-- Pipeline Status Header -->
             <div class="pipeline-status" id="pipeline-status" style="display: none;">
                 <div class="pipeline-status-row">
                     <div class="pipeline-stat">
@@ -1932,6 +1982,37 @@
                     </tbody>
                 </table>
             </div>
+            </div> <!-- End Active Candidates Tab -->
+
+            <!-- History Tab -->
+            <div id="history-candidates-tab" class="candidates-tab-content">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: 1rem;">
+                    <button class="btn-secondary" style="font-size: 0.85rem; padding: 0.5rem 1rem;" onclick="clearCandidateHistory()">
+                        Clear History
+                    </button>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table class="candidates-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Action</th>
+                                <th>Confidence</th>
+                                <th>Sector</th>
+                                <th>Proposed To</th>
+                                <th>Proposal ID</th>
+                                <th>Proposed At</th>
+                                <th>Rationale</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody">
+                            <tr>
+                                <td colspan="8" style="text-align: center; color: #64748b;">No proposal history yet</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div> <!-- End History Tab -->
         </div>
     </div>
 
@@ -2454,9 +2535,16 @@
             const countdownEl = document.getElementById('next-loop-countdown');
 
             if (diffSeconds <= 0) {
-                // Overdue
-                const overdueMins = Math.ceil(Math.abs(diffSeconds) / 60);
-                countdownEl.textContent = `Overdue (${overdueMins}m)`;
+                // Overdue or error
+                if (window.runtimeData.last_error) {
+                    // Show error message instead of generic "overdue"
+                    countdownEl.textContent = `Error: ${window.runtimeData.last_error}`;
+                    countdownEl.title = `Last error at ${new Date(window.runtimeData.last_error_at).toLocaleString()}`;
+                } else {
+                    const overdueMins = Math.ceil(Math.abs(diffSeconds) / 60);
+                    countdownEl.textContent = `Overdue (${overdueMins}m)`;
+                    countdownEl.title = '';
+                }
                 countdownEl.classList.remove('loop-countdown');
                 countdownEl.classList.add('loop-overdue');
             } else if (diffSeconds < 60) {
@@ -2623,8 +2711,9 @@
                 const candidatesResponse = await fetch('/candidates');
                 const candidatesResult = await candidatesResponse.json();
                 candidatesData = candidatesResult.candidates;
-                renderCandidates(candidatesData);
+                filterCandidates(); // Use filterCandidates to exclude proposed candidates
                 updateCandidatesHeader(candidatesResult);
+                updateCandidateCounts(); // Update tab counts
 
                 // Load advisor runs
                 await loadAdvisorRuns();
@@ -2834,7 +2923,12 @@
             const minConfidence = parseFloat(document.getElementById('filter-min-confidence').value) || 0;
             const search = document.getElementById('filter-search').value.toLowerCase();
 
+            // Get proposed candidate IDs to filter them out
+            const proposedIds = getCandidateHistory().map(h => h.candidate_id);
+
             const filtered = candidatesData.filter(c => {
+                // Filter out candidates that have been proposed
+                if (proposedIds.includes(c.candidate_id)) return false;
                 if (action && c.action !== action) return false;
                 if (c.confidence < minConfidence) return false;
                 if (search) {
@@ -2845,6 +2939,123 @@
             });
 
             renderCandidates(filtered);
+            updateCandidateCounts();
+        }
+
+        // Candidate History Management
+        function getCandidateHistory() {
+            try {
+                const history = localStorage.getItem('candidateHistory');
+                return history ? JSON.parse(history) : [];
+            } catch (error) {
+                console.error('Error loading candidate history:', error);
+                return [];
+            }
+        }
+
+        function saveCandidateToHistory(candidate, proposalData) {
+            try {
+                const history = getCandidateHistory();
+                const historyEntry = {
+                    candidate_id: candidate.candidate_id,
+                    symbol: candidate.symbol,
+                    action: candidate.action,
+                    confidence: candidate.confidence,
+                    sector: candidate.sector || '-',
+                    proposed_to_sector: proposalData.sector_name,
+                    proposal_id: proposalData.proposal_id || 'pending',
+                    proposed_at: new Date().toISOString(),
+                    rationale: proposalData.rationale,
+                    tags: candidate.tags || [],
+                    reason: candidate.reason || ''
+                };
+
+                // Add to beginning of history (most recent first)
+                history.unshift(historyEntry);
+
+                // Keep only last 100 entries
+                const trimmedHistory = history.slice(0, 100);
+
+                localStorage.setItem('candidateHistory', JSON.stringify(trimmedHistory));
+                return true;
+            } catch (error) {
+                console.error('Error saving candidate history:', error);
+                return false;
+            }
+        }
+
+        function clearCandidateHistory() {
+            if (confirm('Are you sure you want to clear all candidate history?')) {
+                localStorage.removeItem('candidateHistory');
+                renderCandidateHistory();
+                updateCandidateCounts();
+                showSuccess('Candidate history cleared');
+            }
+        }
+
+        function renderCandidateHistory() {
+            const history = getCandidateHistory();
+            const tbody = document.getElementById('history-tbody');
+
+            if (history.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b;">No proposal history yet</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = history.map(h => {
+                const proposedDate = new Date(h.proposed_at);
+                const actionClass = `action-${h.action}`;
+                const truncatedProposalId = h.proposal_id.length > 8 ? h.proposal_id.substring(0, 8) + '...' : h.proposal_id;
+
+                return `
+                    <tr>
+                        <td class="candidate-symbol">${h.symbol}</td>
+                        <td><span class="candidate-action ${actionClass}">${h.action.toUpperCase()}</span></td>
+                        <td>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <div class="confidence-bar">
+                                    <div class="confidence-fill" style="width: ${h.confidence * 100}%"></div>
+                                </div>
+                                <span style="color: #cbd5e1;">${(h.confidence * 100).toFixed(0)}%</span>
+                            </div>
+                        </td>
+                        <td style="color: #cbd5e1;">${h.sector}</td>
+                        <td style="color: #3b82f6;">${h.proposed_to_sector}</td>
+                        <td style="color: #94a3b8; font-size: 0.8rem; font-family: monospace;" title="${h.proposal_id}">${truncatedProposalId}</td>
+                        <td style="color: #94a3b8; font-size: 0.8rem;">${proposedDate.toLocaleString()}</td>
+                        <td style="color: #cbd5e1; max-width: 300px; overflow: hidden; text-overflow: ellipsis;" title="${h.rationale}">${h.rationale}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function switchCandidatesTab(tab) {
+            // Update tab buttons
+            document.querySelectorAll('.candidates-tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.closest('.candidates-tab').classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.candidates-tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+
+            if (tab === 'active') {
+                document.getElementById('active-candidates-tab').classList.add('active');
+            } else if (tab === 'history') {
+                document.getElementById('history-candidates-tab').classList.add('active');
+                renderCandidateHistory();
+            }
+        }
+
+        function updateCandidateCounts() {
+            const proposedIds = getCandidateHistory().map(h => h.candidate_id);
+            const activeCount = candidatesData.filter(c => !proposedIds.includes(c.candidate_id)).length;
+            const historyCount = getCandidateHistory().length;
+
+            document.getElementById('active-candidates-count').textContent = activeCount;
+            document.getElementById('history-candidates-count').textContent = historyCount;
         }
 
         // Advisor Runs Management
@@ -3887,7 +4098,7 @@
                     return;
                 }
 
-                // Create sector first
+                // Create sector first (empty - symbol will be added via proposal)
                 try {
                     const response = await fetch('/universe/sectors', {
                         method: 'POST',
@@ -3895,22 +4106,22 @@
                         body: JSON.stringify({
                             sector_name: sectorName,
                             description: description,
-                            symbols: [currentProposeSymbol],
+                            symbols: [],  // Empty - let proposal add the symbol
                             enabled: false,
                         }),
                     });
 
-                    const result = await response.json();
-
                     if (!response.ok) {
+                        const result = await response.json();
                         showError(result.detail || 'Failed to create sector');
                         return;
                     }
 
-                    showSuccess(result.message);
+                    const result = await response.json();
+                    showSuccess(`Sector '${sectorName}' created. Creating proposal to add ${currentProposeSymbol}...`);
                 } catch (error) {
                     console.error('Error creating sector:', error);
-                    showError('Failed to create sector');
+                    showError(`Failed to create sector: ${error.message}`);
                     return;
                 }
             } else {
@@ -3944,8 +4155,23 @@
                 const result = await response.json();
 
                 if (response.ok) {
-                    showSuccess(result.message);
+                    // Save candidate to history
+                    const candidate = candidatesData.find(c => c.candidate_id === currentProposeCandidateId);
+                    if (candidate) {
+                        const proposalData = {
+                            sector_name: sectorName,
+                            proposal_id: result.proposal_id || 'pending',
+                            rationale: rationale
+                        };
+                        saveCandidateToHistory(candidate, proposalData);
+                    }
+
+                    showSuccess(result.message + ' (Moved to History tab)');
                     closeProposeAddModal();
+
+                    // Refresh candidates view to remove the proposed candidate
+                    filterCandidates();
+
                     setTimeout(() => {
                         loadProposals();
                         loadUniverseSectors();

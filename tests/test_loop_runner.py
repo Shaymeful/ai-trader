@@ -15,8 +15,10 @@ def test_run_loop_executes_multiple_iterations(monkeypatch, tmp_path):
 
     def mock_sleep(seconds):
         sleep_calls.append(seconds)
-        # Stop after 3 iterations
-        if len(sleep_calls) >= 3:
+        # Stop after 3 iterations (account for 5-second chunks in interruptible sleep)
+        # Each 10-second sleep = two 5-second chunks, so 3 iterations = ~6 sleeps
+        # Raise after 5 sleeps to allow 3rd iteration to complete
+        if len(sleep_calls) > 5:
             raise KeyboardInterrupt()
 
     monkeypatch.setattr("time.sleep", mock_sleep)
@@ -33,11 +35,19 @@ def test_run_loop_executes_multiple_iterations(monkeypatch, tmp_path):
 
     call_count = [0]
 
-    def mock_run_shadow():
+    def mock_run_shadow(provider=None, universe_registry=None):
         call_count[0] += 1
         return mock_result
 
     monkeypatch.setattr("src.app.runner.run_shadow_mode", mock_run_shadow)
+
+    # Mock runtime state to use parameter value
+    from unittest.mock import Mock
+
+    mock_state = Mock()
+    mock_state.loop_interval_seconds = 0
+    monkeypatch.setattr("src.app.state.load_runtime_state", lambda: mock_state)
+    monkeypatch.setattr("src.app.state.save_runtime_state", lambda x: None)
 
     # Use tmp_path for logs
     monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
@@ -49,9 +59,10 @@ def test_run_loop_executes_multiple_iterations(monkeypatch, tmp_path):
     # Verify run_shadow_mode was called 3 times
     assert call_count[0] == 3
 
-    # Verify sleep was called 3 times with correct interval
-    assert len(sleep_calls) == 3
-    assert all(s == 10 for s in sleep_calls)
+    # Verify sleep was called multiple times (interruptible sleep uses 5-second chunks)
+    # 3 iterations with 10-second sleeps = 6 sleep calls (5s each)
+    assert len(sleep_calls) == 6
+    assert all(s == 5 for s in sleep_calls)
 
 
 def test_run_loop_logs_success_to_status_log(monkeypatch, tmp_path):
@@ -73,7 +84,7 @@ def test_run_loop_logs_success_to_status_log(monkeypatch, tmp_path):
         timestamp="2025-12-30T10:00:00+00:00",
     )
 
-    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda: mock_result)
+    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda provider=None, universe_registry=None: mock_result)
 
     # Use tmp_path for logs
     monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
@@ -104,7 +115,10 @@ def test_run_loop_catches_exceptions_and_continues(monkeypatch, tmp_path):
 
     def mock_sleep(seconds):
         sleep_calls.append(seconds)
-        if len(sleep_calls) >= 3:
+        # Stop after 3 iterations (account for 5-second chunks in interruptible sleep)
+        # Each 10-second sleep = two 5-second chunks, so 3 iterations = ~6 sleeps
+        # Raise after 5 sleeps to allow 3rd iteration to complete
+        if len(sleep_calls) > 5:
             raise KeyboardInterrupt()
 
     monkeypatch.setattr("time.sleep", mock_sleep)
@@ -112,7 +126,7 @@ def test_run_loop_catches_exceptions_and_continues(monkeypatch, tmp_path):
     # Mock run_shadow_mode to fail on first call, succeed on others
     call_count = [0]
 
-    def mock_run_shadow():
+    def mock_run_shadow(provider=None, universe_registry=None):
         call_count[0] += 1
         if call_count[0] == 1:
             raise ValueError("Simulated error")
@@ -127,6 +141,14 @@ def test_run_loop_catches_exceptions_and_continues(monkeypatch, tmp_path):
 
     monkeypatch.setattr("src.app.runner.run_shadow_mode", mock_run_shadow)
 
+    # Mock runtime state to use parameter value
+    from unittest.mock import Mock
+
+    mock_state = Mock()
+    mock_state.loop_interval_seconds = 0
+    monkeypatch.setattr("src.app.state.load_runtime_state", lambda: mock_state)
+    monkeypatch.setattr("src.app.state.save_runtime_state", lambda x: None)
+
     # Use tmp_path for logs
     monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))
 
@@ -137,8 +159,8 @@ def test_run_loop_catches_exceptions_and_continues(monkeypatch, tmp_path):
     # Verify run_shadow_mode was called 3 times (despite first failure)
     assert call_count[0] == 3
 
-    # Verify sleep was called 3 times
-    assert len(sleep_calls) == 3
+    # Verify sleep was called multiple times (interruptible sleep uses 5-second chunks)
+    assert len(sleep_calls) == 6
 
     # Check error log was created
     error_log = tmp_path / "loop_errors.log"
@@ -188,7 +210,7 @@ def test_run_loop_paper_mode_with_dry_run(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "src.app.runner.run_paper_mode",
-        lambda dry_run, cancel_open_orders=False, registry=None: mock_result,
+        lambda dry_run, cancel_open_orders=False, registry=None, universe_registry=None: mock_result,
     )
 
     # Use tmp_path for logs
@@ -252,7 +274,7 @@ def test_run_loop_handles_empty_strategy_weights(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "src.app.runner.run_paper_mode",
-        lambda dry_run, cancel_open_orders=False, registry=None: mock_result,
+        lambda dry_run, cancel_open_orders=False, registry=None, universe_registry=None: mock_result,
     )
 
     # Use tmp_path for logs
@@ -290,7 +312,7 @@ def test_run_loop_keyboard_interrupt_exits_cleanly(monkeypatch, tmp_path, capsys
         timestamp=datetime.now(UTC).isoformat(),
     )
 
-    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda: mock_result)
+    monkeypatch.setattr("src.app.runner.run_shadow_mode", lambda provider=None, universe_registry=None: mock_result)
 
     # Use tmp_path for logs
     monkeypatch.setattr("src.app.runner.Path", lambda x: tmp_path if x == "logs" else Path(x))

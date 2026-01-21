@@ -109,17 +109,15 @@ class UniverseRegistry:
     def _apply_overrides(self, overrides_data: dict) -> None:
         """Apply overrides to sector configs.
 
+        Also creates sectors that exist in overrides but not in base config.
+        This allows UI-created sectors to work automatically.
+
         Args:
             overrides_data: Parsed override JSON data
         """
         sector_overrides = overrides_data.get("sectors", {})
 
         for sector_name, override_data in sector_overrides.items():
-            # Only apply to known sectors (safe)
-            if sector_name not in self.sectors:
-                logger.warning(f"Override for unknown sector '{sector_name}' (ignoring)")
-                continue
-
             # Parse override
             override = SectorOverride(
                 enabled=override_data.get("enabled", True),
@@ -129,11 +127,25 @@ class UniverseRegistry:
                 tickers=override_data.get("tickers"),
             )
 
-            # Apply to sector config
-            self.sectors[sector_name].enabled = override.enabled
-            # Apply ticker overrides if present
-            if override.tickers is not None:
-                self.sectors[sector_name].symbols = override.tickers
+            # Create sector if it doesn't exist (UI-created sectors)
+            if sector_name not in self.sectors:
+                from src.app.universe import SectorConfig
+
+                # Create sector config from override data
+                self.sectors[sector_name] = SectorConfig(
+                    name=sector_name,
+                    description=f"User-created sector: {sector_name}",
+                    symbols=override.tickers or [],
+                    enabled=override.enabled,
+                )
+                logger.info(f"Created sector from override: '{sector_name}' with {len(override.tickers or [])} symbols")
+            else:
+                # Apply to existing sector config
+                self.sectors[sector_name].enabled = override.enabled
+                # Apply ticker overrides if present
+                if override.tickers is not None:
+                    self.sectors[sector_name].symbols = override.tickers
+
             self.overrides[sector_name] = override
 
             logger.debug(
@@ -307,6 +319,7 @@ class UniverseRegistry:
         """Activate pending changes at loop start.
 
         Promotes pending_version to active_version for all sectors with pending changes.
+        Also ensures sector config enabled state matches override enabled state.
 
         Returns:
             List of (sector_name, old_version, new_version) for activated changes
@@ -321,6 +334,13 @@ class UniverseRegistry:
                 # Promote pending to active
                 override.active_version = new_version
                 override.pending_version = None
+
+                # Sync enabled state to sector config (critical!)
+                if sector_name in self.sectors:
+                    self.sectors[sector_name].enabled = override.enabled
+                    # Apply ticker overrides if present
+                    if override.tickers is not None:
+                        self.sectors[sector_name].symbols = override.tickers
 
                 activated.append((sector_name, old_version, new_version))
 

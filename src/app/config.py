@@ -43,6 +43,12 @@ class Config(BaseModel):
     max_positions_notional: Decimal = Field(
         default=Decimal("10000"), description="Max total positions exposure ($)"
     )
+    target_utilization_pct: float = Field(
+        default=0.97, description="Target capital utilization percentage (0.95-0.99 recommended)"
+    )
+    use_total_capital_as_equity_cap: bool = Field(
+        default=True, description="Use total_capital from account_summary.json as equity cap"
+    )
     allowed_symbols: list[str] = Field(
         default=["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"], description="Allowed trading symbols"
     )
@@ -107,6 +113,32 @@ class Config(BaseModel):
     allow_fractional: bool = Field(
         default=False, description="Allow fractional share orders (paper mode only)"
     )
+    order_style: str = Field(
+        default="limit", description="Order type: 'limit' or 'market'"
+    )
+    limit_offset_bps_buy: int = Field(
+        default=10, description="Buy limit offset in basis points (0.10%)"
+    )
+    limit_offset_bps_sell: int = Field(
+        default=10, description="Sell limit offset in basis points (0.10%)"
+    )
+    allow_market_in_paper: bool = Field(
+        default=True, description="Allow market orders in paper mode for faster fills"
+    )
+
+    # Order hygiene settings
+    cancel_stale_orders: bool = Field(
+        default=True, description="Cancel/replace stale open orders before placing new ones"
+    )
+    max_open_orders_per_symbol_side: int = Field(
+        default=1, description="Maximum open orders allowed per (symbol, side) pair"
+    )
+    order_price_tolerance_pct: float = Field(
+        default=0.001, description="Price tolerance (0.1%) for considering orders equivalent"
+    )
+    order_qty_tolerance: float = Field(
+        default=0.0001, description="Quantity tolerance for fractional shares"
+    )
 
     # Performance tracking (Shadow PnL)
     performance_min_samples: int = Field(
@@ -165,6 +197,16 @@ class Config(BaseModel):
         default=7, description="Cooldown days for ticker changes"
     )
     llm_ticker_blacklist: list[str] = Field(default_factory=list, description="Blacklisted tickers")
+    # Removal rubric
+    llm_removal_min_failed_eligibility_checks: int = Field(
+        default=5, description="Remove ticker after N failed eligibility checks"
+    )
+    llm_removal_min_days_no_activity: int = Field(
+        default=14, description="Remove ticker after N days of no trades/signals"
+    )
+    llm_removal_stale_negative_news_confidence: float = Field(
+        default=0.80, description="Remove ticker if negative news confidence > N"
+    )
 
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
@@ -448,12 +490,33 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 config.max_daily_loss = Decimal(str(risk["max_daily_loss_usd"]))
             if "max_gross_exposure_usd" in risk:
                 config.max_positions_notional = Decimal(str(risk["max_gross_exposure_usd"]))
+            if "target_utilization_pct" in risk:
+                config.target_utilization_pct = float(risk["target_utilization_pct"])
+            if "use_total_capital_as_equity_cap" in risk:
+                config.use_total_capital_as_equity_cap = bool(risk["use_total_capital_as_equity_cap"])
 
         # Apply execution parameters from YAML
         if "execution" in yaml_config:
             execution = yaml_config["execution"]
             if "allow_fractional" in execution:
                 config.allow_fractional = execution["allow_fractional"]
+            if "order_style" in execution:
+                config.order_style = str(execution["order_style"])
+            if "limit_offset_bps_buy" in execution:
+                config.limit_offset_bps_buy = int(execution["limit_offset_bps_buy"])
+            if "limit_offset_bps_sell" in execution:
+                config.limit_offset_bps_sell = int(execution["limit_offset_bps_sell"])
+            if "allow_market_in_paper" in execution:
+                config.allow_market_in_paper = bool(execution["allow_market_in_paper"])
+            # Order hygiene settings
+            if "cancel_stale_orders" in execution:
+                config.cancel_stale_orders = bool(execution["cancel_stale_orders"])
+            if "max_open_orders_per_symbol_side" in execution:
+                config.max_open_orders_per_symbol_side = int(execution["max_open_orders_per_symbol_side"])
+            if "order_price_tolerance_pct" in execution:
+                config.order_price_tolerance_pct = float(execution["order_price_tolerance_pct"])
+            if "order_qty_tolerance" in execution:
+                config.order_qty_tolerance = float(execution["order_qty_tolerance"])
 
         # Apply performance tracking parameters from YAML
         if "performance" in yaml_config:
@@ -509,5 +572,16 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 config.llm_cooldown_days_per_ticker = int(llm["cooldown_days_per_ticker"])
             if "ticker_blacklist" in llm:
                 config.llm_ticker_blacklist = list(llm["ticker_blacklist"])
+            # Removal rubric
+            if "removal_min_failed_eligibility_checks" in llm:
+                config.llm_removal_min_failed_eligibility_checks = int(
+                    llm["removal_min_failed_eligibility_checks"]
+                )
+            if "removal_min_days_no_activity" in llm:
+                config.llm_removal_min_days_no_activity = int(llm["removal_min_days_no_activity"])
+            if "removal_stale_negative_news_confidence" in llm:
+                config.llm_removal_stale_negative_news_confidence = float(
+                    llm["removal_stale_negative_news_confidence"]
+                )
 
     return config

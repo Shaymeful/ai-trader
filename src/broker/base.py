@@ -268,6 +268,17 @@ class MockBroker(Broker):
         # In real implementation, would filter by status
         return set()
 
+    def get_open_orders_detailed(self) -> list[dict]:
+        """
+        Get detailed information about all open orders.
+
+        Returns:
+            List of dicts with keys: order_id, client_order_id, symbol, side, qty,
+            limit_price, order_type, status, created_at
+        """
+        # Mock broker fills immediately, so no open orders
+        return []
+
     def order_exists(self, client_order_id: str) -> bool:
         """
         Check if an order with given client_order_id exists.
@@ -581,6 +592,36 @@ class AlpacaBroker(Broker):
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
         open_orders = self.client.get_orders(filter=request)
         return {order.client_order_id for order in open_orders if order.client_order_id}
+
+    def get_open_orders_detailed(self) -> list[dict]:
+        """
+        Get detailed information about all open orders.
+
+        Returns:
+            List of dicts with keys: order_id, client_order_id, symbol, side, qty,
+            limit_price, order_type, status, created_at
+        """
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        open_orders = self.client.get_orders(filter=request)
+
+        detailed_orders = []
+        for order in open_orders:
+            detailed_orders.append({
+                "order_id": order.id,
+                "client_order_id": order.client_order_id,
+                "symbol": order.symbol,
+                "side": order.side.name,  # BUY or SELL
+                "qty": float(order.qty) if order.qty else 0.0,
+                "limit_price": Decimal(str(order.limit_price)) if order.limit_price else None,
+                "order_type": order.type.name,
+                "status": order.status.name,
+                "created_at": order.created_at,
+            })
+
+        return detailed_orders
 
     def order_exists(self, client_order_id: str) -> bool:
         """
