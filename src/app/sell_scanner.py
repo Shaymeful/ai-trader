@@ -381,7 +381,7 @@ Be conservative: Only recommend SELL if confidence >= 0.70 for SELL_ALL, >= 0.60
             event
             for event in news_events
             if event.get("symbol") == symbol
-            or symbol in event.get("headline", "").upper()
+            or symbol in (event.get("headline") or "").upper()
         ][:10]  # Max 10 most recent
 
     def _detect_market_regime(self, market_data: dict) -> str:
