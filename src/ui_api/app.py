@@ -2211,6 +2211,319 @@ async def get_equity_series(hours: int = 24):
 
 
 # ============================================================================
+# AI Co-Pilot Monitoring Routes
+# ============================================================================
+
+
+class AICopilotStatusResponse(BaseModel):
+    """AI Co-Pilot status response."""
+
+    timestamp: str
+    enabled: bool
+    influence_decisions: bool
+    model: str
+    budget: dict[str, Any]
+    limits: dict[str, Any]
+    features: dict[str, Any]
+    errors: list[str]
+    health: str
+
+
+class AICopilotFeaturesResponse(BaseModel):
+    """AI Co-Pilot features response."""
+
+    trade_rationale: dict[str, Any]
+    daily_journal: dict[str, Any]
+    strategy_critique: dict[str, Any]
+
+
+class AICopilotCritiqueResponse(BaseModel):
+    """AI Co-Pilot critique history response."""
+
+    critiques: list[dict[str, Any]]
+    count: int
+
+
+@app.get("/ai-copilot/status", response_model=AICopilotStatusResponse)
+async def get_ai_copilot_status():
+    """
+    Get current AI Co-Pilot status.
+
+    Returns:
+        Status including enabled state, budget, features, and health
+    """
+    from src.app.llm_advisors.status import load_latest_status
+
+    status = load_latest_status()
+
+    if status is None:
+        # Return default disabled status if no snapshot exists
+        return AICopilotStatusResponse(
+            timestamp=datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
+            enabled=False,
+            influence_decisions=False,
+            model="gpt-4o-mini",
+            budget={
+                "max_calls_per_run": 3,
+                "calls_used": 0,
+                "calls_remaining": 3,
+                "utilization_pct": 0.0,
+            },
+            limits={
+                "max_output_tokens": 350,
+                "timeout_s": 20,
+            },
+            features={
+                "trade_rationale": {"enabled": False, "calls": 0, "successes": 0, "success_rate": 0.0},
+                "daily_journal": {"enabled": False, "generated": False},
+                "strategy_critique": {"enabled": False, "generated": False},
+            },
+            errors=[],
+            health="unknown",
+        )
+
+    return AICopilotStatusResponse(**status)
+
+
+@app.get("/ai-copilot/features", response_model=AICopilotFeaturesResponse)
+async def get_ai_copilot_features():
+    """
+    Get AI Co-Pilot feature status.
+
+    Returns:
+        Feature-specific status and metrics
+    """
+    from src.app.llm_advisors.status import load_latest_status
+
+    status = load_latest_status()
+
+    if status is None or not status.get("features"):
+        return AICopilotFeaturesResponse(
+            trade_rationale={"enabled": False, "calls": 0, "successes": 0, "success_rate": 0.0},
+            daily_journal={"enabled": False, "generated": False},
+            strategy_critique={"enabled": False, "generated": False},
+        )
+
+    features = status["features"]
+    return AICopilotFeaturesResponse(
+        trade_rationale=features.get("trade_rationale", {}),
+        daily_journal=features.get("daily_journal", {}),
+        strategy_critique=features.get("strategy_critique", {}),
+    )
+
+
+@app.get("/ai-copilot/critiques", response_model=AICopilotCritiqueResponse)
+async def get_ai_copilot_critiques(n: int = 7):
+    """
+    Get recent strategy critiques.
+
+    Args:
+        n: Number of recent critiques to return (default 7)
+
+    Returns:
+        List of recent critiques (most recent first)
+    """
+    from src.app.llm_advisors.strategy_critique import load_recent_critiques
+
+    critiques = load_recent_critiques(n=n)
+
+    return AICopilotCritiqueResponse(
+        critiques=critiques,
+        count=len(critiques),
+    )
+
+
+@app.get("/ai-copilot/history")
+async def get_ai_copilot_history(limit: int = 50):
+    """
+    Get AI Co-Pilot run history.
+
+    Args:
+        limit: Maximum number of entries to return (default 50)
+
+    Returns:
+        List of run history entries (most recent first)
+    """
+    history_path = Path("logs/ai_copilot/run_history.jsonl")
+
+    if not history_path.exists():
+        return {
+            "entries": [],
+            "count": 0,
+        }
+
+    entries = []
+    try:
+        with open(history_path, "r", encoding="utf-8") as f:
+            for line in f:
+                entries.append(json.loads(line.strip()))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load history: {e}")
+
+    # Return most recent entries first
+    entries = entries[-limit:][::-1]
+
+    return {
+        "entries": entries,
+        "count": len(entries),
+    }
+
+
+class AICopilotToggleRequest(BaseModel):
+    """Request to toggle AI Co-Pilot master switch."""
+
+    enabled: bool = Field(description="Enable or disable AI Co-Pilot")
+
+
+class AICopilotFeatureToggleRequest(BaseModel):
+    """Request to toggle individual AI Co-Pilot feature."""
+
+    enabled: bool = Field(description="Enable or disable feature")
+
+
+@app.post("/ai-copilot/toggle", response_model=ChangeResponse)
+async def toggle_ai_copilot(request: AICopilotToggleRequest):
+    """
+    Toggle AI Co-Pilot master switch.
+
+    SAFETY:
+    - Changes are written to data/ui_runtime_overrides.json
+    - Takes effect on next loop iteration
+    - Does not affect running operations
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    overrides_path = Path("data/ui_runtime_overrides.json")
+    overrides_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing overrides
+    overrides = {}
+    if overrides_path.exists():
+        try:
+            with open(overrides_path, "r", encoding="utf-8") as f:
+                overrides = json.load(f)
+        except Exception:
+            overrides = {}
+
+    # Update AI Co-Pilot enabled flag
+    if "ai_copilot" not in overrides:
+        overrides["ai_copilot"] = {}
+
+    overrides["ai_copilot"]["enabled"] = request.enabled
+    overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+    # Write overrides atomically
+    temp_path = overrides_path.with_suffix(".tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(overrides, f, indent=2)
+    temp_path.replace(overrides_path)
+
+    action = "enabled" if request.enabled else "disabled"
+    return ChangeResponse(
+        status="success",
+        message=f"AI Co-Pilot {action}. Changes will take effect on next loop iteration.",
+        details={"ai_copilot_enabled": request.enabled},
+    )
+
+
+@app.post("/ai-copilot/features/trade_rationale", response_model=ChangeResponse)
+async def toggle_trade_rationale(request: AICopilotFeatureToggleRequest):
+    """
+    Toggle Trade Rationale feature.
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    return _toggle_copilot_feature("trade_rationale", request.enabled)
+
+
+@app.post("/ai-copilot/features/daily_journal", response_model=ChangeResponse)
+async def toggle_daily_journal(request: AICopilotFeatureToggleRequest):
+    """
+    Toggle Daily Journal feature.
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    return _toggle_copilot_feature("daily_journal", request.enabled)
+
+
+@app.post("/ai-copilot/features/strategy_critique", response_model=ChangeResponse)
+async def toggle_strategy_critique(request: AICopilotFeatureToggleRequest):
+    """
+    Toggle Strategy Critique feature.
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    return _toggle_copilot_feature("strategy_critique", request.enabled)
+
+
+def _toggle_copilot_feature(feature_name: str, enabled: bool) -> ChangeResponse:
+    """
+    Helper to toggle AI Co-Pilot feature.
+
+    SAFETY:
+    - Only modifies safe feature flags
+    - Does not modify budget limits or influence_decisions flag
+    - Changes take effect on next loop iteration
+
+    Args:
+        feature_name: Feature name (trade_rationale, daily_journal, strategy_critique)
+        enabled: Enable or disable
+
+    Returns:
+        Change confirmation
+    """
+    overrides_path = Path("data/ui_runtime_overrides.json")
+    overrides_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing overrides
+    overrides = {}
+    if overrides_path.exists():
+        try:
+            with open(overrides_path, "r", encoding="utf-8") as f:
+                overrides = json.load(f)
+        except Exception:
+            overrides = {}
+
+    # Update feature flag
+    if "ai_copilot" not in overrides:
+        overrides["ai_copilot"] = {}
+    if "features" not in overrides["ai_copilot"]:
+        overrides["ai_copilot"]["features"] = {}
+
+    overrides["ai_copilot"]["features"][feature_name] = enabled
+    overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+    # Write overrides atomically
+    temp_path = overrides_path.with_suffix(".tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(overrides, f, indent=2)
+    temp_path.replace(overrides_path)
+
+    action = "enabled" if enabled else "disabled"
+    return ChangeResponse(
+        status="success",
+        message=f"AI Co-Pilot feature '{feature_name}' {action}. Changes will take effect on next loop iteration.",
+        details={f"{feature_name}_enabled": enabled},
+    )
+
+
+# ============================================================================
 # HTML Dashboard (Phase 3)
 # ============================================================================
 

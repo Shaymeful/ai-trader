@@ -166,6 +166,37 @@ class Config(BaseModel):
     )
     llm_ticker_blacklist: list[str] = Field(default_factory=list, description="Blacklisted tickers")
 
+    # AI Co-Pilot Configuration (Advisory Layer)
+    # SAFETY: Default OFF, never blocks loop, advisory-only outputs
+    ai_copilot_enabled: bool = Field(
+        default=False, description="Enable AI Co-Pilot advisory layer"
+    )
+    ai_copilot_influence_decisions: bool = Field(
+        default=False,
+        description="Allow AI Co-Pilot to influence trading decisions (CRITICAL SAFETY FLAG)",
+    )
+    ai_copilot_model: str = Field(
+        default="gpt-4o-mini", description="LLM model for AI Co-Pilot"
+    )
+    ai_copilot_max_calls_per_run: int = Field(
+        default=3, description="Maximum LLM calls per run (budget gate)"
+    )
+    ai_copilot_max_output_tokens: int = Field(
+        default=350, description="Maximum output tokens per response"
+    )
+    ai_copilot_timeout_s: int = Field(
+        default=20, description="Request timeout in seconds"
+    )
+    ai_copilot_trade_rationale_enabled: bool = Field(
+        default=True, description="Enable trade rationale advisor"
+    )
+    ai_copilot_daily_journal_enabled: bool = Field(
+        default=True, description="Enable daily journal generation"
+    )
+    ai_copilot_strategy_critique_enabled: bool = Field(
+        default=True, description="Enable strategy self-critique"
+    )
+
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
     """
@@ -509,5 +540,45 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 config.llm_cooldown_days_per_ticker = int(llm["cooldown_days_per_ticker"])
             if "ticker_blacklist" in llm:
                 config.llm_ticker_blacklist = list(llm["ticker_blacklist"])
+
+        # Apply AI Co-Pilot parameters from YAML
+        # Environment variable AI_COPILOT_ENABLED takes precedence (0=off, 1=on)
+        if "ai_copilot" in yaml_config:
+            ai_copilot = yaml_config["ai_copilot"]
+
+            # Check for environment variable override first
+            env_enabled = os.getenv("AI_COPILOT_ENABLED")
+            if env_enabled is not None:
+                # Environment variable takes precedence
+                config.ai_copilot_enabled = env_enabled == "1"
+            elif "enabled" in ai_copilot:
+                # Otherwise use YAML value
+                config.ai_copilot_enabled = bool(ai_copilot["enabled"])
+
+            # Load other ai_copilot settings
+            if "influence_decisions" in ai_copilot:
+                config.ai_copilot_influence_decisions = bool(ai_copilot["influence_decisions"])
+            if "model" in ai_copilot:
+                config.ai_copilot_model = ai_copilot["model"]
+            if "max_calls_per_run" in ai_copilot:
+                config.ai_copilot_max_calls_per_run = int(ai_copilot["max_calls_per_run"])
+            if "max_output_tokens" in ai_copilot:
+                config.ai_copilot_max_output_tokens = int(ai_copilot["max_output_tokens"])
+            if "timeout_s" in ai_copilot:
+                config.ai_copilot_timeout_s = int(ai_copilot["timeout_s"])
+
+            # Feature flags
+            if "trade_rationale" in ai_copilot and "enabled" in ai_copilot["trade_rationale"]:
+                config.ai_copilot_trade_rationale_enabled = bool(
+                    ai_copilot["trade_rationale"]["enabled"]
+                )
+            if "daily_journal" in ai_copilot and "enabled" in ai_copilot["daily_journal"]:
+                config.ai_copilot_daily_journal_enabled = bool(
+                    ai_copilot["daily_journal"]["enabled"]
+                )
+            if "strategy_critique" in ai_copilot and "enabled" in ai_copilot["strategy_critique"]:
+                config.ai_copilot_strategy_critique_enabled = bool(
+                    ai_copilot["strategy_critique"]["enabled"]
+                )
 
     return config

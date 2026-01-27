@@ -47,10 +47,10 @@ class MockLLMProvider(LLMProvider):
         )
 
         # Return pre-configured response if available
-        if "proposals" in self.responses:
+        if self.responses:
             return self.responses
 
-        # Default response
+        # Default response (for legacy tests expecting proposals)
         return {
             "proposals": [
                 {

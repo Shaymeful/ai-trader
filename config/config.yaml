@@ -92,3 +92,31 @@ llm:
   min_confidence_remove: 0.85
   cooldown_days_per_ticker: 5  # Reduced from 7 to allow faster re-evaluation
   ticker_blacklist: []
+
+# AI Co-Pilot Configuration (Advisory Layer)
+# SAFETY: Default OFF, never blocks loop, advisory-only outputs
+ai_copilot:
+  # Master switch (can be overridden by AI_COPILOT_ENABLED env var: 0=off, 1=on)
+  enabled: false
+
+  # CRITICAL: Controls whether AI output can influence decisions (default: false)
+  # When false, AI outputs are purely advisory metadata
+  influence_decisions: false
+
+  # Model configuration (reuses existing LLM setup)
+  model: "gpt-4o-mini"  # Cost-effective for advisory tasks
+
+  # Budget limits per run (safety gates)
+  max_calls_per_run: 3      # Maximum LLM calls per loop iteration
+  max_output_tokens: 350    # Token limit per response
+  timeout_s: 20             # Request timeout in seconds
+
+  # Feature flags (each can be disabled independently)
+  trade_rationale:
+    enabled: true   # Add "ai_rationale" field to candidates
+
+  daily_journal:
+    enabled: true   # Generate markdown journal once per day
+
+  strategy_critique:
+    enabled: true   # Append self-critique to strategy_memory.jsonl
