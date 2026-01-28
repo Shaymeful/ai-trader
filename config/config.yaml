@@ -54,6 +54,11 @@ universe:
         - XLE
         - XLV
 
+    automation:
+      enabled: false
+      description: "Automation and industrial technology stocks"
+      symbols: []
+
 # LLM Universe Advisor Configuration
 llm:
   # Provider mode: primary_fallback | ensemble | openai_only | anthropic_only
