@@ -1108,10 +1108,20 @@ async def exit_sector_positions(sector_name: str):
     if universe_registry is None:
         raise HTTPException(status_code=503, detail="Universe registry not loaded")
 
-    if broker is None:
-        raise HTTPException(status_code=503, detail="Broker not loaded")
-
     try:
+        # Create broker instance
+        from src.app.config import load_config_with_yaml
+        from src.broker.base import AlpacaBroker
+        from src.app.models import OrderSide, OrderType
+        import uuid
+
+        config = load_config_with_yaml()
+        broker = AlpacaBroker(
+            api_key=config.alpaca_api_key,
+            secret_key=config.alpaca_secret_key,
+            trading_base_url=config.alpaca_trading_base_url,
+        )
+
         # Get sector symbols
         if sector_name not in universe_registry.sectors:
             raise HTTPException(status_code=404, detail=f"Sector not found: {sector_name}")
@@ -1137,19 +1147,18 @@ async def exit_sector_positions(sector_name: str):
         for symbol, (qty, _) in sector_positions.items():
             if qty > 0:  # Only exit long positions
                 try:
-                    from decimal import Decimal
                     broker.submit_order(
                         symbol=symbol,
-                        action="sell",
-                        qty=qty,
-                        order_type="market",
+                        side=OrderSide.SELL,
+                        quantity=qty,
+                        client_order_id=f"exit-{sector_name}-{symbol}-{uuid.uuid4().hex[:8]}",
+                        order_type=OrderType.MARKET,
                         limit_price=None,
-                        time_in_force="day",
                     )
                     exited_count += 1
-                    logger.info(f"Submitted market sell order for {symbol} (qty={qty})")
+                    print(f"Submitted market sell order for {symbol} (qty={qty})")
                 except Exception as e:
-                    logger.error(f"Failed to exit position for {symbol}: {e}")
+                    print(f"Failed to exit position for {symbol}: {e}")
                     failed_count += 1
 
         if failed_count > 0:
