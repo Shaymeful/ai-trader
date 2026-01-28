@@ -52,7 +52,7 @@ def print_status(key: str, value: str, color: str = ""):
 
 def main():
     """Run smoketest."""
-    print("\n🔍 AI Co-Pilot Smoketest")
+    print("\nAI Co-Pilot Smoketest")
     print("="*60)
 
     # 1. Trading Disabled Status
@@ -213,13 +213,13 @@ def main():
     print_header("Summary")
 
     if trading_disabled:
-        print_status("Status", "⛔ Trading is DISABLED - AI Co-Pilot FORCED OFF", "red")
+        print_status("Status", "[BLOCKED] Trading is DISABLED - AI Co-Pilot FORCED OFF", "red")
     elif effective["enabled"]:
-        print_status("Status", "✅ AI Co-Pilot is ENABLED and ready", "green")
+        print_status("Status", "[OK] AI Co-Pilot is ENABLED and ready", "green")
     else:
-        print_status("Status", "⚠️  AI Co-Pilot is DISABLED (but can be enabled)", "yellow")
+        print_status("Status", "[WARNING] AI Co-Pilot is DISABLED (but can be enabled)", "yellow")
 
-    print("\n✅ Smoketest Complete")
+    print("\n[OK] Smoketest Complete")
     print("="*60)
     print()
 
