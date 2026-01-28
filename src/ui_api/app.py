@@ -1095,6 +1095,80 @@ async def update_sector_enabled(sector_name: str, request: SectorEnableRequest):
         raise HTTPException(status_code=500, detail=f"Failed to stage change: {e}") from e
 
 
+@app.post("/universe/sectors/{sector_name}/exit-positions", response_model=ChangeResponse)
+async def exit_sector_positions(sector_name: str):
+    """
+    Exit all open positions for tickers in a sector.
+
+    Creates market sell orders for all open long positions in the sector.
+
+    Args:
+        sector_name: Sector name to exit positions for
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    if broker is None:
+        raise HTTPException(status_code=503, detail="Broker not loaded")
+
+    try:
+        # Get sector symbols
+        if sector_name not in universe_registry.sectors:
+            raise HTTPException(status_code=404, detail=f"Sector not found: {sector_name}")
+
+        sector_symbols = set(universe_registry.sectors[sector_name].symbols)
+        if not sector_symbols:
+            raise HTTPException(status_code=400, detail="No symbols in sector")
+
+        # Get open positions
+        positions = broker.get_positions()
+        sector_positions = {symbol: (qty, price) for symbol, (qty, price) in positions.items() if symbol in sector_symbols}
+
+        if not sector_positions:
+            return ChangeResponse(
+                success=True,
+                message=f"No open positions found for {sector_name} sector",
+                pending_version=None,
+            )
+
+        # Submit market sell orders for each position
+        exited_count = 0
+        failed_count = 0
+        for symbol, (qty, _) in sector_positions.items():
+            if qty > 0:  # Only exit long positions
+                try:
+                    from decimal import Decimal
+                    broker.submit_order(
+                        symbol=symbol,
+                        action="sell",
+                        qty=qty,
+                        order_type="market",
+                        limit_price=None,
+                        time_in_force="day",
+                    )
+                    exited_count += 1
+                    logger.info(f"Submitted market sell order for {symbol} (qty={qty})")
+                except Exception as e:
+                    logger.error(f"Failed to exit position for {symbol}: {e}")
+                    failed_count += 1
+
+        if failed_count > 0:
+            message = f"Exited {exited_count} positions for {sector_name} sector ({failed_count} failed)"
+        else:
+            message = f"Exited {exited_count} positions for {sector_name} sector"
+
+        return ChangeResponse(
+            success=True,
+            message=message,
+            pending_version=None,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to exit positions: {e}") from e
+
+
 @app.post("/universe/reset", response_model=ChangeResponse)
 async def reset_universe():
     """Reset all sectors to default configuration.

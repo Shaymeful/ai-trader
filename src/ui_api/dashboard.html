@@ -2425,11 +2425,19 @@
                             <div class="sector-tickers">
                                 ${tickersDisplay}
                             </div>
-                            <button class="btn-view-edit"
-                                    onclick="openSectorEditorById('${sector.sector_name}')"
-                                    style="margin-top: 0.5rem;">
-                                Edit Tickers
-                            </button>
+                            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                                <button class="btn-view-edit"
+                                        onclick="openSectorEditorById('${sector.sector_name}')"
+                                        style="flex: 1;">
+                                    Edit Tickers
+                                </button>
+                                <button class="btn-secondary"
+                                        onclick="exitSectorPositions('${sector.sector_name}')"
+                                        style="flex: 1;"
+                                        title="Exit all open positions for tickers in this sector">
+                                    Exit Positions
+                                </button>
+                            </div>
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox"
@@ -2466,6 +2474,39 @@
                 console.error('Error toggling sector:', error);
                 showError('Failed to update sector');
                 loadDashboard();
+            }
+        }
+
+        async function exitSectorPositions(sectorName) {
+            // Get sector symbols
+            const symbols = window.sectorDataCache[sectorName];
+            if (!symbols || symbols.length === 0) {
+                showError('No symbols in this sector');
+                return;
+            }
+
+            const symbolList = symbols.join(', ');
+            if (!confirm(`Exit all open positions for ${sectorName} sector?\n\nSymbols: ${symbolList}\n\nThis will create market sell orders for all open positions.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/universe/sectors/${sectorName}/exit-positions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showSuccess(result.message || `Exiting positions for ${sectorName} sector`);
+                    setTimeout(() => loadDashboard(), 1000);
+                } else {
+                    showError(result.detail || 'Failed to exit positions');
+                }
+            } catch (error) {
+                console.error('Error exiting sector positions:', error);
+                showError('Failed to exit sector positions');
             }
         }
 
