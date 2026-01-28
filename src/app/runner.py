@@ -209,12 +209,15 @@ def _run_sell_scan(
         # Convert to format expected by sell scanner: {symbol: (quantity, avg_price)}
         current_positions = {}
         for symbol, position in positions.items():
-            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
-            avg_price = (
-                position.get("avg_entry_price", 0)
-                if isinstance(position, dict)
-                else getattr(position, "avg_entry_price", 0)
-            )
+            # Handle different position formats: dict, tuple (qty, price), or object
+            if isinstance(position, dict):
+                qty = position.get("qty", 0)
+                avg_price = position.get("avg_entry_price", 0)
+            elif isinstance(position, tuple):
+                qty, avg_price = position
+            else:
+                qty = getattr(position, "qty", 0)
+                avg_price = getattr(position, "avg_entry_price", 0)
 
             if qty > 0:  # Only include long positions
                 current_positions[symbol] = (int(qty), float(avg_price))
@@ -843,12 +846,15 @@ def run_paper_mode(
         # Convert positions to format expected by exit advisor: {symbol: (quantity, avg_price)}
         current_positions = {}
         for symbol, position in positions.items():
-            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
-            avg_price = (
-                position.get("avg_entry_price", 0)
-                if isinstance(position, dict)
-                else getattr(position, "avg_entry_price", 0)
-            )
+            # Handle different position formats: dict, tuple (qty, price), or object
+            if isinstance(position, dict):
+                qty = position.get("qty", 0)
+                avg_price = position.get("avg_entry_price", 0)
+            elif isinstance(position, tuple):
+                qty, avg_price = position
+            else:
+                qty = getattr(position, "qty", 0)
+                avg_price = getattr(position, "avg_entry_price", 0)
 
             if qty > 0:  # Only include long positions
                 current_positions[symbol] = (int(qty), float(avg_price))
