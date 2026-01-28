@@ -101,11 +101,13 @@ def generate_daily_journal(
     }
 
     # Call LLM (budget-gated, with retries)
+    # Pass feature-specific max tokens for budget enforcement
     result = client.generate_advisory_json(
         prompt=prompt,
         schema=schema,
         temperature=0.8,  # Slightly higher for more natural writing
         feature_name="daily_journal",
+        feature_max_tokens=config.ai_copilot_daily_journal_max_tokens,
     )
 
     if result is None:
@@ -119,8 +121,14 @@ def generate_daily_journal(
     try:
         journal_dir.mkdir(parents=True, exist_ok=True)
 
-        # Respect AI_COPILOT_DRY_RUN
-        if os.getenv("AI_COPILOT_DRY_RUN") == "1":
+        # Check for trading disabled or dry-run
+        from src.app.llm_advisors.utils import is_trading_disabled
+
+        if is_trading_disabled():
+            logger.info(f"Trading disabled - skipping journal write: {journal_path}")
+            return None
+
+        if config.ai_copilot_dry_run or os.getenv("AI_COPILOT_DRY_RUN") == "1":
             logger.info(f"DRY RUN - would write journal to: {journal_path}")
             return None
 

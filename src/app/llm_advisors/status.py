@@ -77,48 +77,62 @@ class StatusSnapshot:
         Returns:
             Status dict with all monitoring data
         """
+        from src.app.llm_advisors.utils import is_trading_disabled
+
+        trading_disabled = is_trading_disabled()
+        forced_reason = None
+        if trading_disabled:
+            forced_reason = "forced_off_by_trading_disable"
+
+        # Determine artifact paths
+        from datetime import date
+
+        today = date.today().isoformat()
+        journal_path = Path(f"logs/journal/{today}.md")
+        critique_path = Path("data/strategy_memory.jsonl")
+
         return {
             "timestamp": datetime.now().isoformat(),
             "run_start_time": self.run_start_time.isoformat(),
+            "trading_disabled_effective": trading_disabled,
+            "ai_copilot_enabled_effective": self.config.ai_copilot_enabled and not trading_disabled,
+            "forced_reason": forced_reason,
             "enabled": self.config.ai_copilot_enabled,
             "influence_decisions": self.config.ai_copilot_influence_decisions,
             "model": self.config.ai_copilot_model,
-            "budget": {
+            "budgets": {
                 "max_calls_per_run": self.config.ai_copilot_max_calls_per_run,
                 "calls_used": self.client.call_count,
-                "calls_remaining": self.client.get_remaining_budget(),
-                "utilization_pct": (
-                    self.client.call_count / self.config.ai_copilot_max_calls_per_run * 100
-                    if self.config.ai_copilot_max_calls_per_run > 0
-                    else 0
-                ),
-            },
-            "limits": {
-                "max_output_tokens": self.config.ai_copilot_max_output_tokens,
-                "timeout_s": self.config.ai_copilot_timeout_s,
+                "global_max_output_tokens": self.config.ai_copilot_global_max_output_tokens,
             },
             "features": {
                 "trade_rationale": {
                     "enabled": self.config.ai_copilot_trade_rationale_enabled,
-                    "calls": self.trade_rationale_calls,
-                    "successes": self.trade_rationale_successes,
-                    "success_rate": (
-                        self.trade_rationale_successes / self.trade_rationale_calls
-                        if self.trade_rationale_calls > 0
-                        else 0
+                    "ran": self.trade_rationale_calls > 0,
+                    "skipped_reason": None if self.trade_rationale_calls > 0 else (
+                        "trading_disabled" if trading_disabled else "budget_exhausted" if self.client.get_remaining_budget() == 0 else None
                     ),
                 },
                 "daily_journal": {
                     "enabled": self.config.ai_copilot_daily_journal_enabled,
-                    "generated": self.daily_journal_generated,
+                    "ran": self.daily_journal_generated,
+                    "skipped_reason": None if self.daily_journal_generated else (
+                        "trading_disabled" if trading_disabled else None
+                    ),
                 },
                 "strategy_critique": {
                     "enabled": self.config.ai_copilot_strategy_critique_enabled,
-                    "generated": self.strategy_critique_generated,
+                    "ran": self.strategy_critique_generated,
+                    "skipped_reason": None if self.strategy_critique_generated else (
+                        "trading_disabled" if trading_disabled else None
+                    ),
                 },
             },
+            "artifacts": {
+                "latest_journal_path": str(journal_path) if journal_path.exists() else None,
+                "latest_critique_path": str(critique_path) if critique_path.exists() else None,
+            },
             "errors": self.errors,
-            "health": "healthy" if not self.errors else "degraded",
         }
 
     def write_snapshot(self, path: str | Path = "logs/ai_copilot/latest_status.json") -> bool:

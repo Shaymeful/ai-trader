@@ -26,24 +26,24 @@ class TradeRationaleResult:
     def __init__(
         self,
         candidate_id: str,
-        rationale: str | None = None,
-        confidence: int | None = None,
-        risk_factors: list[str] | None = None,
+        thesis: str | None = None,
+        counterarguments: list[str] | None = None,
+        invalidation_conditions: list[str] | None = None,
         success: bool = False,
     ):
         self.candidate_id = candidate_id
-        self.rationale = rationale
-        self.confidence = confidence  # 0-100
-        self.risk_factors = risk_factors or []
+        self.thesis = thesis
+        self.counterarguments = counterarguments or []
+        self.invalidation_conditions = invalidation_conditions or []
         self.success = success
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict for serialization."""
         return {
             "candidate_id": self.candidate_id,
-            "rationale": self.rationale,
-            "confidence": self.confidence,
-            "risk_factors": self.risk_factors,
+            "thesis": self.thesis,
+            "counterarguments": self.counterarguments,
+            "invalidation_conditions": self.invalidation_conditions,
             "success": self.success,
         }
 
@@ -94,46 +94,50 @@ Reason: {candidate.reason or "N/A"}
 {context_str}
 
 TASK:
-Provide a clear, concise rationale for why this is a {candidate.action.value.upper()} opportunity right now.
+Provide a trade thesis for this {candidate.action.value.upper()} opportunity.
 
-Consider:
-1. What makes this actionable NOW?
-2. What are the key supporting factors?
-3. What are the main risk factors to watch?
-4. What is your confidence level (0-100)?
+Generate:
+1. **Thesis**: One sentence explaining why this is actionable NOW
+2. **Counterarguments**: 2-3 reasons this trade might NOT work
+3. **Invalidation Conditions**: 2-3 specific conditions that would invalidate the thesis
 
-Be specific and actionable. Focus on the "why" and "what could go wrong".
+Be specific and actionable. Focus on the trade setup and risk management.
 """
 
-    # Define JSON schema for response
+    # Define JSON schema for response (per spec)
     schema = {
         "type": "object",
         "properties": {
-            "rationale": {
+            "thesis": {
                 "type": "string",
-                "description": "Clear, concise explanation (2-3 sentences)",
+                "description": "One sentence trade thesis explaining why actionable now",
             },
-            "confidence": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100,
-                "description": "AI confidence in this analysis (0-100)",
-            },
-            "risk_factors": {
+            "counterarguments": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of 1-3 key risk factors to monitor",
+                "minItems": 2,
+                "maxItems": 3,
+                "description": "2-3 counterarguments against this trade",
+            },
+            "invalidation_conditions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 3,
+                "description": "2-3 specific conditions that would invalidate the thesis",
             },
         },
-        "required": ["rationale", "confidence", "risk_factors"],
+        "required": ["thesis", "counterarguments", "invalidation_conditions"],
     }
 
     # Call LLM (budget-gated, with retries)
+    # Pass feature-specific max tokens for budget enforcement
     result = client.generate_advisory_json(
         prompt=prompt,
         schema=schema,
         temperature=0.7,
         feature_name=f"trade_rationale.{candidate.symbol}",
+        feature_max_tokens=config.ai_copilot_trade_rationale_max_tokens,
     )
 
     if result is None:
@@ -141,20 +145,20 @@ Be specific and actionable. Focus on the "why" and "what could go wrong".
         return TradeRationaleResult(candidate.candidate_id, success=False)
 
     # Extract fields
-    rationale = result.get("rationale")
-    confidence = result.get("confidence")
-    risk_factors = result.get("risk_factors", [])
+    thesis = result.get("thesis")
+    counterarguments = result.get("counterarguments", [])
+    invalidation_conditions = result.get("invalidation_conditions", [])
 
     logger.info(
-        f"[{candidate.symbol}] Generated rationale: confidence={confidence}, "
-        f"risks={len(risk_factors)}"
+        f"[{candidate.symbol}] Generated rationale: counterargs={len(counterarguments)}, "
+        f"invalidations={len(invalidation_conditions)}"
     )
 
     return TradeRationaleResult(
         candidate_id=candidate.candidate_id,
-        rationale=rationale,
-        confidence=confidence,
-        risk_factors=risk_factors,
+        thesis=thesis,
+        counterarguments=counterarguments,
+        invalidation_conditions=invalidation_conditions,
         success=True,
     )
 

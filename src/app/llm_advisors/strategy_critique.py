@@ -69,45 +69,43 @@ def generate_strategy_critique(
     # Build prompt from performance data
     prompt = _build_critique_prompt(date_str, performance_data)
 
-    # Define JSON schema
+    # Define JSON schema (per spec)
     schema = {
         "type": "object",
         "properties": {
-            "critique": {
-                "type": "string",
-                "description": "Honest critique of today's strategy performance (2-3 sentences)",
-            },
-            "recommendations": {
+            "what_worked": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "2-4 actionable recommendations for improvement",
+                "description": "List of things that worked well today",
+            },
+            "what_failed": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of things that didn't work or failed",
+            },
+            "suggested_tweaks": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Specific actionable suggestions for improvement",
             },
             "confidence": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100,
-                "description": "Confidence in current strategy approach (0-100)",
-            },
-            "strengths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "1-3 things that worked well today",
-            },
-            "weaknesses": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "1-3 things that need improvement",
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": "Confidence in current strategy approach (0.0-1.0)",
             },
         },
-        "required": ["critique", "recommendations", "confidence", "strengths", "weaknesses"],
+        "required": ["what_worked", "what_failed", "suggested_tweaks", "confidence"],
     }
 
     # Call LLM (budget-gated, with retries)
+    # Pass feature-specific max tokens for budget enforcement
     result = client.generate_advisory_json(
         prompt=prompt,
         schema=schema,
         temperature=0.8,  # Higher temp for more honest critique
         feature_name="strategy_critique",
+        feature_max_tokens=config.ai_copilot_strategy_critique_max_tokens,
     )
 
     if result is None:
@@ -198,7 +196,13 @@ def _append_critique_to_memory(
     performance_data: dict[str, Any] | None,
 ) -> bool:
     """Append critique to JSONL memory file."""
-    # Respect AI_COPILOT_DRY_RUN
+    from src.app.llm_advisors.utils import is_trading_disabled
+
+    # Check trading disabled or dry-run
+    if is_trading_disabled():
+        logger.info(f"Trading disabled - skipping critique write: {memory_path}")
+        return False
+
     if os.getenv("AI_COPILOT_DRY_RUN") == "1":
         logger.info(f"DRY RUN - would append critique to: {memory_path}")
         return False
@@ -206,16 +210,13 @@ def _append_critique_to_memory(
     # Ensure directory exists
     memory_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build entry
+    # Build entry (per spec schema)
     entry = {
         "date": date_str,
-        "timestamp": date.today().isoformat(),
-        "critique": critique_data.get("critique"),
-        "recommendations": critique_data.get("recommendations", []),
-        "confidence": critique_data.get("confidence"),
-        "strengths": critique_data.get("strengths", []),
-        "weaknesses": critique_data.get("weaknesses", []),
-        "performance": performance_data or {},
+        "what_worked": critique_data.get("what_worked", []),
+        "what_failed": critique_data.get("what_failed", []),
+        "suggested_tweaks": critique_data.get("suggested_tweaks", []),
+        "confidence": critique_data.get("confidence", 0.0),
     }
 
     # Append to JSONL

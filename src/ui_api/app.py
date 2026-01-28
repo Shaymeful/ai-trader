@@ -2244,7 +2244,132 @@ class AICopilotCritiqueResponse(BaseModel):
     count: int
 
 
-@app.get("/ai-copilot/status", response_model=AICopilotStatusResponse)
+class AICopilotConfigUpdateRequest(BaseModel):
+    """Request to update AI Co-Pilot configuration."""
+
+    enabled: bool | None = Field(None, description="Enable/disable AI Co-Pilot")
+    dry_run: bool | None = Field(None, description="Enable/disable dry-run mode")
+    max_calls_per_run: int | None = Field(None, ge=0, description="Max LLM calls per run")
+    budgets: dict[str, int] | None = Field(None, description="Budget limits")
+    trade_rationale: dict[str, Any] | None = Field(None, description="Trade rationale settings")
+    daily_journal: dict[str, Any] | None = Field(None, description="Daily journal settings")
+    strategy_critique: dict[str, Any] | None = Field(None, description="Strategy critique settings")
+
+
+@app.get("/api/ai-copilot/config")
+async def get_ai_copilot_config():
+    """
+    Get AI Co-Pilot effective configuration with sources.
+
+    Returns:
+        Dict with "effective", "sources", and "trading_disabled_effective" keys
+    """
+    from src.app.config import load_config_with_yaml, load_yaml_config
+    from src.app.llm_advisors.config_helpers import get_effective_config_with_sources
+
+    config = load_config_with_yaml()
+    yaml_config = load_yaml_config()
+
+    return get_effective_config_with_sources(config, yaml_config)
+
+
+@app.post("/api/ai-copilot/config")
+async def update_ai_copilot_config(
+    request: AICopilotConfigUpdateRequest,
+    validate_only: bool = False,
+):
+    """
+    Update AI Co-Pilot configuration via UI runtime overrides.
+
+    Args:
+        request: Configuration update request
+        validate_only: If True, validate without writing (query param ?validate_only=1)
+
+    Returns:
+        Updated effective config with sources, or validation errors
+
+    Safety:
+        - Only allows safe fields (no influence_decisions, trading logic, etc.)
+        - Validates all changes before applying
+        - Atomic write (temp file → rename)
+        - If trading disabled, enabled flag will remain false regardless
+    """
+    from src.app.llm_advisors.utils import (
+        load_ui_runtime_overrides,
+        save_ui_runtime_overrides,
+        validate_ui_overrides,
+    )
+
+    # Load current overrides
+    overrides = load_ui_runtime_overrides()
+
+    # Ensure ai_copilot section exists
+    if "ai_copilot" not in overrides:
+        overrides["ai_copilot"] = {}
+
+    # Update fields from request
+    if request.enabled is not None:
+        overrides["ai_copilot"]["enabled"] = request.enabled
+
+    if request.dry_run is not None:
+        overrides["ai_copilot"]["dry_run"] = request.dry_run
+
+    if request.max_calls_per_run is not None:
+        overrides["ai_copilot"]["max_calls_per_run"] = request.max_calls_per_run
+
+    if request.budgets is not None:
+        if "budgets" not in overrides["ai_copilot"]:
+            overrides["ai_copilot"]["budgets"] = {}
+        overrides["ai_copilot"]["budgets"].update(request.budgets)
+
+    # Update feature settings
+    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique"]:
+        feature_data = getattr(request, feature_name, None)
+        if feature_data is not None:
+            if feature_name not in overrides["ai_copilot"]:
+                overrides["ai_copilot"][feature_name] = {}
+            overrides["ai_copilot"][feature_name].update(feature_data)
+
+    # Add timestamp
+    overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+    # Validate overrides
+    is_valid, errors = validate_ui_overrides(overrides)
+
+    if not is_valid:
+        raise HTTPException(status_code=400, detail={"errors": errors})
+
+    # If validate_only, return without writing
+    if validate_only:
+        return {
+            "status": "valid",
+            "message": "Configuration is valid (not saved)",
+            "errors": [],
+        }
+
+    # Save overrides atomically
+    success = save_ui_runtime_overrides(overrides)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save configuration")
+
+    # Reload config and return effective values
+    from src.app.config import load_config_with_yaml, load_yaml_config
+    from src.app.llm_advisors.config_helpers import get_effective_config_with_sources
+
+    config = load_config_with_yaml()
+    yaml_config = load_yaml_config()
+    effective_data = get_effective_config_with_sources(config, yaml_config)
+
+    return {
+        "status": "success",
+        "message": "Configuration updated. Changes will take effect on next loop iteration.",
+        "effective": effective_data["effective"],
+        "sources": effective_data["sources"],
+    }
+
+
+@app.get("/api/ai-copilot/status", response_model=AICopilotStatusResponse)
 async def get_ai_copilot_status():
     """
     Get current AI Co-Pilot status.
@@ -2285,7 +2410,7 @@ async def get_ai_copilot_status():
     return AICopilotStatusResponse(**status)
 
 
-@app.get("/ai-copilot/features", response_model=AICopilotFeaturesResponse)
+@app.get("/api/ai-copilot/features", response_model=AICopilotFeaturesResponse)
 async def get_ai_copilot_features():
     """
     Get AI Co-Pilot feature status.
@@ -2312,20 +2437,20 @@ async def get_ai_copilot_features():
     )
 
 
-@app.get("/ai-copilot/critiques", response_model=AICopilotCritiqueResponse)
-async def get_ai_copilot_critiques(n: int = 7):
+@app.get("/api/ai-copilot/critique", response_model=AICopilotCritiqueResponse)
+async def get_ai_copilot_critiques(limit: int = 5):
     """
     Get recent strategy critiques.
 
     Args:
-        n: Number of recent critiques to return (default 7)
+        limit: Number of recent critiques to return (default 5)
 
     Returns:
         List of recent critiques (most recent first)
     """
     from src.app.llm_advisors.strategy_critique import load_recent_critiques
 
-    critiques = load_recent_critiques(n=n)
+    critiques = load_recent_critiques(n=limit)
 
     return AICopilotCritiqueResponse(
         critiques=critiques,
@@ -2333,7 +2458,7 @@ async def get_ai_copilot_critiques(n: int = 7):
     )
 
 
-@app.get("/ai-copilot/history")
+@app.get("/api/ai-copilot/history")
 async def get_ai_copilot_history(limit: int = 50):
     """
     Get AI Co-Pilot run history.
@@ -2381,7 +2506,7 @@ class AICopilotFeatureToggleRequest(BaseModel):
     enabled: bool = Field(description="Enable or disable feature")
 
 
-@app.post("/ai-copilot/toggle", response_model=ChangeResponse)
+@app.post("/api/ai-copilot/toggle", response_model=ChangeResponse)
 async def toggle_ai_copilot(request: AICopilotToggleRequest):
     """
     Toggle AI Co-Pilot master switch.
@@ -2430,7 +2555,7 @@ async def toggle_ai_copilot(request: AICopilotToggleRequest):
     )
 
 
-@app.post("/ai-copilot/features/trade_rationale", response_model=ChangeResponse)
+@app.post("/api/ai-copilot/features/trade_rationale", response_model=ChangeResponse)
 async def toggle_trade_rationale(request: AICopilotFeatureToggleRequest):
     """
     Toggle Trade Rationale feature.
@@ -2444,7 +2569,7 @@ async def toggle_trade_rationale(request: AICopilotFeatureToggleRequest):
     return _toggle_copilot_feature("trade_rationale", request.enabled)
 
 
-@app.post("/ai-copilot/features/daily_journal", response_model=ChangeResponse)
+@app.post("/api/ai-copilot/features/daily_journal", response_model=ChangeResponse)
 async def toggle_daily_journal(request: AICopilotFeatureToggleRequest):
     """
     Toggle Daily Journal feature.
@@ -2458,7 +2583,7 @@ async def toggle_daily_journal(request: AICopilotFeatureToggleRequest):
     return _toggle_copilot_feature("daily_journal", request.enabled)
 
 
-@app.post("/ai-copilot/features/strategy_critique", response_model=ChangeResponse)
+@app.post("/api/ai-copilot/features/strategy_critique", response_model=ChangeResponse)
 async def toggle_strategy_critique(request: AICopilotFeatureToggleRequest):
     """
     Toggle Strategy Critique feature.

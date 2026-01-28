@@ -48,12 +48,18 @@ class CoPilotClient:
         self.config = config
         self.call_count = 0
 
-        # Check for dry-run mode (testing/debugging)
-        self.dry_run = os.getenv("AI_COPILOT_DRY_RUN") == "1"
+        # Check for dry-run mode (testing/debugging or config)
+        self.dry_run = config.ai_copilot_dry_run or os.getenv("AI_COPILOT_DRY_RUN") == "1"
+
+        # Check trading disabled status
+        from src.app.llm_advisors.utils import is_trading_disabled
+        self.trading_disabled = is_trading_disabled()
 
         # Create LLM provider (lazy - only if enabled)
         self._provider = None
 
+        if self.trading_disabled:
+            logger.warning("Trading is disabled - AI Co-Pilot forced OFF")
         if self.dry_run:
             logger.warning("AI_COPILOT_DRY_RUN=1 - no real LLM calls will be made")
 
@@ -84,6 +90,7 @@ class CoPilotClient:
         schema: dict[str, Any],
         temperature: float = 0.7,
         feature_name: str = "unknown",
+        feature_max_tokens: int | None = None,
         max_retries: int = 3,
     ) -> dict[str, Any] | None:
         """
@@ -96,6 +103,7 @@ class CoPilotClient:
             schema: Expected JSON schema
             temperature: Sampling temperature (0.0-1.0)
             feature_name: Name of calling feature (for logging)
+            feature_max_tokens: Feature-specific max tokens (optional)
             max_retries: Maximum retry attempts (default 3)
 
         Returns:
@@ -106,7 +114,13 @@ class CoPilotClient:
             - Logs all failures for debugging
             - Respects budget gates
             - Respects dry-run mode
+            - Respects trading disabled override
         """
+        # Check if trading is disabled (global safety override)
+        if self.trading_disabled:
+            logger.debug(f"[{feature_name}] Trading disabled, AI Co-Pilot forced OFF")
+            return None
+
         # Check if AI Co-Pilot is enabled
         if not self.config.ai_copilot_enabled:
             logger.debug(f"[{feature_name}] AI Co-Pilot disabled, skipping LLM call")
@@ -130,8 +144,17 @@ class CoPilotClient:
             logger.info(f"[{feature_name}] DRY RUN - returning mock data")
             return {"dry_run": True, "feature": feature_name}
 
-        # Enforce max_output_tokens
-        max_tokens = min(self.config.ai_copilot_max_output_tokens, 4096)
+        # Enforce token budget: min(feature_max, global_max)
+        global_max = self.config.ai_copilot_global_max_output_tokens
+        if feature_max_tokens is not None:
+            max_tokens = min(feature_max_tokens, global_max, 4096)
+        else:
+            max_tokens = min(global_max, 4096)
+
+        logger.debug(
+            f"[{feature_name}] Token budget: feature={feature_max_tokens}, "
+            f"global={global_max}, effective={max_tokens}"
+        )
 
         # Retry logic with exponential backoff
         retry_delays = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
@@ -196,7 +219,14 @@ class CoPilotClient:
         Returns:
             Status dict with budget info, config, and feature flags
         """
+        forced_reason = None
+        if self.trading_disabled:
+            forced_reason = "forced_off_by_trading_disable"
+
         return {
+            "trading_disabled_effective": self.trading_disabled,
+            "ai_copilot_enabled_effective": self.config.ai_copilot_enabled and not self.trading_disabled,
+            "forced_reason": forced_reason,
             "enabled": self.config.ai_copilot_enabled,
             "dry_run": self.dry_run,
             "influence_decisions": self.config.ai_copilot_influence_decisions,
@@ -206,13 +236,24 @@ class CoPilotClient:
                 "calls_used": self.call_count,
                 "calls_remaining": self.get_remaining_budget(),
             },
+            "budgets": {
+                "global_max_output_tokens": self.config.ai_copilot_global_max_output_tokens,
+            },
             "limits": {
-                "max_output_tokens": self.config.ai_copilot_max_output_tokens,
                 "timeout_s": self.config.ai_copilot_timeout_s,
             },
             "features": {
-                "trade_rationale": self.config.ai_copilot_trade_rationale_enabled,
-                "daily_journal": self.config.ai_copilot_daily_journal_enabled,
-                "strategy_critique": self.config.ai_copilot_strategy_critique_enabled,
+                "trade_rationale": {
+                    "enabled": self.config.ai_copilot_trade_rationale_enabled,
+                    "max_output_tokens": self.config.ai_copilot_trade_rationale_max_tokens,
+                },
+                "daily_journal": {
+                    "enabled": self.config.ai_copilot_daily_journal_enabled,
+                    "max_output_tokens": self.config.ai_copilot_daily_journal_max_tokens,
+                },
+                "strategy_critique": {
+                    "enabled": self.config.ai_copilot_strategy_critique_enabled,
+                    "max_output_tokens": self.config.ai_copilot_strategy_critique_max_tokens,
+                },
             },
         }

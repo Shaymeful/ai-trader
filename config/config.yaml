@@ -97,26 +97,34 @@ llm:
 # SAFETY: Default OFF, never blocks loop, advisory-only outputs
 ai_copilot:
   # Master switch (can be overridden by AI_COPILOT_ENABLED env var: 0=off, 1=on)
+  # CRITICAL: If trading is disabled, AI Co-Pilot is forced OFF regardless of this setting
   enabled: false
 
   # CRITICAL: Controls whether AI output can influence decisions (default: false)
   # When false, AI outputs are purely advisory metadata
+  # MUST remain false - cannot be changed via UI
   influence_decisions: false
 
   # Model configuration (reuses existing LLM setup)
   model: "gpt-4o-mini"  # Cost-effective for advisory tasks
 
   # Budget limits per run (safety gates)
-  max_calls_per_run: 3      # Maximum LLM calls per loop iteration
-  max_output_tokens: 350    # Token limit per response
+  max_calls_per_run: 4      # Maximum LLM calls per loop iteration
   timeout_s: 20             # Request timeout in seconds
 
-  # Feature flags (each can be disabled independently)
+  # Global budget constraints
+  budgets:
+    global_max_output_tokens: 1200  # Global token cap across all features
+
+  # Feature flags with per-feature token limits
   trade_rationale:
-    enabled: true   # Add "ai_rationale" field to candidates
+    enabled: true
+    max_output_tokens: 500  # Per-call token limit for trade rationale
 
   daily_journal:
-    enabled: true   # Generate markdown journal once per day
+    enabled: true
+    max_output_tokens: 1200  # Per-call token limit for daily journal
 
   strategy_critique:
-    enabled: true   # Append self-critique to strategy_memory.jsonl
+    enabled: true
+    max_output_tokens: 900  # Per-call token limit for strategy critique

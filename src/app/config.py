@@ -179,22 +179,40 @@ class Config(BaseModel):
         default="gpt-4o-mini", description="LLM model for AI Co-Pilot"
     )
     ai_copilot_max_calls_per_run: int = Field(
-        default=3, description="Maximum LLM calls per run (budget gate)"
-    )
-    ai_copilot_max_output_tokens: int = Field(
-        default=350, description="Maximum output tokens per response"
+        default=4, description="Maximum LLM calls per run (budget gate)"
     )
     ai_copilot_timeout_s: int = Field(
         default=20, description="Request timeout in seconds"
     )
+    ai_copilot_dry_run: bool = Field(
+        default=False, description="Dry-run mode (no file writes)"
+    )
+
+    # Global budget constraints
+    ai_copilot_global_max_output_tokens: int = Field(
+        default=1200, description="Global token cap across all features"
+    )
+
+    # Feature-specific settings
     ai_copilot_trade_rationale_enabled: bool = Field(
         default=True, description="Enable trade rationale advisor"
     )
+    ai_copilot_trade_rationale_max_tokens: int = Field(
+        default=500, description="Max output tokens for trade rationale"
+    )
+
     ai_copilot_daily_journal_enabled: bool = Field(
         default=True, description="Enable daily journal generation"
     )
+    ai_copilot_daily_journal_max_tokens: int = Field(
+        default=1200, description="Max output tokens for daily journal"
+    )
+
     ai_copilot_strategy_critique_enabled: bool = Field(
         default=True, description="Enable strategy self-critique"
+    )
+    ai_copilot_strategy_critique_max_tokens: int = Field(
+        default=900, description="Max output tokens for strategy critique"
     )
 
 
@@ -542,43 +560,130 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 config.llm_ticker_blacklist = list(llm["ticker_blacklist"])
 
         # Apply AI Co-Pilot parameters from YAML
-        # Environment variable AI_COPILOT_ENABLED takes precedence (0=off, 1=on)
+        # PRECEDENCE: trading_disabled > env > UI overrides > YAML > defaults
         if "ai_copilot" in yaml_config:
+            from src.app.llm_advisors.utils import is_trading_disabled, load_ui_runtime_overrides
+
             ai_copilot = yaml_config["ai_copilot"]
 
-            # Check for environment variable override first
-            env_enabled = os.getenv("AI_COPILOT_ENABLED")
-            if env_enabled is not None:
-                # Environment variable takes precedence
-                config.ai_copilot_enabled = env_enabled == "1"
-            elif "enabled" in ai_copilot:
-                # Otherwise use YAML value
-                config.ai_copilot_enabled = bool(ai_copilot["enabled"])
+            # Check trading disabled status (global safety override)
+            trading_disabled = is_trading_disabled()
 
-            # Load other ai_copilot settings
+            # Load UI runtime overrides
+            ui_overrides = load_ui_runtime_overrides()
+            ui_copilot = ui_overrides.get("ai_copilot", {})
+
+            # Helper to apply precedence: env > ui > yaml
+            def get_value(key, env_var=None, converter=None):
+                # Check environment variable first
+                if env_var:
+                    env_val = os.getenv(env_var)
+                    if env_val is not None:
+                        return converter(env_val) if converter else env_val
+
+                # Check UI override
+                if key in ui_copilot:
+                    val = ui_copilot[key]
+                    return converter(val) if converter else val
+
+                # Check YAML
+                if key in ai_copilot:
+                    val = ai_copilot[key]
+                    return converter(val) if converter else val
+
+                return None
+
+            # Master enabled switch
+            # CRITICAL: If trading disabled, force OFF regardless of other settings
+            if trading_disabled:
+                config.ai_copilot_enabled = False
+            else:
+                env_enabled = os.getenv("AI_COPILOT_ENABLED")
+                if env_enabled is not None:
+                    config.ai_copilot_enabled = env_enabled == "1"
+                elif "enabled" in ui_copilot:
+                    config.ai_copilot_enabled = bool(ui_copilot["enabled"])
+                elif "enabled" in ai_copilot:
+                    config.ai_copilot_enabled = bool(ai_copilot["enabled"])
+
+            # Dry-run mode (env or UI can enable)
+            env_dry_run = os.getenv("AI_COPILOT_DRY_RUN")
+            if env_dry_run == "1":
+                config.ai_copilot_dry_run = True
+            elif "dry_run" in ui_copilot:
+                config.ai_copilot_dry_run = bool(ui_copilot["dry_run"])
+
+            # Immutable settings (cannot be overridden by UI)
             if "influence_decisions" in ai_copilot:
                 config.ai_copilot_influence_decisions = bool(ai_copilot["influence_decisions"])
             if "model" in ai_copilot:
                 config.ai_copilot_model = ai_copilot["model"]
-            if "max_calls_per_run" in ai_copilot:
-                config.ai_copilot_max_calls_per_run = int(ai_copilot["max_calls_per_run"])
-            if "max_output_tokens" in ai_copilot:
-                config.ai_copilot_max_output_tokens = int(ai_copilot["max_output_tokens"])
             if "timeout_s" in ai_copilot:
                 config.ai_copilot_timeout_s = int(ai_copilot["timeout_s"])
 
-            # Feature flags
-            if "trade_rationale" in ai_copilot and "enabled" in ai_copilot["trade_rationale"]:
-                config.ai_copilot_trade_rationale_enabled = bool(
-                    ai_copilot["trade_rationale"]["enabled"]
+            # Budget limits (UI can override)
+            val = get_value("max_calls_per_run", converter=int)
+            if val is not None:
+                config.ai_copilot_max_calls_per_run = val
+
+            # Global budget constraints
+            if "budgets" in ai_copilot:
+                budgets = ai_copilot["budgets"]
+                if "global_max_output_tokens" in budgets:
+                    config.ai_copilot_global_max_output_tokens = int(budgets["global_max_output_tokens"])
+
+            # UI can override global token budget
+            if "budgets" in ui_copilot and "global_max_output_tokens" in ui_copilot["budgets"]:
+                config.ai_copilot_global_max_output_tokens = int(
+                    ui_copilot["budgets"]["global_max_output_tokens"]
                 )
-            if "daily_journal" in ai_copilot and "enabled" in ai_copilot["daily_journal"]:
-                config.ai_copilot_daily_journal_enabled = bool(
-                    ai_copilot["daily_journal"]["enabled"]
-                )
-            if "strategy_critique" in ai_copilot and "enabled" in ai_copilot["strategy_critique"]:
-                config.ai_copilot_strategy_critique_enabled = bool(
-                    ai_copilot["strategy_critique"]["enabled"]
-                )
+
+            # Trade rationale feature
+            if "trade_rationale" in ai_copilot:
+                feature = ai_copilot["trade_rationale"]
+                if "enabled" in feature:
+                    config.ai_copilot_trade_rationale_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_trade_rationale_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override trade rationale
+            if "trade_rationale" in ui_copilot:
+                ui_feature = ui_copilot["trade_rationale"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_trade_rationale_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_trade_rationale_max_tokens = int(ui_feature["max_output_tokens"])
+
+            # Daily journal feature
+            if "daily_journal" in ai_copilot:
+                feature = ai_copilot["daily_journal"]
+                if "enabled" in feature:
+                    config.ai_copilot_daily_journal_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_daily_journal_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override daily journal
+            if "daily_journal" in ui_copilot:
+                ui_feature = ui_copilot["daily_journal"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_daily_journal_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_daily_journal_max_tokens = int(ui_feature["max_output_tokens"])
+
+            # Strategy critique feature
+            if "strategy_critique" in ai_copilot:
+                feature = ai_copilot["strategy_critique"]
+                if "enabled" in feature:
+                    config.ai_copilot_strategy_critique_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_strategy_critique_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override strategy critique
+            if "strategy_critique" in ui_copilot:
+                ui_feature = ui_copilot["strategy_critique"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_strategy_critique_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_strategy_critique_max_tokens = int(ui_feature["max_output_tokens"])
 
     return config
