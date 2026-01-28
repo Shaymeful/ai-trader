@@ -84,6 +84,157 @@
             font-weight: 600;
         }
 
+        /* AI Co-Pilot Section */
+        .ai-copilot-section {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .copilot-stats {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .copilot-warning {
+            background: #7c2d12;
+            border-left: 3px solid #f59e0b;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            color: #fde68a;
+        }
+
+        .copilot-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .copilot-status-card {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid #334155;
+        }
+
+        .copilot-status-card .stat-label {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .copilot-status-card .stat-value {
+            color: #f1f5f9;
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .copilot-status-card .stat-sublabel {
+            color: #64748b;
+            font-size: 0.75rem;
+            margin-top: 0.25rem;
+        }
+
+        .copilot-features-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .copilot-feature-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid #334155;
+        }
+
+        .feature-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 0.5rem;
+        }
+
+        .feature-description {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-top: 0.25rem;
+        }
+
+        .feature-meta {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #334155;
+        }
+
+        .feature-stat {
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .feature-stat strong {
+            color: #f1f5f9;
+        }
+
+        .copilot-artifacts-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .artifact-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .artifact-header {
+            flex: 1;
+        }
+
+        .artifact-header strong {
+            display: block;
+            color: #f1f5f9;
+            margin-bottom: 0.25rem;
+        }
+
+        .artifact-path {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            font-family: 'Courier New', monospace;
+        }
+
+        .artifact-note {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #0f172a;
+            border-radius: 8px;
+            border-left: 3px solid #3b82f6;
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .artifact-note code {
+            background: #1e293b;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            color: #60a5fa;
+        }
+
         /* Universe Sectors Section */
         .universe-section {
             background: #1e293b;
@@ -1696,6 +1847,151 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Co-Pilot Section -->
+        <div class="ai-copilot-section">
+            <div class="section-header">
+                <h2>
+                    <span class="status-indicator" id="copilot-status-indicator"></span>
+                    AI Co-Pilot
+                </h2>
+                <div class="copilot-stats">
+                    <span class="stat-item">
+                        <span id="copilot-calls-used" class="stat-value">0</span>
+                        <span class="stat-label">/ <span id="copilot-calls-max">0</span> calls</span>
+                    </span>
+                    <span class="stat-divider">|</span>
+                    <span class="stat-item">
+                        <span id="copilot-features-active" class="stat-value">0</span>
+                        <span class="stat-label">features active</span>
+                    </span>
+                </div>
+                <label class="toggle-switch" title="Enable/Disable AI Co-Pilot">
+                    <input type="checkbox" id="copilot-master-toggle" onchange="toggleCoPilotMaster(this.checked)">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <!-- Warning Banner (trading disabled) -->
+            <div id="copilot-warning-banner" class="copilot-warning" style="display: none;">
+                <strong>⚠️ Trading is Disabled</strong> - AI Co-Pilot is forced OFF
+            </div>
+
+            <!-- Tabs -->
+            <div class="advisor-tabs">
+                <button class="advisor-tab active" onclick="switchCoPilotTab('status')">Status</button>
+                <button class="advisor-tab" onclick="switchCoPilotTab('features')">Features</button>
+                <button class="advisor-tab" onclick="switchCoPilotTab('artifacts')">Artifacts</button>
+            </div>
+
+            <!-- Status Tab -->
+            <div id="copilot-tab-status" class="advisor-tab-content active">
+                <div class="copilot-status-grid">
+                    <div class="copilot-status-card">
+                        <div class="stat-label">Master Switch</div>
+                        <div class="stat-value" id="copilot-enabled-text">Disabled</div>
+                        <div class="stat-sublabel" id="copilot-enabled-source">source: yaml</div>
+                    </div>
+                    <div class="copilot-status-card">
+                        <div class="stat-label">Budget Used</div>
+                        <div class="stat-value"><span id="copilot-budget-used">0</span> / <span id="copilot-budget-max">0</span></div>
+                        <div class="stat-sublabel">calls per run</div>
+                    </div>
+                    <div class="copilot-status-card">
+                        <div class="stat-label">Token Limit</div>
+                        <div class="stat-value" id="copilot-token-limit">0</div>
+                        <div class="stat-sublabel">global max tokens</div>
+                    </div>
+                    <div class="copilot-status-card">
+                        <div class="stat-label">Dry Run</div>
+                        <div class="stat-value" id="copilot-dry-run-text">No</div>
+                        <div class="stat-sublabel" id="copilot-dry-run-source">source: default</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Tab -->
+            <div id="copilot-tab-features" class="advisor-tab-content">
+                <div class="copilot-features-list">
+                    <!-- Trade Rationale -->
+                    <div class="copilot-feature-item">
+                        <div class="feature-header">
+                            <div>
+                                <strong>Trade Rationale</strong>
+                                <div class="feature-description">Generates AI thesis, counterarguments, and invalidation conditions for candidates</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="feature-trade-rationale" onchange="toggleCoPilotFeature('trade_rationale', this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="feature-meta">
+                            <span class="feature-stat">Token limit: <strong id="feature-trade-rationale-tokens">500</strong></span>
+                            <span class="feature-stat">Last run: <strong id="feature-trade-rationale-last">N/A</strong></span>
+                        </div>
+                    </div>
+
+                    <!-- Daily Journal -->
+                    <div class="copilot-feature-item">
+                        <div class="feature-header">
+                            <div>
+                                <strong>Daily Journal</strong>
+                                <div class="feature-description">Generates end-of-day markdown journal with summary and lessons learned</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="feature-daily-journal" onchange="toggleCoPilotFeature('daily_journal', this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="feature-meta">
+                            <span class="feature-stat">Token limit: <strong id="feature-daily-journal-tokens">1200</strong></span>
+                            <span class="feature-stat">Last run: <strong id="feature-daily-journal-last">N/A</strong></span>
+                        </div>
+                    </div>
+
+                    <!-- Strategy Critique -->
+                    <div class="copilot-feature-item">
+                        <div class="feature-header">
+                            <div>
+                                <strong>Strategy Critique</strong>
+                                <div class="feature-description">Generates end-of-day critique with what worked, what failed, and suggested tweaks</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="feature-strategy-critique" onchange="toggleCoPilotFeature('strategy_critique', this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="feature-meta">
+                            <span class="feature-stat">Token limit: <strong id="feature-strategy-critique-tokens">900</strong></span>
+                            <span class="feature-stat">Last run: <strong id="feature-strategy-critique-last">N/A</strong></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Artifacts Tab -->
+            <div id="copilot-tab-artifacts" class="advisor-tab-content">
+                <div class="copilot-artifacts-list">
+                    <div class="artifact-item">
+                        <div class="artifact-header">
+                            <strong>Latest Journal</strong>
+                            <span class="artifact-path" id="artifact-journal-path">Not generated yet</span>
+                        </div>
+                        <button class="btn-secondary" onclick="viewArtifact('journal')" id="btn-view-journal" disabled>View</button>
+                    </div>
+                    <div class="artifact-item">
+                        <div class="artifact-header">
+                            <strong>Strategy Memory</strong>
+                            <span class="artifact-path" id="artifact-critique-path">Not generated yet</span>
+                        </div>
+                        <button class="btn-secondary" onclick="viewArtifact('critique')" id="btn-view-critique" disabled>View Recent</button>
+                    </div>
+                </div>
+                <div class="artifact-note">
+                    Artifacts are generated at the end of each trading day. Journals are saved as markdown files in <code>logs/journal/</code> and critiques are appended to <code>data/strategy_memory.jsonl</code>.
                 </div>
             </div>
         </div>
@@ -3959,11 +4255,296 @@
             }
         }
 
+        // ============================================================================
+        // AI Co-Pilot Functions
+        // ============================================================================
+
+        async function loadAICoPilot() {
+            try {
+                const [statusRes, configRes] = await Promise.all([
+                    fetch('/api/ai-copilot/status'),
+                    fetch('/api/ai-copilot/config')
+                ]);
+
+                if (!statusRes.ok || !configRes.ok) {
+                    console.error('Failed to load AI Co-Pilot data');
+                    return;
+                }
+
+                const status = await statusRes.json();
+                const config = await configRes.json();
+
+                renderAICoPilotStatus(status, config);
+            } catch (error) {
+                console.error('Error loading AI Co-Pilot:', error);
+            }
+        }
+
+        function renderAICoPilotStatus(status, config) {
+            const effective = config.effective;
+            const sources = config.sources;
+            const tradingDisabled = config.trading_disabled_effective;
+
+            // Update status indicator
+            const indicator = document.getElementById('copilot-status-indicator');
+            if (tradingDisabled) {
+                indicator.className = 'status-indicator status-error';
+            } else if (effective.enabled) {
+                indicator.className = 'status-indicator status-ok';
+            } else {
+                indicator.className = 'status-indicator status-warning';
+            }
+
+            // Show/hide warning banner
+            const warningBanner = document.getElementById('copilot-warning-banner');
+            if (tradingDisabled) {
+                warningBanner.style.display = 'block';
+            } else {
+                warningBanner.style.display = 'none';
+            }
+
+            // Update stats
+            document.getElementById('copilot-calls-used').textContent = status.budgets.calls_used;
+            document.getElementById('copilot-calls-max').textContent = status.budgets.max_calls_per_run;
+
+            const featuresActive = [
+                effective.trade_rationale.enabled,
+                effective.daily_journal.enabled,
+                effective.strategy_critique.enabled
+            ].filter(Boolean).length;
+            document.getElementById('copilot-features-active').textContent = featuresActive;
+
+            // Update master toggle (disabled if trading disabled)
+            const masterToggle = document.getElementById('copilot-master-toggle');
+            masterToggle.checked = effective.enabled;
+            masterToggle.disabled = tradingDisabled;
+
+            // Status tab
+            document.getElementById('copilot-enabled-text').textContent = effective.enabled ? 'Enabled' : 'Disabled';
+            document.getElementById('copilot-enabled-source').textContent = `source: ${sources.enabled}`;
+            document.getElementById('copilot-budget-used').textContent = status.budgets.calls_used;
+            document.getElementById('copilot-budget-max').textContent = status.budgets.max_calls_per_run;
+            document.getElementById('copilot-token-limit').textContent = status.budgets.global_max_output_tokens;
+            document.getElementById('copilot-dry-run-text').textContent = effective.dry_run ? 'Yes' : 'No';
+            document.getElementById('copilot-dry-run-source').textContent = `source: ${sources.dry_run}`;
+
+            // Features tab
+            const tradeRationale = document.getElementById('feature-trade-rationale');
+            tradeRationale.checked = effective.trade_rationale.enabled;
+            tradeRationale.disabled = tradingDisabled || !effective.enabled;
+            document.getElementById('feature-trade-rationale-tokens').textContent = effective.trade_rationale.max_output_tokens;
+            document.getElementById('feature-trade-rationale-last').textContent =
+                status.features.trade_rationale.ran ? 'This run' : (status.features.trade_rationale.skipped_reason || 'Not run');
+
+            const dailyJournal = document.getElementById('feature-daily-journal');
+            dailyJournal.checked = effective.daily_journal.enabled;
+            dailyJournal.disabled = tradingDisabled || !effective.enabled;
+            document.getElementById('feature-daily-journal-tokens').textContent = effective.daily_journal.max_output_tokens;
+            document.getElementById('feature-daily-journal-last').textContent =
+                status.features.daily_journal.ran ? 'This run' : (status.features.daily_journal.skipped_reason || 'Not run');
+
+            const strategyCritique = document.getElementById('feature-strategy-critique');
+            strategyCritique.checked = effective.strategy_critique.enabled;
+            strategyCritique.disabled = tradingDisabled || !effective.enabled;
+            document.getElementById('feature-strategy-critique-tokens').textContent = effective.strategy_critique.max_output_tokens;
+            document.getElementById('feature-strategy-critique-last').textContent =
+                status.features.strategy_critique.ran ? 'This run' : (status.features.strategy_critique.skipped_reason || 'Not run');
+
+            // Artifacts tab
+            if (status.artifacts.latest_journal_path) {
+                document.getElementById('artifact-journal-path').textContent = status.artifacts.latest_journal_path;
+                document.getElementById('btn-view-journal').disabled = false;
+            } else {
+                document.getElementById('artifact-journal-path').textContent = 'Not generated yet';
+                document.getElementById('btn-view-journal').disabled = true;
+            }
+
+            if (status.artifacts.latest_critique_path) {
+                document.getElementById('artifact-critique-path').textContent = status.artifacts.latest_critique_path;
+                document.getElementById('btn-view-critique').disabled = false;
+            } else {
+                document.getElementById('artifact-critique-path').textContent = 'Not generated yet';
+                document.getElementById('btn-view-critique').disabled = true;
+            }
+        }
+
+        async function toggleCoPilotMaster(enabled) {
+            try {
+                const response = await fetch('/api/ai-copilot/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ai_copilot: {
+                            enabled: enabled
+                        }
+                    })
+                });
+
+                if (!response.ok) {
+                    const result = await response.json();
+                    showError(result.detail || 'Failed to update AI Co-Pilot');
+                    await loadAICoPilot(); // Reload to reset toggle
+                    return;
+                }
+
+                showSuccess(`AI Co-Pilot ${enabled ? 'enabled' : 'disabled'}`);
+                await loadAICoPilot(); // Reload to show updated state
+            } catch (error) {
+                console.error('Error toggling AI Co-Pilot:', error);
+                showError('Failed to update AI Co-Pilot');
+                await loadAICoPilot();
+            }
+        }
+
+        async function toggleCoPilotFeature(featureName, enabled) {
+            try {
+                const payload = {
+                    ai_copilot: {}
+                };
+                payload.ai_copilot[featureName] = {
+                    enabled: enabled
+                };
+
+                const response = await fetch('/api/ai-copilot/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const result = await response.json();
+                    showError(result.detail || `Failed to update ${featureName}`);
+                    await loadAICoPilot();
+                    return;
+                }
+
+                showSuccess(`${featureName.replace('_', ' ')} ${enabled ? 'enabled' : 'disabled'}`);
+                await loadAICoPilot();
+            } catch (error) {
+                console.error(`Error toggling ${featureName}:`, error);
+                showError(`Failed to update ${featureName}`);
+                await loadAICoPilot();
+            }
+        }
+
+        function switchCoPilotTab(tabName) {
+            // Update tab buttons
+            const tabs = document.querySelectorAll('.ai-copilot-section .advisor-tab');
+            tabs.forEach(tab => {
+                if (tab.textContent.toLowerCase().includes(tabName)) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+
+            // Update tab content
+            ['status', 'features', 'artifacts'].forEach(name => {
+                const content = document.getElementById(`copilot-tab-${name}`);
+                if (content) {
+                    if (name === tabName) {
+                        content.classList.add('active');
+                    } else {
+                        content.classList.remove('active');
+                    }
+                }
+            });
+        }
+
+        async function viewArtifact(type) {
+            if (type === 'journal') {
+                // Open journal file in new tab (will need backend route)
+                showError('Journal viewing not yet implemented');
+            } else if (type === 'critique') {
+                try {
+                    const response = await fetch('/api/ai-copilot/critique?limit=5');
+                    if (!response.ok) {
+                        showError('Failed to load recent critiques');
+                        return;
+                    }
+
+                    const critiques = await response.json();
+                    if (critiques.length === 0) {
+                        showError('No critiques available yet');
+                        return;
+                    }
+
+                    // Display critiques in modal or new view
+                    displayCritiquesModal(critiques);
+                } catch (error) {
+                    console.error('Error loading critiques:', error);
+                    showError('Failed to load critiques');
+                }
+            }
+        }
+
+        function displayCritiquesModal(critiques) {
+            // Create modal with critiques
+            const modal = document.createElement('div');
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 2rem;';
+
+            const content = document.createElement('div');
+            content.style.cssText = 'background: #1e293b; border-radius: 12px; padding: 2rem; max-width: 800px; max-height: 80vh; overflow-y: auto; border: 1px solid #334155;';
+
+            const critiquesHTML = critiques.map(c => `
+                <div style="border-bottom: 1px solid #334155; padding-bottom: 1rem; margin-bottom: 1rem;">
+                    <div style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.5rem;">${c.date}</div>
+                    <div style="color: #f1f5f9; margin-bottom: 0.5rem;">
+                        <strong>Confidence:</strong> ${(c.confidence * 100).toFixed(0)}%
+                    </div>
+                    ${c.what_worked && c.what_worked.length > 0 ? `
+                        <div style="margin-bottom: 0.5rem;">
+                            <strong style="color: #10b981;">What Worked:</strong>
+                            <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                                ${c.what_worked.map(item => `<li style="color: #94a3b8;">${item}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    ${c.what_failed && c.what_failed.length > 0 ? `
+                        <div style="margin-bottom: 0.5rem;">
+                            <strong style="color: #ef4444;">What Failed:</strong>
+                            <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                                ${c.what_failed.map(item => `<li style="color: #94a3b8;">${item}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    ${c.suggested_tweaks && c.suggested_tweaks.length > 0 ? `
+                        <div>
+                            <strong style="color: #3b82f6;">Suggested Tweaks:</strong>
+                            <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                                ${c.suggested_tweaks.map(item => `<li style="color: #94a3b8;">${item}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+
+            content.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                    <h2 style="color: #f1f5f9; margin: 0;">Recent Strategy Critiques</h2>
+                    <button onclick="this.closest('[style*=fixed]').remove()" style="background: #475569; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer;">Close</button>
+                </div>
+                ${critiquesHTML}
+            `;
+
+            modal.appendChild(content);
+            document.body.appendChild(modal);
+
+            // Close on outside click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+        }
+
         // Auto-refresh every 30 seconds
         setInterval(loadDashboard, 30000);
+        setInterval(loadAICoPilot, 30000);
 
         // Initial load
         loadDashboard();
+        loadAICoPilot();
     </script>
 </body>
 </html>
