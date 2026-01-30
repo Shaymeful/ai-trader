@@ -41,9 +41,9 @@ from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarket
 from .decision_logger import DecisionLogger, TradingDecision, create_decision_from_intent
 from .execution import AlpacaExecutor
 from .exit_advisor import ExitAdvisor
-from .ledger import CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
+from .ledger import AICopilotTickSummaryEvent, CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
 from .sell_scanner import SellScanner, SellSignal
-from .strategies import MeanReversionStrategy, TrendStrategy
+from .strategies import AICopilotWeightedStrategy, MeanReversionStrategy, TrendStrategy
 from .strategy_registry import StrategyRegistry
 
 
@@ -902,11 +902,38 @@ def run_paper_mode(
     # End Exit Advisor Integration
     # ============================================================================
 
-    # Initialize strategies
-    strategies = [
-        TrendStrategy(ma_period=20),
-        MeanReversionStrategy(zscore_threshold=1.0),
-    ]
+    # Initialize strategies dynamically from registry
+    strategies = []
+
+    if registry:
+        # Load strategies from registry (enabled strategies only)
+        for strategy_config in registry.get_enabled_strategies():
+            if strategy_config.strategy_id == "Trend_MA20":
+                strategies.append(TrendStrategy(
+                    ma_period=strategy_config.params.get("sma_slow_period", 20)
+                ))
+            elif strategy_config.strategy_id == "MeanRev_Z1.0":
+                strategies.append(MeanReversionStrategy(
+                    zscore_threshold=strategy_config.params.get("zscore_threshold", 1.0)
+                ))
+            elif strategy_config.strategy_id == "Momentum_MACD":
+                # Momentum strategy uses TrendStrategy with different MA periods
+                strategies.append(TrendStrategy(
+                    ma_period=strategy_config.params.get("sma_slow_period", 26)
+                ))
+            elif strategy_config.strategy_id == "AI_COPILOT_WEIGHTED":
+                strategies.append(AICopilotWeightedStrategy(
+                    per_sector_weights=strategy_config.params.get("per_sector_weights", {}),
+                    execution_enabled=strategy_config.params.get("execution_enabled", False),
+                    rebalance_threshold_pct=strategy_config.params.get("rebalance_threshold_pct", 0.02),
+                    allow_shorts=strategy_config.params.get("allow_shorts", False),
+                ))
+    else:
+        # Fallback to hardcoded strategies if no registry
+        strategies = [
+            TrendStrategy(ma_period=20),
+            MeanReversionStrategy(zscore_threshold=1.0),
+        ]
 
     # Run each strategy and collect intents
     strategy_intents = {}
@@ -934,6 +961,27 @@ def run_paper_mode(
 
         print()
         strategy_intents[strategy.name] = intents
+
+        # Emit AI Co-Pilot tick summary event if applicable
+        if isinstance(strategy, AICopilotWeightedStrategy):
+            # Determine active sectors (sectors with at least one active symbol in universe)
+            active_sectors = []
+            universe_set = set(universe)
+            for sector, ticker_weights in strategy.per_sector_weights.items():
+                if any(ticker in universe_set for ticker in ticker_weights.keys()):
+                    active_sectors.append(sector)
+
+            ledger.append(
+                AICopilotTickSummaryEvent(
+                    strategy_id=strategy.name,
+                    allocated_budget=0.0,  # Unknown at this stage (allocator computes later)
+                    active_sectors=active_sectors,
+                    intents_generated=len(intents),
+                    symbols_targeted=[intent.symbol for intent in intents],
+                    execution_enabled=strategy.execution_enabled,
+                    weights_applied={intent.symbol: intent.conviction for intent in intents},
+                )
+            )
 
         # Emit strategy_intent_created events
         for intent in intents:

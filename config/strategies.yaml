@@ -44,6 +44,31 @@ strategies:
       max_positions: 10        # Increased from 4
       max_daily_loss: 400
 
+  - strategy_id: "AI_COPILOT_WEIGHTED"
+    name: "AI Co-Pilot Weighted Rebalancer"
+    description: "Active trading strategy using per-sector ticker weights to allocate capital"
+    enabled: false  # Default disabled (must explicitly enable via UI or overrides)
+    weight: 0.10    # 10% of equity when enabled (adjust as needed)
+    params:
+      execution_enabled: false  # CRITICAL GUARDRAIL: Must explicitly enable to trade
+      rebalance_threshold_pct: 0.02  # Reserved for phase 2 (smart rebalancing)
+      allow_shorts: false            # Reserved for phase 2 (short positions)
+      per_sector_weights:
+        mega_cap_tech:
+          NVDA: 0.25   # 25% of strategy allocation
+          MSFT: 0.15   # 15% of strategy allocation
+          AAPL: 0.10   # 10% of strategy allocation
+        us_sector_etfs:
+          XLF: 0.20    # 20% of strategy allocation
+          XLV: 0.15    # 15% of strategy allocation
+          XLE: 0.15    # 15% of strategy allocation
+        # NOTE: Weights within per_sector_weights don't need to sum to 1.0
+        # Strategy will normalize automatically across all active symbols
+    risk_limits:
+      max_position_size: 10000  # Max $10k per symbol
+      max_positions: 10         # Max 10 concurrent positions
+      max_daily_loss: 500       # Max $500 daily loss
+
 # Global settings applied to all strategies
 global:
   # These are account-wide limits (enforced separately from per-strategy limits)

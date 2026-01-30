@@ -415,6 +415,40 @@ class WarningEquityUnavailableEvent(LedgerEvent):
         self.fallback_mode = fallback_mode
 
 
+@dataclass
+class AICopilotTickSummaryEvent(LedgerEvent):
+    """Event: AI Co-Pilot weighted strategy tick summary for dashboard visibility."""
+
+    strategy_id: str  # "AI_COPILOT_WEIGHTED"
+    allocated_budget: float  # Strategy budget from allocator (0.0 if unknown)
+    active_sectors: list[str]  # Sectors with at least one active symbol
+    intents_generated: int  # Number of intents created
+    symbols_targeted: list[str]  # Symbols with position intents
+    execution_enabled: bool  # Guardrail status
+    weights_applied: dict[str, float]  # {symbol: conviction/weight}
+
+    def __init__(
+        self,
+        strategy_id: str,
+        allocated_budget: float,
+        active_sectors: list[str],
+        intents_generated: int,
+        symbols_targeted: list[str],
+        execution_enabled: bool,
+        weights_applied: dict[str, float],
+    ):
+        self.event_id = str(uuid.uuid4())
+        self.timestamp = datetime.now(UTC).isoformat()
+        self.event_type = "ai_copilot_tick_summary"
+        self.strategy_id = strategy_id
+        self.allocated_budget = allocated_budget
+        self.active_sectors = active_sectors
+        self.intents_generated = intents_generated
+        self.symbols_targeted = symbols_targeted
+        self.execution_enabled = execution_enabled
+        self.weights_applied = weights_applied
+
+
 class Ledger:
     """
     Append-only JSONL ledger for tracking strategy events.

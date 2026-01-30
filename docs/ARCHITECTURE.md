@@ -276,6 +276,276 @@ Allocation engine emits detailed events for audit trail:
 
 ---
 
+## Trading Strategies
+
+### Overview
+
+The system supports multiple trading strategies that run concurrently on a single Alpaca account. Each strategy generates position intents (desired target positions) that are allocated capital based on configured weights, then netted and executed through a unified pipeline.
+
+**Strategy Base Class**: `src/app/strategies/base.py`
+
+```python
+@dataclass
+class PositionIntent:
+    symbol: str
+    target_quantity: int          # Absolute target position size
+    conviction: float             # Signal strength (0.0 to 1.0)
+    reason: str                   # Human-readable reasoning
+    candidate_id: str | None      # Candidate attribution (optional)
+
+class Strategy(ABC):
+    @abstractmethod
+    def generate_intents(
+        self,
+        universe: list[str],
+        market_data: dict,
+        candidate_map: dict[str, str] | None = None,
+    ) -> list[PositionIntent]:
+        """Generate position intents for given universe."""
+        pass
+```
+
+**Key Architectural Principles:**
+- **Intent-based**: Strategies return target positions, not direct orders
+- **Budget-agnostic**: Strategies don't receive allocated budget (allocator scales by conviction)
+- **Position-agnostic**: Strategies don't receive current positions (executor handles reconciliation)
+- **Conviction scaling**: Allocator computes `target_notional = strategy_budget × conviction`
+- **Deterministic netting**: Multi-strategy intents for same symbol are summed by notional value
+
+### Available Strategies
+
+#### 1. Trend Following Strategy (Trend_MA20)
+
+**File**: `src/app/strategies/trend.py`
+
+**Logic**:
+- If price > moving average → long position (conviction = price distance from MA)
+- If price ≤ moving average → flat (0 shares)
+
+**Parameters**:
+- `ma_period`: Moving average period (default: 20)
+
+**Config Example**:
+```yaml
+- strategy_id: "Trend_MA20"
+  enabled: true
+  weight: 0.4  # 40% of equity
+  params:
+    sma_slow_period: 20
+```
+
+#### 2. Mean Reversion Strategy (MeanRev_Z1.0)
+
+**File**: `src/app/strategies/mean_reversion.py`
+
+**Logic**:
+- Price deviations from mean trigger mean reversion signals
+- Uses Z-score threshold for signal generation
+
+**Parameters**:
+- `zscore_threshold`: Threshold for triggering signals (default: 1.0)
+
+**Config Example**:
+```yaml
+- strategy_id: "MeanRev_Z1.0"
+  enabled: true
+  weight: 0.3  # 30% of equity
+  params:
+    zscore_threshold: 1.0
+```
+
+#### 3. AI Co-Pilot Weighted Strategy (AI_COPILOT_WEIGHTED)
+
+**File**: `src/app/strategies/ai_copilot_weighted.py`
+
+**Purpose**: Config-driven weighted portfolio allocation across sectors and tickers, designed for human-guided capital allocation with AI assistance.
+
+**Design Rationale**:
+- **Conviction as Weight Encoding**: Since strategies don't receive allocated budget, weights are encoded in the `conviction` field (0.0-1.0). The allocator then computes: `target_notional = strategy_budget × conviction`
+- **Automatic Normalization**: Configured weights don't need to sum to 1.0 - strategy normalizes automatically across active symbols
+- **Active Universe Filtering**: Only symbols in active sectors (from UniverseRegistry) generate intents
+- **Execution Guardrail**: `execution_enabled=false` prevents trading even if strategy is enabled and weighted
+
+**Parameters**:
+- `per_sector_weights`: Nested dict of sector → {ticker: weight}
+- `execution_enabled`: Safety guardrail (must be `true` to trade)
+- `rebalance_threshold_pct`: Reserved for phase 2 (smart rebalancing)
+- `allow_shorts`: Reserved for phase 2 (short positions)
+
+**Config Example**:
+```yaml
+- strategy_id: "AI_COPILOT_WEIGHTED"
+  name: "AI Co-Pilot Weighted Rebalancer"
+  enabled: false  # Must explicitly enable
+  weight: 0.10    # 10% of equity
+  params:
+    execution_enabled: false  # CRITICAL GUARDRAIL
+    per_sector_weights:
+      mega_cap_tech:
+        NVDA: 0.25   # 25% of strategy allocation
+        MSFT: 0.15   # 15% of strategy allocation
+        AAPL: 0.10   # 10% of strategy allocation
+      us_sector_etfs:
+        XLF: 0.20    # 20% of strategy allocation
+        XLE: 0.15    # 15% of strategy allocation
+        XLV: 0.15    # 15% of strategy allocation
+  risk_limits:
+    max_position_size: 10000  # Max $10k per symbol
+    max_positions: 10
+    max_daily_loss: 500
+```
+
+**How It Works**:
+
+1. **Filter to Active Universe**:
+   ```python
+   # Only symbols in active sectors generate intents
+   active_symbols = set(universe)  # From UniverseRegistry
+   filtered_weights = {
+       ticker: weight
+       for sector, ticker_weights in per_sector_weights.items()
+       for ticker, weight in ticker_weights.items()
+       if ticker in active_symbols
+   }
+   ```
+
+2. **Normalize Weights**:
+   ```python
+   # Ensure full budget utilization
+   total_weight = sum(filtered_weights.values())
+   normalized = {
+       ticker: weight / total_weight
+       for ticker, weight in filtered_weights.items()
+   }
+   # Example: {NVDA: 0.25, MSFT: 0.15, ...} (sums to 1.0)
+   ```
+
+3. **Generate Intents**:
+   ```python
+   for symbol, weight in normalized.items():
+       intents.append(PositionIntent(
+           symbol=symbol,
+           target_quantity=1,      # Fixed (allocator scales)
+           conviction=weight,      # Encoded weight (0.25 = 25%)
+           reason=f"AI Co-Pilot: {weight*100:.1f}% allocation",
+       ))
+   ```
+
+4. **Allocator Scales by Conviction**:
+   ```python
+   # If strategy gets $10,000 budget and NVDA has conviction=0.25:
+   target_notional = 10000 × 0.25 = $2,500
+   target_qty = 2500 / nvda_price
+   ```
+
+**Runtime Override Example** (`out/strategies_overrides.json`):
+```json
+{
+  "AI_COPILOT_WEIGHTED": {
+    "enabled": true,
+    "params": {
+      "execution_enabled": true,
+      "per_sector_weights": {
+        "mega_cap_tech": {
+          "NVDA": 0.30,
+          "MSFT": 0.20
+        }
+      }
+    }
+  }
+}
+```
+
+**Ledger Event**: `AICopilotTickSummaryEvent`
+
+Emitted after strategy generates intents to provide dashboard visibility:
+
+```python
+@dataclass
+class AICopilotTickSummaryEvent(LedgerEvent):
+    strategy_id: str                    # "AI_COPILOT_WEIGHTED"
+    allocated_budget: float             # Strategy budget (0.0 if unknown)
+    active_sectors: list[str]           # Sectors with active symbols
+    intents_generated: int              # Number of intents created
+    symbols_targeted: list[str]         # Symbols with position intents
+    execution_enabled: bool             # Guardrail status
+    weights_applied: dict[str, float]   # {symbol: conviction/weight}
+```
+
+**Example Event**:
+```json
+{
+  "event_type": "ai_copilot_tick_summary",
+  "strategy_id": "AI_COPILOT_WEIGHTED",
+  "allocated_budget": 10000.0,
+  "active_sectors": ["mega_cap_tech", "us_sector_etfs"],
+  "intents_generated": 6,
+  "symbols_targeted": ["NVDA", "MSFT", "AAPL", "XLF", "XLE", "XLV"],
+  "execution_enabled": true,
+  "weights_applied": {
+    "NVDA": 0.25,
+    "MSFT": 0.15,
+    "AAPL": 0.10,
+    "XLF": 0.20,
+    "XLE": 0.15,
+    "XLV": 0.15
+  }
+}
+```
+
+**Safety Features**:
+- **Dual Guardrails**: Both `enabled=true` AND `execution_enabled=true` required to trade
+- **Weight Validation**: Automatic normalization prevents allocation errors
+- **Universe Filtering**: Respects sector enables from UniverseRegistry
+- **Risk Limits**: Per-strategy max_position_size, max_positions, max_daily_loss
+
+**Phase 2 Enhancements** (Future):
+- Smart rebalancing (rebalance_threshold_pct): Only adjust positions exceeding threshold
+- Short positions (allow_shorts): Support negative target_quantity
+- Dynamic weight optimization: LLM-driven weight adjustments based on market conditions
+
+**Tests**: `tests/test_ai_copilot_weighted.py`
+- 17 unit tests covering:
+  - Execution guardrail enforcement
+  - Weight normalization (sum to 1.0)
+  - Active universe filtering
+  - Missing price data handling
+  - Conviction encoding validation
+  - Multi-sector normalization
+  - Edge cases (empty weights, zero prices, negative weights)
+
+### Strategy Loading
+
+**File**: `src/app/runner.py` (lines 906-936)
+
+Strategies are dynamically loaded from StrategyRegistry:
+
+```python
+strategies = []
+
+if registry:
+    for strategy_config in registry.get_enabled_strategies():
+        if strategy_config.strategy_id == "Trend_MA20":
+            strategies.append(TrendStrategy(
+                ma_period=strategy_config.params.get("sma_slow_period", 20)
+            ))
+        elif strategy_config.strategy_id == "AI_COPILOT_WEIGHTED":
+            strategies.append(AICopilotWeightedStrategy(
+                per_sector_weights=strategy_config.params.get("per_sector_weights", {}),
+                execution_enabled=strategy_config.params.get("execution_enabled", False),
+                rebalance_threshold_pct=strategy_config.params.get("rebalance_threshold_pct", 0.02),
+                allow_shorts=strategy_config.params.get("allow_shorts", False),
+            ))
+        # ... other strategies
+else:
+    # Fallback to hardcoded strategies
+    strategies = [TrendStrategy(ma_period=20)]
+```
+
+**Next-Tick Activation**: Configuration changes via overrides activate at the start of the next loop iteration (safe, no mid-loop changes).
+
+---
+
 ## Startup Reconciliation
 
 ### Purpose
