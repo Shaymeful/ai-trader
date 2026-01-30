@@ -103,7 +103,7 @@ llm:
 ai_copilot:
   # Master switch (can be overridden by AI_COPILOT_ENABLED env var: 0=off, 1=on)
   # CRITICAL: If trading is disabled, AI Co-Pilot is forced OFF regardless of this setting
-  enabled: false
+  enabled: true
 
   # CRITICAL: Controls whether AI output can influence decisions (default: false)
   # When false, AI outputs are purely advisory metadata
