@@ -1,6 +1,8 @@
 """Configuration loader for the trading bot."""
 
+import json
 import os
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -165,6 +167,62 @@ class Config(BaseModel):
         default=7, description="Cooldown days for ticker changes"
     )
     llm_ticker_blacklist: list[str] = Field(default_factory=list, description="Blacklisted tickers")
+
+    # AI Co-Pilot Configuration (Advisory Layer)
+    # SAFETY: Default OFF, never blocks loop, advisory-only outputs
+    ai_copilot_enabled: bool = Field(
+        default=False, description="Enable AI Co-Pilot advisory layer"
+    )
+    ai_copilot_influence_decisions: bool = Field(
+        default=False,
+        description="Allow AI Co-Pilot to influence trading decisions (CRITICAL SAFETY FLAG)",
+    )
+    ai_copilot_model: str = Field(
+        default="gpt-4o-mini", description="LLM model for AI Co-Pilot"
+    )
+    ai_copilot_max_calls_per_run: int = Field(
+        default=4, description="Maximum LLM calls per run (budget gate)"
+    )
+    ai_copilot_timeout_s: int = Field(
+        default=20, description="Request timeout in seconds"
+    )
+    ai_copilot_dry_run: bool = Field(
+        default=False, description="Dry-run mode (no file writes)"
+    )
+
+    # Global budget constraints
+    ai_copilot_global_max_output_tokens: int = Field(
+        default=1200, description="Global token cap across all features"
+    )
+
+    # Feature-specific settings
+    ai_copilot_trade_rationale_enabled: bool = Field(
+        default=True, description="Enable trade rationale advisor"
+    )
+    ai_copilot_trade_rationale_max_tokens: int = Field(
+        default=500, description="Max output tokens for trade rationale"
+    )
+
+    ai_copilot_daily_journal_enabled: bool = Field(
+        default=True, description="Enable daily journal generation"
+    )
+    ai_copilot_daily_journal_max_tokens: int = Field(
+        default=1200, description="Max output tokens for daily journal"
+    )
+
+    ai_copilot_strategy_critique_enabled: bool = Field(
+        default=True, description="Enable strategy self-critique"
+    )
+    ai_copilot_strategy_critique_max_tokens: int = Field(
+        default=900, description="Max output tokens for strategy critique"
+    )
+
+    ai_copilot_universe_ticker_manager_enabled: bool = Field(
+        default=False, description="Enable universe ticker manager (dynamic add/remove recommendations)"
+    )
+    ai_copilot_universe_ticker_manager_max_tokens: int = Field(
+        default=800, description="Max output tokens for universe ticker manager"
+    )
 
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
@@ -510,4 +568,259 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
             if "ticker_blacklist" in llm:
                 config.llm_ticker_blacklist = list(llm["ticker_blacklist"])
 
+        # Apply AI Co-Pilot parameters from YAML
+        # PRECEDENCE: trading_disabled > env > UI overrides > YAML > defaults
+        if "ai_copilot" in yaml_config:
+            from src.app.llm_advisors.utils import is_trading_disabled, load_ui_runtime_overrides
+
+            ai_copilot = yaml_config["ai_copilot"]
+
+            # Check trading disabled status (global safety override)
+            trading_disabled = is_trading_disabled()
+
+            # Load UI runtime overrides
+            ui_overrides = load_ui_runtime_overrides()
+            ui_copilot = ui_overrides.get("ai_copilot", {})
+
+            # Helper to apply precedence: env > ui > yaml
+            def get_value(key, env_var=None, converter=None):
+                # Check environment variable first
+                if env_var:
+                    env_val = os.getenv(env_var)
+                    if env_val is not None:
+                        return converter(env_val) if converter else env_val
+
+                # Check UI override
+                if key in ui_copilot:
+                    val = ui_copilot[key]
+                    return converter(val) if converter else val
+
+                # Check YAML
+                if key in ai_copilot:
+                    val = ai_copilot[key]
+                    return converter(val) if converter else val
+
+                return None
+
+            # Master enabled switch
+            # CRITICAL: If trading disabled, force OFF regardless of other settings
+            if trading_disabled:
+                config.ai_copilot_enabled = False
+            else:
+                env_enabled = os.getenv("AI_COPILOT_ENABLED")
+                if env_enabled is not None:
+                    config.ai_copilot_enabled = env_enabled == "1"
+                elif "enabled" in ui_copilot:
+                    config.ai_copilot_enabled = bool(ui_copilot["enabled"])
+                elif "enabled" in ai_copilot:
+                    config.ai_copilot_enabled = bool(ai_copilot["enabled"])
+
+            # Dry-run mode (env or UI can enable)
+            env_dry_run = os.getenv("AI_COPILOT_DRY_RUN")
+            if env_dry_run == "1":
+                config.ai_copilot_dry_run = True
+            elif "dry_run" in ui_copilot:
+                config.ai_copilot_dry_run = bool(ui_copilot["dry_run"])
+
+            # Immutable settings (cannot be overridden by UI)
+            if "influence_decisions" in ai_copilot:
+                config.ai_copilot_influence_decisions = bool(ai_copilot["influence_decisions"])
+            if "model" in ai_copilot:
+                config.ai_copilot_model = ai_copilot["model"]
+            if "timeout_s" in ai_copilot:
+                config.ai_copilot_timeout_s = int(ai_copilot["timeout_s"])
+
+            # Budget limits (UI can override)
+            val = get_value("max_calls_per_run", converter=int)
+            if val is not None:
+                config.ai_copilot_max_calls_per_run = val
+
+            # Global budget constraints
+            if "budgets" in ai_copilot:
+                budgets = ai_copilot["budgets"]
+                if "global_max_output_tokens" in budgets:
+                    config.ai_copilot_global_max_output_tokens = int(budgets["global_max_output_tokens"])
+
+            # UI can override global token budget
+            if "budgets" in ui_copilot and "global_max_output_tokens" in ui_copilot["budgets"]:
+                config.ai_copilot_global_max_output_tokens = int(
+                    ui_copilot["budgets"]["global_max_output_tokens"]
+                )
+
+            # Trade rationale feature
+            if "trade_rationale" in ai_copilot:
+                feature = ai_copilot["trade_rationale"]
+                if "enabled" in feature:
+                    config.ai_copilot_trade_rationale_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_trade_rationale_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override trade rationale
+            if "trade_rationale" in ui_copilot:
+                ui_feature = ui_copilot["trade_rationale"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_trade_rationale_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_trade_rationale_max_tokens = int(ui_feature["max_output_tokens"])
+
+            # Daily journal feature
+            if "daily_journal" in ai_copilot:
+                feature = ai_copilot["daily_journal"]
+                if "enabled" in feature:
+                    config.ai_copilot_daily_journal_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_daily_journal_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override daily journal
+            if "daily_journal" in ui_copilot:
+                ui_feature = ui_copilot["daily_journal"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_daily_journal_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_daily_journal_max_tokens = int(ui_feature["max_output_tokens"])
+
+            # Strategy critique feature
+            if "strategy_critique" in ai_copilot:
+                feature = ai_copilot["strategy_critique"]
+                if "enabled" in feature:
+                    config.ai_copilot_strategy_critique_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_strategy_critique_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override strategy critique
+            if "strategy_critique" in ui_copilot:
+                ui_feature = ui_copilot["strategy_critique"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_strategy_critique_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_strategy_critique_max_tokens = int(ui_feature["max_output_tokens"])
+
+            # Universe ticker manager feature
+            if "universe_ticker_manager" in ai_copilot:
+                feature = ai_copilot["universe_ticker_manager"]
+                if "enabled" in feature:
+                    config.ai_copilot_universe_ticker_manager_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_universe_ticker_manager_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override universe ticker manager
+            if "universe_ticker_manager" in ui_copilot:
+                ui_feature = ui_copilot["universe_ticker_manager"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_universe_ticker_manager_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_universe_ticker_manager_max_tokens = int(ui_feature["max_output_tokens"])
+
     return config
+
+
+def load_mode_profiles(modes_path: Path | None = None) -> dict[str, Any]:
+    """
+    Load mode profiles from modes.yaml.
+
+    Args:
+        modes_path: Path to modes config file (defaults to config/modes.yaml)
+
+    Returns:
+        Dictionary with profiles and active_profile
+    """
+    if modes_path is None:
+        repo_root = Path(__file__).resolve().parents[2]
+        modes_path = repo_root / "config" / "modes.yaml"
+
+    if not modes_path.exists():
+        # Return default if file doesn't exist
+        return {
+            "profiles": {
+                "normal": {
+                    "description": "Default mode",
+                    "strategies": {},
+                    "universe": {"sectors": {}},
+                    "selector": {},
+                    "ai_copilot": {},
+                }
+            },
+            "active_profile": "normal",
+        }
+
+    with open(modes_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def get_active_mode_profile(modes_config: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """
+    Get the active mode profile from configuration.
+
+    Checks for runtime override in data/mode_override.json first,
+    then falls back to modes.yaml active_profile.
+
+    Args:
+        modes_config: Optional pre-loaded modes config (loads if None)
+
+    Returns:
+        Tuple of (profile_name, profile_dict)
+    """
+    if modes_config is None:
+        modes_config = load_mode_profiles()
+
+    # Check for runtime override
+    override_path = Path("data/mode_override.json")
+    if override_path.exists():
+        try:
+            with open(override_path) as f:
+                override_data = json.load(f)
+                profile_name = override_data.get("active_profile")
+                if profile_name and profile_name in modes_config.get("profiles", {}):
+                    return profile_name, modes_config["profiles"][profile_name]
+        except Exception:
+            pass  # Fall through to default
+
+    # Use active_profile from modes.yaml
+    active_profile_name = modes_config.get("active_profile", "normal")
+    profiles = modes_config.get("profiles", {})
+
+    if active_profile_name in profiles:
+        return active_profile_name, profiles[active_profile_name]
+
+    # Fallback to first profile or empty
+    if profiles:
+        first_name = next(iter(profiles))
+        return first_name, profiles[first_name]
+
+    return "normal", {}
+
+
+def save_mode_override(profile_name: str) -> bool:
+    """
+    Save mode profile override to data/mode_override.json.
+
+    Args:
+        profile_name: Name of profile to activate
+
+    Returns:
+        True if successful, False otherwise
+    """
+    override_path = Path("data/mode_override.json")
+
+    try:
+        override_path.parent.mkdir(parents=True, exist_ok=True)
+
+        data = {
+            "active_profile": profile_name,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+
+        # Atomic write
+        temp_path = override_path.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        temp_path.replace(override_path)
+        return True
+
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger("ai-trader")
+        logger.error(f"Failed to save mode override: {e}")
+        return False

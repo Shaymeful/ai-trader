@@ -276,6 +276,276 @@ Allocation engine emits detailed events for audit trail:
 
 ---
 
+## Trading Strategies
+
+### Overview
+
+The system supports multiple trading strategies that run concurrently on a single Alpaca account. Each strategy generates position intents (desired target positions) that are allocated capital based on configured weights, then netted and executed through a unified pipeline.
+
+**Strategy Base Class**: `src/app/strategies/base.py`
+
+```python
+@dataclass
+class PositionIntent:
+    symbol: str
+    target_quantity: int          # Absolute target position size
+    conviction: float             # Signal strength (0.0 to 1.0)
+    reason: str                   # Human-readable reasoning
+    candidate_id: str | None      # Candidate attribution (optional)
+
+class Strategy(ABC):
+    @abstractmethod
+    def generate_intents(
+        self,
+        universe: list[str],
+        market_data: dict,
+        candidate_map: dict[str, str] | None = None,
+    ) -> list[PositionIntent]:
+        """Generate position intents for given universe."""
+        pass
+```
+
+**Key Architectural Principles:**
+- **Intent-based**: Strategies return target positions, not direct orders
+- **Budget-agnostic**: Strategies don't receive allocated budget (allocator scales by conviction)
+- **Position-agnostic**: Strategies don't receive current positions (executor handles reconciliation)
+- **Conviction scaling**: Allocator computes `target_notional = strategy_budget × conviction`
+- **Deterministic netting**: Multi-strategy intents for same symbol are summed by notional value
+
+### Available Strategies
+
+#### 1. Trend Following Strategy (Trend_MA20)
+
+**File**: `src/app/strategies/trend.py`
+
+**Logic**:
+- If price > moving average → long position (conviction = price distance from MA)
+- If price ≤ moving average → flat (0 shares)
+
+**Parameters**:
+- `ma_period`: Moving average period (default: 20)
+
+**Config Example**:
+```yaml
+- strategy_id: "Trend_MA20"
+  enabled: true
+  weight: 0.4  # 40% of equity
+  params:
+    sma_slow_period: 20
+```
+
+#### 2. Mean Reversion Strategy (MeanRev_Z1.0)
+
+**File**: `src/app/strategies/mean_reversion.py`
+
+**Logic**:
+- Price deviations from mean trigger mean reversion signals
+- Uses Z-score threshold for signal generation
+
+**Parameters**:
+- `zscore_threshold`: Threshold for triggering signals (default: 1.0)
+
+**Config Example**:
+```yaml
+- strategy_id: "MeanRev_Z1.0"
+  enabled: true
+  weight: 0.3  # 30% of equity
+  params:
+    zscore_threshold: 1.0
+```
+
+#### 3. AI Co-Pilot Weighted Strategy (AI_COPILOT_WEIGHTED)
+
+**File**: `src/app/strategies/ai_copilot_weighted.py`
+
+**Purpose**: Config-driven weighted portfolio allocation across sectors and tickers, designed for human-guided capital allocation with AI assistance.
+
+**Design Rationale**:
+- **Conviction as Weight Encoding**: Since strategies don't receive allocated budget, weights are encoded in the `conviction` field (0.0-1.0). The allocator then computes: `target_notional = strategy_budget × conviction`
+- **Automatic Normalization**: Configured weights don't need to sum to 1.0 - strategy normalizes automatically across active symbols
+- **Active Universe Filtering**: Only symbols in active sectors (from UniverseRegistry) generate intents
+- **Execution Guardrail**: `execution_enabled=false` prevents trading even if strategy is enabled and weighted
+
+**Parameters**:
+- `per_sector_weights`: Nested dict of sector → {ticker: weight}
+- `execution_enabled`: Safety guardrail (must be `true` to trade)
+- `rebalance_threshold_pct`: Reserved for phase 2 (smart rebalancing)
+- `allow_shorts`: Reserved for phase 2 (short positions)
+
+**Config Example**:
+```yaml
+- strategy_id: "AI_COPILOT_WEIGHTED"
+  name: "AI Co-Pilot Weighted Rebalancer"
+  enabled: false  # Must explicitly enable
+  weight: 0.10    # 10% of equity
+  params:
+    execution_enabled: false  # CRITICAL GUARDRAIL
+    per_sector_weights:
+      mega_cap_tech:
+        NVDA: 0.25   # 25% of strategy allocation
+        MSFT: 0.15   # 15% of strategy allocation
+        AAPL: 0.10   # 10% of strategy allocation
+      us_sector_etfs:
+        XLF: 0.20    # 20% of strategy allocation
+        XLE: 0.15    # 15% of strategy allocation
+        XLV: 0.15    # 15% of strategy allocation
+  risk_limits:
+    max_position_size: 10000  # Max $10k per symbol
+    max_positions: 10
+    max_daily_loss: 500
+```
+
+**How It Works**:
+
+1. **Filter to Active Universe**:
+   ```python
+   # Only symbols in active sectors generate intents
+   active_symbols = set(universe)  # From UniverseRegistry
+   filtered_weights = {
+       ticker: weight
+       for sector, ticker_weights in per_sector_weights.items()
+       for ticker, weight in ticker_weights.items()
+       if ticker in active_symbols
+   }
+   ```
+
+2. **Normalize Weights**:
+   ```python
+   # Ensure full budget utilization
+   total_weight = sum(filtered_weights.values())
+   normalized = {
+       ticker: weight / total_weight
+       for ticker, weight in filtered_weights.items()
+   }
+   # Example: {NVDA: 0.25, MSFT: 0.15, ...} (sums to 1.0)
+   ```
+
+3. **Generate Intents**:
+   ```python
+   for symbol, weight in normalized.items():
+       intents.append(PositionIntent(
+           symbol=symbol,
+           target_quantity=1,      # Fixed (allocator scales)
+           conviction=weight,      # Encoded weight (0.25 = 25%)
+           reason=f"AI Co-Pilot: {weight*100:.1f}% allocation",
+       ))
+   ```
+
+4. **Allocator Scales by Conviction**:
+   ```python
+   # If strategy gets $10,000 budget and NVDA has conviction=0.25:
+   target_notional = 10000 × 0.25 = $2,500
+   target_qty = 2500 / nvda_price
+   ```
+
+**Runtime Override Example** (`out/strategies_overrides.json`):
+```json
+{
+  "AI_COPILOT_WEIGHTED": {
+    "enabled": true,
+    "params": {
+      "execution_enabled": true,
+      "per_sector_weights": {
+        "mega_cap_tech": {
+          "NVDA": 0.30,
+          "MSFT": 0.20
+        }
+      }
+    }
+  }
+}
+```
+
+**Ledger Event**: `AICopilotTickSummaryEvent`
+
+Emitted after strategy generates intents to provide dashboard visibility:
+
+```python
+@dataclass
+class AICopilotTickSummaryEvent(LedgerEvent):
+    strategy_id: str                    # "AI_COPILOT_WEIGHTED"
+    allocated_budget: float             # Strategy budget (0.0 if unknown)
+    active_sectors: list[str]           # Sectors with active symbols
+    intents_generated: int              # Number of intents created
+    symbols_targeted: list[str]         # Symbols with position intents
+    execution_enabled: bool             # Guardrail status
+    weights_applied: dict[str, float]   # {symbol: conviction/weight}
+```
+
+**Example Event**:
+```json
+{
+  "event_type": "ai_copilot_tick_summary",
+  "strategy_id": "AI_COPILOT_WEIGHTED",
+  "allocated_budget": 10000.0,
+  "active_sectors": ["mega_cap_tech", "us_sector_etfs"],
+  "intents_generated": 6,
+  "symbols_targeted": ["NVDA", "MSFT", "AAPL", "XLF", "XLE", "XLV"],
+  "execution_enabled": true,
+  "weights_applied": {
+    "NVDA": 0.25,
+    "MSFT": 0.15,
+    "AAPL": 0.10,
+    "XLF": 0.20,
+    "XLE": 0.15,
+    "XLV": 0.15
+  }
+}
+```
+
+**Safety Features**:
+- **Dual Guardrails**: Both `enabled=true` AND `execution_enabled=true` required to trade
+- **Weight Validation**: Automatic normalization prevents allocation errors
+- **Universe Filtering**: Respects sector enables from UniverseRegistry
+- **Risk Limits**: Per-strategy max_position_size, max_positions, max_daily_loss
+
+**Phase 2 Enhancements** (Future):
+- Smart rebalancing (rebalance_threshold_pct): Only adjust positions exceeding threshold
+- Short positions (allow_shorts): Support negative target_quantity
+- Dynamic weight optimization: LLM-driven weight adjustments based on market conditions
+
+**Tests**: `tests/test_ai_copilot_weighted.py`
+- 17 unit tests covering:
+  - Execution guardrail enforcement
+  - Weight normalization (sum to 1.0)
+  - Active universe filtering
+  - Missing price data handling
+  - Conviction encoding validation
+  - Multi-sector normalization
+  - Edge cases (empty weights, zero prices, negative weights)
+
+### Strategy Loading
+
+**File**: `src/app/runner.py` (lines 906-936)
+
+Strategies are dynamically loaded from StrategyRegistry:
+
+```python
+strategies = []
+
+if registry:
+    for strategy_config in registry.get_enabled_strategies():
+        if strategy_config.strategy_id == "Trend_MA20":
+            strategies.append(TrendStrategy(
+                ma_period=strategy_config.params.get("sma_slow_period", 20)
+            ))
+        elif strategy_config.strategy_id == "AI_COPILOT_WEIGHTED":
+            strategies.append(AICopilotWeightedStrategy(
+                per_sector_weights=strategy_config.params.get("per_sector_weights", {}),
+                execution_enabled=strategy_config.params.get("execution_enabled", False),
+                rebalance_threshold_pct=strategy_config.params.get("rebalance_threshold_pct", 0.02),
+                allow_shorts=strategy_config.params.get("allow_shorts", False),
+            ))
+        # ... other strategies
+else:
+    # Fallback to hardcoded strategies
+    strategies = [TrendStrategy(ma_period=20)]
+```
+
+**Next-Tick Activation**: Configuration changes via overrides activate at the start of the next loop iteration (safe, no mid-loop changes).
+
+---
+
 ## Startup Reconciliation
 
 ### Purpose
@@ -6268,3 +6538,660 @@ Located between Account Summary and Performance sections.
 - Alpaca free tier uses IEX feed
 - Minute bars require regular-session windowing
 - Historical minute data must end at market close
+
+---
+
+## Trading Mode Profiles
+
+### Overview
+
+Mode profiles provide coordinated configuration presets for different trading styles. Instead of manually adjusting strategies, universe sectors, selector thresholds, and AI features separately, users can switch between pre-defined profiles that coordinate all these settings.
+
+### Available Profiles
+
+#### 1. Normal (Default)
+- **Description**: Balanced trading with standard risk controls and full AI features
+- **Strategy**: AI_COPILOT_WEIGHTED disabled by default (weight: 0.10)
+- **Universe**: All sectors enabled (core_index, mega_cap_tech, us_sector_etfs)
+- **Selector**: Conservative thresholds (min_confidence: 0.65, max_count: 40, TTL: 180min)
+- **AI Co-Pilot**: All features enabled (trade_rationale, daily_journal, strategy_critique)
+- **Use Case**: Standard intraday/swing trading with full AI insights
+
+#### 2. Aggressive Tech+Energy Daytrade
+- **Description**: Aggressive tech+energy daytrade with dynamic ticker management
+- **Strategy**: AI_COPILOT_WEIGHTED enabled (weight: 0.35, execution_enabled: true)
+- **Universe**: Focused sectors (mega_cap_tech: ON, us_sector_etfs: ON, core_index: OFF)
+- **Selector**: Aggressive thresholds (min_confidence: 0.52, max_count: 80, TTL: 90min)
+- **AI Co-Pilot**:
+  - trade_rationale: ON (justify trades)
+  - daily_journal: OFF (save tokens)
+  - strategy_critique: OFF (save tokens)
+  - universe_ticker_manager: ON (dynamic ticker recommendations)
+- **Use Case**: High-frequency tech/energy trading with AI-driven ticker rotation
+
+### Architecture
+
+#### Configuration Files
+
+1. **config/modes.yaml**
+   - Defines available profiles
+   - Specifies coordinated settings for each profile
+   - Sets active_profile (can be overridden at runtime)
+
+2. **data/mode_override.json** (Runtime)
+   - Stores current active profile
+   - Created/updated via POST /api/mode endpoint
+   - Takes precedence over modes.yaml active_profile
+
+3. **data/selector_overrides.json** (Runtime)
+   - Stores selector-specific overrides for active profile
+   - Loaded by selector process each run
+   - Merged with config/selector.yaml defaults
+
+#### Mode Switching Flow
+
+```
+User clicks "Aggressive" in dashboard UI
+    ↓
+POST /api/mode {profile: "aggressive_tech_energy"}
+    ↓
+API coordinates changes:
+    1. Save mode override → data/mode_override.json
+    2. Update strategy (AI_COPILOT_WEIGHTED):
+       - Set enabled=true, weight=0.35, execution_enabled=true
+       - Stage changes via StrategyRegistry.update_*()
+    3. Update universe sectors:
+       - Enable mega_cap_tech, us_sector_etfs
+       - Disable core_index
+       - Stage changes via UniverseRegistry.update_sector_enabled()
+    4. Save selector overrides → data/selector_overrides.json
+    5. Update AI Co-Pilot features → data/ui_runtime_overrides.json
+    ↓
+Changes take effect on next loop iteration (staged activation)
+```
+
+#### Code Modules
+
+- **src/app/config.py**: Mode profile loading, active profile resolution, override persistence
+- **src/app/selector_overrides.py**: Selector override loading, merging, profile-specific presets
+- **src/ui_api/app.py**: Mode switching API endpoints (POST /api/mode, GET /api/mode)
+- **src/ui_api/dashboard.html**: Mode selector UI component
+- **tests/test_mode_profiles.py**: Mode switching tests
+- **tests/test_selector_overrides.py**: Selector override tests
+
+### API Endpoints
+
+#### POST /api/mode
+Switch trading mode profile.
+
+**Request:**
+```json
+{
+  "profile": "aggressive_tech_energy"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Mode switched to 'aggressive_tech_energy'.",
+  "details": {
+    "profile": "aggressive_tech_energy",
+    "description": "Aggressive tech+energy daytrade",
+    "pending_versions": ["strategy_AI_COPILOT_WEIGHTED_enable_v123"]
+  }
+}
+```
+
+#### GET /api/mode
+Get current mode status.
+
+### Universe Ticker Manager (New AI Co-Pilot Feature)
+
+Enabled in Aggressive mode to dynamically recommend ticker changes.
+
+**Purpose:**
+- Focus on tech/battery/energy opportunities
+- Recommend new tickers to add
+- Identify underperforming tickers to remove
+- Suggest buy/sell biases
+
+**Configuration:**
+- ai_copilot.universe_ticker_manager.enabled
+- ai_copilot.universe_ticker_manager.max_output_tokens: 800
+- Advisory only (does not auto-execute)
+
+**Logging:** logs/ticker_manager/recommendations.jsonl
+
+### Safety Gates
+
+1. **Trading Pause**: Mode switch respects pause_trading.flag
+2. **Constituent Removals**: Enabled with limits (max_remove_per_run: 1, min_confidence: 0.85)
+3. **Staged Activation**: All changes via Registry pattern
+4. **Override Precedence**: Runtime > Profile > Base config
+
+### Adding New Profiles
+
+Edit config/modes.yaml and add profile definition. See existing profiles for structure.
+
+---
+
+## Small Cap Swing Trading Mode & Execution Gate
+
+### Overview
+
+Added "Small Cap Swing" trading mode with **hard execution gates** to enforce market cap, price, and liquidity constraints on ALL orders regardless of strategy or universe configuration.
+
+**Key Goals:**
+1. Shift system toward small/mid cap stocks for swing trading
+2. Prevent trades on mega caps unless explicitly allowed
+3. Maintain safety gates and tradability standards
+4. Enable longer hold periods (12+ hours) vs intraday
+
+**Implementation Date:** 2026-02-04
+
+---
+
+### Mode Profile: small_cap_swing
+
+**Location:** `config/modes.yaml`
+
+**Description:** Small/mid cap swing trading with market cap constraints and longer hold periods
+
+**Coordinated Settings:**
+
+1. **Strategy Configuration**
+   - AI_COPILOT_WEIGHTED: enabled=true, weight=0.50, execution_enabled=true
+   - Higher allocation (50%) for focused swing trading
+
+2. **Universe Constraints**
+   - core_index: disabled (no SPY/QQQ - mega caps)
+   - mega_cap_tech: disabled (no AAPL/MSFT/NVDA - mega caps)
+   - us_sector_etfs: disabled (not small caps)
+   - automation: enabled (if has small caps)
+
+3. **Selector Profile (Swing Trading)**
+   - candidates_max_count: 60 (moderate for discovery)
+   - candidates_min_confidence: 0.55 (lower for more opportunities)
+   - duplicate_suppression_minutes: 30 (standard for swing)
+   - ttl_minutes_buy: 720 (12 hours - swing setup)
+   - ttl_minutes_sell: 480 (8 hours - longer hold)
+   - max_candidates_per_run: 20 (more candidates to find small caps)
+
+4. **AI Co-Pilot Features**
+   - trade_rationale: enabled (justify swing trades)
+   - daily_journal: disabled (save tokens)
+   - strategy_critique: disabled (save tokens)
+   - universe_ticker_manager: enabled (small cap discovery)
+
+5. **Execution Gate (CRITICAL - NEW)**
+   - See dedicated section below
+
+---
+
+### Execution Gate Architecture
+
+**Purpose:** Centralized tradability filter that runs BEFORE any order is placed, regardless of strategy or universe configuration. Enforces hard constraints on which symbols can be traded.
+
+**Location:** `src/app/execution/tradability_filter.py`
+
+**Integration Point:** `AlpacaExecutor.reconcile_and_execute()` - gate check inserted before broker submission loop
+
+**Design Principles:**
+- Hard gate: blocks orders that violate constraints (not advisory)
+- Strategy-agnostic: applies to ALL strategies
+- Universe-independent: enforces even if universe allows symbol
+- Logged rejections: all blocked orders written to ledger with reason codes
+- Config-driven: all thresholds configurable via mode profiles
+
+---
+
+### Execution Gate Configuration
+
+**Config Parameters** (from mode profile `execution_gate` section):
+
+```yaml
+execution_gate:
+  # Market cap constraints (USD)
+  min_market_cap_usd: 300000000        # $300M minimum (small cap floor)
+  max_market_cap_usd: 10000000000      # $10B maximum (exclude mega caps)
+
+  # Price constraints (USD)
+  min_price: 3.00                      # Avoid penny stocks
+  max_price: 80.00                     # Reasonable upper bound for small caps
+
+  # Liquidity constraints
+  min_avg_dollar_volume_20d: 5000000   # $5M min daily volume (liquidity floor)
+
+  # Spread constraint (basis points)
+  max_spread_bps: 100                  # 1.00% max spread (allow wider for small caps)
+
+  # Symbol lists (explicit overrides)
+  exclude_symbols: []                  # Ban list (empty by default)
+  allow_symbols: []                    # Allowlist override (empty by default)
+
+  # Behavior flags
+  require_fundamentals: false          # Don't block if data unavailable
+  strict_mode: true                    # Hard block (not advisory)
+```
+
+**Block Reason Codes:**
+- `market_cap_below_minimum`
+- `market_cap_above_maximum`
+- `price_below_minimum`
+- `price_above_maximum`
+- `avg_dollar_volume_below_minimum`
+- `bid_ask_spread_above_maximum`
+- `symbol_in_exclude_list`
+- `fundamentals_data_not_available`
+
+---
+
+### Fundamentals Cache
+
+**Purpose:** Provide market cap, volume, and spread data for execution gate filtering.
+
+**Location:** `src/market_data/fundamentals_cache.py`
+
+**Data Sources (Priority Order):**
+1. Manual mappings (override file): `data/cache/fundamentals_manual.json`
+2. In-memory cache (if not expired)
+3. Disk cache: `data/cache/fundamentals.json` (TTL: 24 hours)
+4. API fetch (future integration - stub for Polygon/IEX/FMP)
+5. Fallback to None (no block, just log warning)
+
+**Data Model:**
+```python
+@dataclass
+class TickerFundamentals:
+    symbol: str
+    market_cap_usd: float | None
+    avg_dollar_volume_20d: float | None
+    price: float | None
+    spread_bps: float | None
+    last_updated: str | None  # ISO timestamp
+```
+
+**Cache Behavior:**
+- TTL: 24 hours (configurable)
+- Atomic writes (temp file + rename)
+- Auto-expiration on load
+- Manual mappings never expire
+
+**Manual Mapping File Format:**
+```json
+{
+  "AAPL": {
+    "symbol": "AAPL",
+    "market_cap_usd": 3500000000000,
+    "avg_dollar_volume_20d": 15000000000,
+    "price": 180.0,
+    "spread_bps": 2
+  }
+}
+```
+
+---
+
+### Order Execution Flow with Gate
+
+**Updated Flow (AlpacaExecutor):**
+
+```
+1. reconcile_and_execute(target_positions, current_prices)
+   ├─ Get current positions from broker
+   ├─ Calculate deltas (target - current)
+   ├─ Generate OrderInstructions
+   ├─ Slice orders to max_order_notional
+   │
+   ├─ FOR EACH ORDER SLICE:
+   │  ├─ Check max_positions_notional (risk-increasing only)
+   │  │
+   │  ├─ **EXECUTION GATE CHECK (NEW)** ◄── INSERTED HERE
+   │  │  ├─ Load fundamentals for symbol
+   │  │  ├─ Check allow_symbols (bypass all checks)
+   │  │  ├─ Check exclude_symbols (hard block)
+   │  │  ├─ Check market_cap_usd (min/max)
+   │  │  ├─ Check price (min/max)
+   │  │  ├─ Check avg_dollar_volume_20d (min)
+   │  │  ├─ Check spread_bps (max)
+   │  │  └─ If blocked: log reason, skip order
+   │  │
+   │  ├─ DRY-RUN: Print order
+   │  ├─ LIVE: broker.submit_order(...)
+   │  └─ Update exposure tracking
+   │
+   └─ Return ExecutionResult (orders_placed, orders_skipped)
+```
+
+**Key Points:**
+- Gate check runs for ALL orders (BUY and SELL)
+- Risk-reducing sells subject to gate (can still be blocked)
+- Blocked orders logged to `orders_skipped` with reason
+- Execution continues for remaining orders
+- No partial fills (order either fully blocked or fully allowed)
+
+---
+
+### Runner Integration
+
+**Location:** `src/app/runner.py` (lines 1073-1105)
+
+**Initialization:**
+```python
+# Load execution gate config from active mode profile
+modes_config = load_mode_profiles()
+active_profile_name, active_profile = get_active_mode_profile(modes_config)
+
+if "execution_gate" in active_profile:
+    execution_gate_config = ExecutionGateConfig.from_dict(active_profile["execution_gate"])
+    fundamentals_cache = FundamentalsCache()
+else:
+    execution_gate_config = None
+    fundamentals_cache = None
+
+executor = AlpacaExecutor(
+    broker,
+    config,
+    dry_run=dry_run,
+    execution_gate_config=execution_gate_config,
+    fundamentals_cache=fundamentals_cache,
+)
+```
+
+**Console Output:**
+```
+Execution gate ENABLED (mode: small_cap_swing)
+  Market cap range: $300,000,000 - $10,000,000,000
+  Price range: $3.00 - $80.00
+  Min liquidity: $5,000,000/day
+```
+
+---
+
+### Dashboard UI Enhancements
+
+**Location:** `src/ui_api/dashboard.html`
+
+**1. Mode Selector (Updated)**
+- Added "Small Cap Swing" button (3rd option)
+- Badge shows mode: Normal (blue) / Aggressive (orange) / Small Cap Swing (purple)
+- onclick: `switchMode('small_cap_swing')`
+
+**2. Execution Filters Panel (NEW)**
+- Displays active execution gate constraints
+- Shows market cap range, price range, min volume, max spread
+- Only visible when execution_gate configured in active mode
+- Auto-updates on mode switch
+
+**CSS Classes:**
+- `.execution-filters-panel` - Container
+- `.filters-grid` - 2x2 grid layout
+- `.filter-item` - Individual filter display
+- `.badge-success` - "ACTIVE" indicator
+
+**JavaScript Functions:**
+- `loadModeStatus()` - Updated to handle small_cap_swing
+- `loadExecutionGateFilters(activeProfile)` - NEW, loads and displays gate config
+
+---
+
+### API Endpoints
+
+**1. GET /api/mode**
+
+Returns current mode status including execution_gate config.
+
+**Response:**
+```json
+{
+  "active_profile": "small_cap_swing",
+  "available_profiles": ["normal", "aggressive_tech_energy", "small_cap_swing"],
+  "profile_description": "Small/mid cap swing trading with market cap constraints...",
+  "coordinated_settings": {
+    "strategies": {...},
+    "universe": {...},
+    "selector": {...},
+    "ai_copilot": {...},
+    "execution_gate": {
+      "min_market_cap_usd": 300000000,
+      "max_market_cap_usd": 10000000000,
+      "min_price": 3.0,
+      "max_price": 80.0,
+      "min_avg_dollar_volume_20d": 5000000,
+      "max_spread_bps": 100,
+      "require_fundamentals": false,
+      "strict_mode": true,
+      "exclude_symbols": [],
+      "allow_symbols": []
+    }
+  }
+}
+```
+
+**2. POST /api/mode**
+
+Switch mode profile. Execution gate config applied automatically on next loop iteration.
+
+**Request:**
+```json
+{
+  "profile": "small_cap_swing"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Mode switched to 'small_cap_swing'. Changes will take effect on next loop iteration.",
+  "pending_version": 5
+}
+```
+
+---
+
+### Testing
+
+**Test Files:**
+- `tests/test_tradability_filter.py` - Execution gate unit tests (25+ tests)
+- `tests/test_small_cap_mode.py` - Mode profile integration tests
+
+**Test Coverage:**
+1. Market cap constraints (min, max, range)
+2. Price constraints (min, max)
+3. Liquidity constraints (min volume)
+4. Spread constraints (max spread)
+5. Exclude/allow symbol lists
+6. Strict vs advisory mode
+7. Fundamentals unavailable handling
+8. Batch checks (blocked/allowed symbols)
+9. Mode profile loading and persistence
+10. Coordinated settings validation
+11. ExecutionGateConfig.from_dict()
+
+**Run Tests:**
+```bash
+pytest tests/test_tradability_filter.py -v
+pytest tests/test_small_cap_mode.py -v
+```
+
+---
+
+### Example Usage
+
+**Switch to Small Cap Swing Mode (curl):**
+```bash
+curl -X POST http://localhost:8000/api/mode \
+  -H "Content-Type: application/json" \
+  -d '{"profile": "small_cap_swing"}'
+```
+
+**Expected Behavior:**
+1. Mode switches to small_cap_swing
+2. Execution gate activated with $300M-$10B market cap range
+3. Next loop iteration loads gate config
+4. Orders for AAPL ($3.5T cap) BLOCKED - market cap too high
+5. Orders for NVDA ($1.8T cap) BLOCKED - market cap too high
+6. Orders for PLTR ($45B cap) BLOCKED - market cap too high
+7. Orders for AFRM ($9B cap) ALLOWED - within range
+8. Orders for SOFI ($8B cap) ALLOWED - within range
+9. Orders for IONQ ($3.5B cap) ALLOWED - within range
+
+**Verify Blocked Trades (logs):**
+```
+AAPL: BLOCKED - Market cap $3,500,000,000,000 above maximum $10,000,000,000
+NVDA: BLOCKED - Market cap $1,800,000,000,000 above maximum $10,000,000,000
+```
+
+---
+
+### Safety Constraints
+
+**1. Hard Gate (Not Advisory)**
+- Execution gate BLOCKS orders, does not just warn
+- No orders placed for blocked symbols
+
+**2. Strategy-Agnostic**
+- Gate applies to ALL strategies (AI_COPILOT_WEIGHTED, MeanReversion, Trend)
+- Cannot be bypassed by strategy configuration
+
+**3. Universe-Independent**
+- Gate enforces even if universe allows symbol
+- Universe enablement is necessary but not sufficient
+
+**4. Allow List Override**
+- If symbol in `allow_symbols`, ALL checks bypassed
+- Use for temporary exceptions or manual overrides
+
+**5. Fundamentals Fallback**
+- If fundamentals unavailable and `require_fundamentals=false`, allow order
+- Logs warning but does not block
+- Set `require_fundamentals=true` for strict enforcement
+
+**6. Atomic Mode Switch**
+- Mode switch persisted to `data/mode_override.json`
+- Loaded on next loop iteration
+- All coordinated settings applied together
+
+---
+
+### Operational Notes
+
+**1. Updating Fundamentals Cache**
+
+Add/update symbols in `data/cache/fundamentals_manual.json`:
+```json
+{
+  "NEWSYMBOL": {
+    "symbol": "NEWSYMBOL",
+    "market_cap_usd": 5000000000,
+    "avg_dollar_volume_20d": 50000000,
+    "price": 25.0,
+    "spread_bps": 15
+  }
+}
+```
+
+Restart runner to reload cache (or wait for TTL expiration).
+
+**2. Temporarily Allowing Mega Cap**
+
+If you need to trade a mega cap (e.g., NVDA) in small_cap_swing mode:
+
+Edit `config/modes.yaml`:
+```yaml
+small_cap_swing:
+  execution_gate:
+    allow_symbols: ["NVDA"]  # Bypasses all checks
+```
+
+Restart dashboard API server, switch modes.
+
+**3. Disabling Execution Gate**
+
+To disable gate for a mode:
+- Remove `execution_gate` section from mode profile in `config/modes.yaml`
+- OR set all constraints to None/empty
+
+**4. Monitoring Blocked Orders**
+
+Check executor logs:
+```
+grep "BLOCKED by execution gate" logs/loop/loop_*.log
+```
+
+Or query `orders_skipped` from `ExecutionResult`.
+
+---
+
+### Future Enhancements
+
+**1. API Integration for Fundamentals**
+- Polygon.io API (market cap, volume)
+- IEX Cloud API
+- Financial Modeling Prep (FMP) API
+- Auto-refresh cache on data staleness
+
+**2. Additional Mode Profiles**
+- Micro Cap Volatility (<$300M, higher risk)
+- Large Cap Dividend (>$50B, dividend-focused)
+- Earnings Play (catalyst-driven, tighter spreads)
+
+**3. Dynamic Gate Adjustment**
+- VIX-based spread widening (high vol = allow wider spreads)
+- Time-of-day adjustments (tighter at open, wider mid-day)
+
+**4. Candidate Pre-Filtering**
+- Apply gate to candidates BEFORE strategy evaluation
+- Save LLM tokens by only analyzing tradable symbols
+
+**5. Historical Backtesting**
+- Test small_cap_swing profile on historical data
+- Compare performance vs normal/aggressive modes
+
+---
+
+### Related Files
+
+**Core Implementation:**
+- `src/market_data/fundamentals_cache.py` - Fundamentals cache
+- `src/app/execution/tradability_filter.py` - Execution gate
+- `src/app/execution/alpaca_executor.py` - Gate integration
+- `src/app/runner.py` - Mode profile loading
+
+**Configuration:**
+- `config/modes.yaml` - Mode profiles (includes small_cap_swing)
+- `data/cache/fundamentals_manual.json` - Manual fundamentals mappings
+- `data/cache/fundamentals.json` - Auto-cached fundamentals (TTL: 24h)
+- `data/mode_override.json` - Active mode persistence
+
+**UI:**
+- `src/ui_api/dashboard.html` - Mode selector + filters panel
+- `src/ui_api/app.py` - API endpoints (GET /api/mode, POST /api/mode)
+
+**Tests:**
+- `tests/test_tradability_filter.py` - Execution gate tests
+- `tests/test_small_cap_mode.py` - Mode profile tests
+
+---
+
+### Configuration Precedence
+
+**Order (highest to lowest priority):**
+1. Allow list (`execution_gate.allow_symbols`) - Bypasses all checks
+2. Exclude list (`execution_gate.exclude_symbols`) - Hard block
+3. Market cap constraints (min/max)
+4. Price constraints (min/max)
+5. Liquidity constraints (min volume)
+6. Spread constraints (max spread)
+7. Fundamentals availability check (if `require_fundamentals=true`)
+
+**First violation blocks the order.** Subsequent checks not evaluated.
+
+---
+
+**Last Updated:** 2026-02-04
+**Feature:** Small Cap Swing Trading Mode + Execution Gate
+**Compliance:** Spec Sync Rule ✓

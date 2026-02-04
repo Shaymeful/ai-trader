@@ -54,6 +54,11 @@ universe:
         - XLE
         - XLV
 
+    automation:
+      enabled: false
+      description: "Automation and industrial technology stocks"
+      symbols: []
+
 # LLM Universe Advisor Configuration
 llm:
   # Provider mode: primary_fallback | ensemble | openai_only | anthropic_only
@@ -92,3 +97,39 @@ llm:
   min_confidence_remove: 0.85
   cooldown_days_per_ticker: 5  # Reduced from 7 to allow faster re-evaluation
   ticker_blacklist: []
+
+# AI Co-Pilot Configuration (Advisory Layer)
+# SAFETY: Default OFF, never blocks loop, advisory-only outputs
+ai_copilot:
+  # Master switch (can be overridden by AI_COPILOT_ENABLED env var: 0=off, 1=on)
+  # CRITICAL: If trading is disabled, AI Co-Pilot is forced OFF regardless of this setting
+  enabled: true
+
+  # CRITICAL: Controls whether AI output can influence decisions (default: false)
+  # When false, AI outputs are purely advisory metadata
+  # MUST remain false - cannot be changed via UI
+  influence_decisions: false
+
+  # Model configuration (reuses existing LLM setup)
+  model: "gpt-4o-mini"  # Cost-effective for advisory tasks
+
+  # Budget limits per run (safety gates)
+  max_calls_per_run: 4      # Maximum LLM calls per loop iteration
+  timeout_s: 20             # Request timeout in seconds
+
+  # Global budget constraints
+  budgets:
+    global_max_output_tokens: 1200  # Global token cap across all features
+
+  # Feature flags with per-feature token limits
+  trade_rationale:
+    enabled: true
+    max_output_tokens: 500  # Per-call token limit for trade rationale
+
+  daily_journal:
+    enabled: true
+    max_output_tokens: 1200  # Per-call token limit for daily journal
+
+  strategy_critique:
+    enabled: true
+    max_output_tokens: 900  # Per-call token limit for strategy critique

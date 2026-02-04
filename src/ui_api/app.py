@@ -1095,6 +1095,89 @@ async def update_sector_enabled(sector_name: str, request: SectorEnableRequest):
         raise HTTPException(status_code=500, detail=f"Failed to stage change: {e}") from e
 
 
+@app.post("/universe/sectors/{sector_name}/exit-positions", response_model=ChangeResponse)
+async def exit_sector_positions(sector_name: str):
+    """
+    Exit all open positions for tickers in a sector.
+
+    Creates market sell orders for all open long positions in the sector.
+
+    Args:
+        sector_name: Sector name to exit positions for
+    """
+    if universe_registry is None:
+        raise HTTPException(status_code=503, detail="Universe registry not loaded")
+
+    try:
+        # Create broker instance
+        from src.app.config import load_config_with_yaml
+        from src.broker.base import AlpacaBroker
+        from src.app.models import OrderSide, OrderType
+        import uuid
+
+        config = load_config_with_yaml()
+        broker = AlpacaBroker(
+            api_key=config.alpaca_api_key,
+            secret_key=config.alpaca_secret_key,
+            trading_base_url=config.alpaca_trading_base_url,
+        )
+
+        # Get sector symbols
+        if sector_name not in universe_registry.sectors:
+            raise HTTPException(status_code=404, detail=f"Sector not found: {sector_name}")
+
+        sector_symbols = set(universe_registry.sectors[sector_name].symbols)
+        if not sector_symbols:
+            raise HTTPException(status_code=400, detail="No symbols in sector")
+
+        # Get open positions
+        positions = broker.get_positions()
+        sector_positions = {symbol: (qty, price) for symbol, (qty, price) in positions.items() if symbol in sector_symbols}
+
+        if not sector_positions:
+            return ChangeResponse(
+                success=True,
+                message=f"No open positions found for {sector_name} sector",
+                pending_version=None,
+            )
+
+        # Submit market sell orders for each position
+        exited_count = 0
+        failed_count = 0
+        for symbol, (qty, _) in sector_positions.items():
+            if qty > 0:  # Only exit long positions
+                try:
+                    broker.submit_order(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        quantity=qty,
+                        client_order_id=f"exit-{sector_name}-{symbol}-{uuid.uuid4().hex[:8]}",
+                        order_type=OrderType.MARKET,
+                        limit_price=None,
+                    )
+                    exited_count += 1
+                    print(f"Submitted market sell order for {symbol} (qty={qty})")
+                except Exception as e:
+                    print(f"Failed to exit position for {symbol}: {e}")
+                    failed_count += 1
+
+        if failed_count > 0:
+            message = f"Exited {exited_count} positions for {sector_name} sector ({failed_count} failed)"
+        else:
+            message = f"Exited {exited_count} positions for {sector_name} sector"
+
+        return ChangeResponse(
+            success=True,
+            message=message,
+            pending_version=None,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to exit positions: {e}") from e
+
+
 @app.post("/universe/reset", response_model=ChangeResponse)
 async def reset_universe():
     """Reset all sectors to default configuration.
@@ -2208,6 +2291,642 @@ async def get_equity_series(hours: int = 24):
         "count": len(points),
         "hours": hours,
     }
+
+
+# ============================================================================
+# AI Co-Pilot Monitoring Routes
+# ============================================================================
+
+
+class AICopilotStatusResponse(BaseModel):
+    """AI Co-Pilot status response."""
+
+    timestamp: str
+    enabled: bool
+    influence_decisions: bool
+    model: str
+    budget: dict[str, Any]
+    limits: dict[str, Any]
+    features: dict[str, Any]
+    errors: list[str]
+    health: str
+
+
+class AICopilotFeaturesResponse(BaseModel):
+    """AI Co-Pilot features response."""
+
+    trade_rationale: dict[str, Any]
+    daily_journal: dict[str, Any]
+    strategy_critique: dict[str, Any]
+
+
+class AICopilotCritiqueResponse(BaseModel):
+    """AI Co-Pilot critique history response."""
+
+    critiques: list[dict[str, Any]]
+    count: int
+
+
+class AICopilotConfigUpdateRequest(BaseModel):
+    """Request to update AI Co-Pilot configuration."""
+
+    enabled: bool | None = Field(None, description="Enable/disable AI Co-Pilot")
+    dry_run: bool | None = Field(None, description="Enable/disable dry-run mode")
+    max_calls_per_run: int | None = Field(None, ge=0, description="Max LLM calls per run")
+    budgets: dict[str, int] | None = Field(None, description="Budget limits")
+    trade_rationale: dict[str, Any] | None = Field(None, description="Trade rationale settings")
+    daily_journal: dict[str, Any] | None = Field(None, description="Daily journal settings")
+    strategy_critique: dict[str, Any] | None = Field(None, description="Strategy critique settings")
+
+
+@app.get("/api/ai-copilot/config")
+async def get_ai_copilot_config():
+    """
+    Get AI Co-Pilot effective configuration with sources.
+
+    Returns:
+        Dict with "effective", "sources", and "trading_disabled_effective" keys
+    """
+    from src.app.config import load_config_with_yaml, load_yaml_config
+    from src.app.llm_advisors.config_helpers import get_effective_config_with_sources
+
+    config = load_config_with_yaml()
+    yaml_config = load_yaml_config()
+
+    return get_effective_config_with_sources(config, yaml_config)
+
+
+@app.post("/api/ai-copilot/config")
+async def update_ai_copilot_config(
+    request: AICopilotConfigUpdateRequest,
+    validate_only: bool = False,
+):
+    """
+    Update AI Co-Pilot configuration via UI runtime overrides.
+
+    Args:
+        request: Configuration update request
+        validate_only: If True, validate without writing (query param ?validate_only=1)
+
+    Returns:
+        Updated effective config with sources, or validation errors
+
+    Safety:
+        - Only allows safe fields (no influence_decisions, trading logic, etc.)
+        - Validates all changes before applying
+        - Atomic write (temp file → rename)
+        - If trading disabled, enabled flag will remain false regardless
+    """
+    from src.app.llm_advisors.utils import (
+        load_ui_runtime_overrides,
+        save_ui_runtime_overrides,
+        validate_ui_overrides,
+    )
+
+    # Load current overrides
+    overrides = load_ui_runtime_overrides()
+
+    # Ensure ai_copilot section exists
+    if "ai_copilot" not in overrides:
+        overrides["ai_copilot"] = {}
+
+    # Update fields from request
+    if request.enabled is not None:
+        overrides["ai_copilot"]["enabled"] = request.enabled
+
+    if request.dry_run is not None:
+        overrides["ai_copilot"]["dry_run"] = request.dry_run
+
+    if request.max_calls_per_run is not None:
+        overrides["ai_copilot"]["max_calls_per_run"] = request.max_calls_per_run
+
+    if request.budgets is not None:
+        if "budgets" not in overrides["ai_copilot"]:
+            overrides["ai_copilot"]["budgets"] = {}
+        overrides["ai_copilot"]["budgets"].update(request.budgets)
+
+    # Update feature settings
+    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique"]:
+        feature_data = getattr(request, feature_name, None)
+        if feature_data is not None:
+            if feature_name not in overrides["ai_copilot"]:
+                overrides["ai_copilot"][feature_name] = {}
+            overrides["ai_copilot"][feature_name].update(feature_data)
+
+    # Add timestamp
+    overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+    # Validate overrides
+    is_valid, errors = validate_ui_overrides(overrides)
+
+    if not is_valid:
+        raise HTTPException(status_code=400, detail={"errors": errors})
+
+    # If validate_only, return without writing
+    if validate_only:
+        return {
+            "status": "valid",
+            "message": "Configuration is valid (not saved)",
+            "errors": [],
+        }
+
+    # Save overrides atomically
+    success = save_ui_runtime_overrides(overrides)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save configuration")
+
+    # Reload config and return effective values
+    from src.app.config import load_config_with_yaml, load_yaml_config
+    from src.app.llm_advisors.config_helpers import get_effective_config_with_sources
+
+    config = load_config_with_yaml()
+    yaml_config = load_yaml_config()
+    effective_data = get_effective_config_with_sources(config, yaml_config)
+
+    return {
+        "status": "success",
+        "message": "Configuration updated. Changes will take effect on next loop iteration.",
+        "effective": effective_data["effective"],
+        "sources": effective_data["sources"],
+    }
+
+
+@app.get("/api/ai-copilot/status", response_model=AICopilotStatusResponse)
+async def get_ai_copilot_status():
+    """
+    Get current AI Co-Pilot status.
+
+    Returns:
+        Status including enabled state, budget, features, and health
+    """
+    from src.app.llm_advisors.status import load_latest_status
+
+    status = load_latest_status()
+
+    if status is None:
+        # Return default disabled status if no snapshot exists
+        return AICopilotStatusResponse(
+            timestamp=datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
+            enabled=False,
+            influence_decisions=False,
+            model="gpt-4o-mini",
+            budget={
+                "max_calls_per_run": 3,
+                "calls_used": 0,
+                "calls_remaining": 3,
+                "utilization_pct": 0.0,
+            },
+            limits={
+                "max_output_tokens": 350,
+                "timeout_s": 20,
+            },
+            features={
+                "trade_rationale": {"enabled": False, "calls": 0, "successes": 0, "success_rate": 0.0},
+                "daily_journal": {"enabled": False, "generated": False},
+                "strategy_critique": {"enabled": False, "generated": False},
+            },
+            errors=[],
+            health="unknown",
+        )
+
+    return AICopilotStatusResponse(**status)
+
+
+@app.get("/api/ai-copilot/features", response_model=AICopilotFeaturesResponse)
+async def get_ai_copilot_features():
+    """
+    Get AI Co-Pilot feature status.
+
+    Returns:
+        Feature-specific status and metrics
+    """
+    from src.app.llm_advisors.status import load_latest_status
+
+    status = load_latest_status()
+
+    if status is None or not status.get("features"):
+        return AICopilotFeaturesResponse(
+            trade_rationale={"enabled": False, "calls": 0, "successes": 0, "success_rate": 0.0},
+            daily_journal={"enabled": False, "generated": False},
+            strategy_critique={"enabled": False, "generated": False},
+        )
+
+    features = status["features"]
+    return AICopilotFeaturesResponse(
+        trade_rationale=features.get("trade_rationale", {}),
+        daily_journal=features.get("daily_journal", {}),
+        strategy_critique=features.get("strategy_critique", {}),
+    )
+
+
+@app.get("/api/ai-copilot/critique", response_model=AICopilotCritiqueResponse)
+async def get_ai_copilot_critiques(limit: int = 5):
+    """
+    Get recent strategy critiques.
+
+    Args:
+        limit: Number of recent critiques to return (default 5)
+
+    Returns:
+        List of recent critiques (most recent first)
+    """
+    from src.app.llm_advisors.strategy_critique import load_recent_critiques
+
+    critiques = load_recent_critiques(n=limit)
+
+    return AICopilotCritiqueResponse(
+        critiques=critiques,
+        count=len(critiques),
+    )
+
+
+@app.get("/api/ai-copilot/history")
+async def get_ai_copilot_history(limit: int = 50):
+    """
+    Get AI Co-Pilot run history.
+
+    Args:
+        limit: Maximum number of entries to return (default 50)
+
+    Returns:
+        List of run history entries (most recent first)
+    """
+    history_path = Path("logs/ai_copilot/run_history.jsonl")
+
+    if not history_path.exists():
+        return {
+            "entries": [],
+            "count": 0,
+        }
+
+    entries = []
+    try:
+        with open(history_path, "r", encoding="utf-8") as f:
+            for line in f:
+                entries.append(json.loads(line.strip()))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load history: {e}")
+
+    # Return most recent entries first
+    entries = entries[-limit:][::-1]
+
+    return {
+        "entries": entries,
+        "count": len(entries),
+    }
+
+
+class AICopilotToggleRequest(BaseModel):
+    """Request to toggle AI Co-Pilot master switch."""
+
+    enabled: bool = Field(description="Enable or disable AI Co-Pilot")
+
+
+class AICopilotFeatureToggleRequest(BaseModel):
+    """Request to toggle individual AI Co-Pilot feature."""
+
+    enabled: bool = Field(description="Enable or disable feature")
+
+
+@app.post("/api/ai-copilot/toggle", response_model=ChangeResponse)
+async def toggle_ai_copilot(request: AICopilotToggleRequest):
+    """
+    Toggle AI Co-Pilot master switch.
+
+    SAFETY:
+    - Changes are written to data/ui_runtime_overrides.json
+    - Takes effect on next loop iteration
+    - Does not affect running operations
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    overrides_path = Path("data/ui_runtime_overrides.json")
+    overrides_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing overrides
+    overrides = {}
+    if overrides_path.exists():
+        try:
+            with open(overrides_path, "r", encoding="utf-8") as f:
+                overrides = json.load(f)
+        except Exception:
+            overrides = {}
+
+    # Update AI Co-Pilot enabled flag
+    if "ai_copilot" not in overrides:
+        overrides["ai_copilot"] = {}
+
+    overrides["ai_copilot"]["enabled"] = request.enabled
+    overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+    # Write overrides atomically
+    temp_path = overrides_path.with_suffix(".tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(overrides, f, indent=2)
+    temp_path.replace(overrides_path)
+
+    action = "enabled" if request.enabled else "disabled"
+    return ChangeResponse(
+        status="success",
+        message=f"AI Co-Pilot {action}. Changes will take effect on next loop iteration.",
+        details={"ai_copilot_enabled": request.enabled},
+    )
+
+
+@app.post("/api/ai-copilot/features/trade_rationale", response_model=ChangeResponse)
+async def toggle_trade_rationale(request: AICopilotFeatureToggleRequest):
+    """
+    Toggle Trade Rationale feature.
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    return _toggle_copilot_feature("trade_rationale", request.enabled)
+
+
+@app.post("/api/ai-copilot/features/daily_journal", response_model=ChangeResponse)
+async def toggle_daily_journal(request: AICopilotFeatureToggleRequest):
+    """
+    Toggle Daily Journal feature.
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    return _toggle_copilot_feature("daily_journal", request.enabled)
+
+
+@app.post("/api/ai-copilot/features/strategy_critique", response_model=ChangeResponse)
+async def toggle_strategy_critique(request: AICopilotFeatureToggleRequest):
+    """
+    Toggle Strategy Critique feature.
+
+    Args:
+        request: Toggle request with enabled boolean
+
+    Returns:
+        Change confirmation
+    """
+    return _toggle_copilot_feature("strategy_critique", request.enabled)
+
+
+def _toggle_copilot_feature(feature_name: str, enabled: bool) -> ChangeResponse:
+    """
+    Helper to toggle AI Co-Pilot feature.
+
+    SAFETY:
+    - Only modifies safe feature flags
+    - Does not modify budget limits or influence_decisions flag
+    - Changes take effect on next loop iteration
+
+    Args:
+        feature_name: Feature name (trade_rationale, daily_journal, strategy_critique)
+        enabled: Enable or disable
+
+    Returns:
+        Change confirmation
+    """
+    overrides_path = Path("data/ui_runtime_overrides.json")
+    overrides_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing overrides
+    overrides = {}
+    if overrides_path.exists():
+        try:
+            with open(overrides_path, "r", encoding="utf-8") as f:
+                overrides = json.load(f)
+        except Exception:
+            overrides = {}
+
+    # Update feature flag
+    if "ai_copilot" not in overrides:
+        overrides["ai_copilot"] = {}
+    if "features" not in overrides["ai_copilot"]:
+        overrides["ai_copilot"]["features"] = {}
+
+    overrides["ai_copilot"]["features"][feature_name] = enabled
+    overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+    # Write overrides atomically
+    temp_path = overrides_path.with_suffix(".tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(overrides, f, indent=2)
+    temp_path.replace(overrides_path)
+
+    action = "enabled" if enabled else "disabled"
+    return ChangeResponse(
+        status="success",
+        message=f"AI Co-Pilot feature '{feature_name}' {action}. Changes will take effect on next loop iteration.",
+        details={f"{feature_name}_enabled": enabled},
+    )
+
+
+# ============================================================================
+# Mode Switching (Aggressive Tech+Energy Daytrade Mode)
+# ============================================================================
+
+
+class ModeRequest(BaseModel):
+    """Request to switch trading mode profile."""
+
+    profile: Literal["normal", "aggressive_tech_energy"] = Field(
+        ..., description="Mode profile to activate"
+    )
+
+
+class ModeStatusResponse(BaseModel):
+    """Mode status response."""
+
+    active_profile: str
+    available_profiles: list[str]
+    profile_description: str
+    coordinated_settings: dict[str, Any]
+
+
+@app.post("/api/mode", response_model=ChangeResponse)
+async def switch_mode(request: ModeRequest):
+    """
+    Switch trading mode profile.
+
+    This endpoint coordinates changes across:
+    - Strategy enable/weight/params (AI_COPILOT_WEIGHTED)
+    - Universe sector toggles
+    - Selector overrides
+    - AI Co-Pilot feature flags
+
+    Args:
+        request: Mode switch request
+
+    Returns:
+        Change confirmation with pending versions
+    """
+    from src.app.config import load_mode_profiles, save_mode_override
+    from src.app.selector_overrides import save_selector_overrides
+
+    profile_name = request.profile
+
+    # Load mode profiles
+    modes_config = load_mode_profiles()
+    profiles = modes_config.get("profiles", {})
+
+    if profile_name not in profiles:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown profile: {profile_name}. Available: {list(profiles.keys())}"
+        )
+
+    profile = profiles[profile_name]
+
+    # SAFETY: Check if trading is paused
+    pause_flag = Path("state/pause_trading.flag")
+    if pause_flag.exists():
+        return ChangeResponse(
+            success=False,
+            message=f"Trading is paused. Mode switch to '{profile_name}' saved but execution remains disabled.",
+            pending_version=None,
+        )
+
+    # Save mode override
+    if not save_mode_override(profile_name):
+        raise HTTPException(status_code=500, detail="Failed to save mode override")
+
+    pending_versions = []
+
+    # 1. Apply strategy changes
+    strategy_config = profile.get("strategies", {}).get("AI_COPILOT_WEIGHTED", {})
+    if strategy_config and registry:
+        strategy_id = "AI_COPILOT_WEIGHTED"
+
+        # Enable/disable
+        enabled = strategy_config.get("enabled", False)
+        current_strategy = registry.get_strategy(strategy_id)
+        current_enabled = current_strategy.enabled if current_strategy else False
+        if enabled != current_enabled:
+            new_version = registry.stage_change(strategy_id, {"enabled": enabled})
+            if new_version:
+                pending_versions.append(f"strategy_{strategy_id}_enable_v{new_version}")
+
+        # Weight
+        weight = strategy_config.get("weight")
+        if weight is not None:
+            new_version = registry.stage_change(strategy_id, {"weight": weight})
+            if new_version:
+                pending_versions.append(f"strategy_{strategy_id}_weight_v{new_version}")
+
+        # Params (execution_enabled)
+        params = strategy_config.get("params", {})
+        if params:
+            new_version = registry.stage_change(strategy_id, {"params": params})
+            if new_version:
+                pending_versions.append(f"strategy_{strategy_id}_params_v{new_version}")
+
+    # 2. Apply universe sector changes
+    universe_config = profile.get("universe", {}).get("sectors", {})
+    if universe_config and universe_registry:
+        for sector_name, enabled in universe_config.items():
+            # Check current enabled status from sectors dict
+            current_sector = universe_registry.sectors.get(sector_name)
+            current_enabled = current_sector.enabled if current_sector else False
+            if enabled != current_enabled:
+                new_version = universe_registry.stage_change(sector_name, enabled)
+                if new_version:
+                    pending_versions.append(f"universe_{sector_name}_v{new_version}")
+
+    # 3. Apply selector overrides
+    selector_config = profile.get("selector", {})
+    if selector_config:
+        from src.app.selector_overrides import (
+            get_aggressive_selector_overrides,
+            get_normal_selector_overrides,
+        )
+
+        if profile_name == "aggressive_tech_energy":
+            overrides = get_aggressive_selector_overrides()
+        else:
+            overrides = get_normal_selector_overrides()
+
+        # Merge with custom selector config from profile
+        overrides.update(selector_config)
+
+        if not save_selector_overrides(profile_name, overrides):
+            # Log warning but don't fail
+            pass
+
+    # 4. Apply AI Co-Pilot feature flags
+    ai_copilot_config = profile.get("ai_copilot", {})
+    if ai_copilot_config:
+        overrides_path = Path("data/ui_runtime_overrides.json")
+        overrides_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing overrides
+        overrides = {}
+        if overrides_path.exists():
+            try:
+                with open(overrides_path, "r", encoding="utf-8") as f:
+                    overrides = json.load(f)
+            except Exception:
+                overrides = {}
+
+        # Update AI Co-Pilot features
+        if "ai_copilot" not in overrides:
+            overrides["ai_copilot"] = {}
+
+        for feature_name, enabled in ai_copilot_config.items():
+            if feature_name not in overrides["ai_copilot"]:
+                overrides["ai_copilot"][feature_name] = {}
+            overrides["ai_copilot"][feature_name]["enabled"] = enabled
+
+        overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+        # Write overrides atomically
+        temp_path = overrides_path.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(overrides, f, indent=2)
+        temp_path.replace(overrides_path)
+
+    return ChangeResponse(
+        success=True,
+        message=f"Mode switched to '{profile_name}'. Changes will take effect on next loop iteration. Profile: {profile.get('description', '')} | Pending versions: {', '.join(pending_versions) if pending_versions else 'none'}",
+        pending_version=len(pending_versions) if pending_versions else None,
+    )
+
+
+@app.get("/api/mode", response_model=ModeStatusResponse)
+async def get_mode_status():
+    """
+    Get current mode status.
+
+    Returns:
+        Current active profile and available profiles
+    """
+    from src.app.config import get_active_mode_profile, load_mode_profiles
+
+    modes_config = load_mode_profiles()
+    profile_name, profile = get_active_mode_profile(modes_config)
+
+    profiles = modes_config.get("profiles", {})
+
+    return ModeStatusResponse(
+        active_profile=profile_name,
+        available_profiles=list(profiles.keys()),
+        profile_description=profile.get("description", ""),
+        coordinated_settings={
+            "strategies": profile.get("strategies", {}),
+            "universe": profile.get("universe", {}),
+            "selector": profile.get("selector", {}),
+            "ai_copilot": profile.get("ai_copilot", {}),
+            "execution_gate": profile.get("execution_gate", {}),
+        },
+    )
 
 
 # ============================================================================

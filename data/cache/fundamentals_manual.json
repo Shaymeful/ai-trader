@@ -1,0 +1,132 @@
+{
+  "_comment": "Manual fundamentals mappings for ticker tradability filtering. Market caps are approximate as of 2024-2025.",
+
+  "AAPL": {
+    "symbol": "AAPL",
+    "market_cap_usd": 3500000000000,
+    "avg_dollar_volume_20d": 15000000000,
+    "price": 180.0,
+    "spread_bps": 2
+  },
+  "MSFT": {
+    "symbol": "MSFT",
+    "market_cap_usd": 3000000000000,
+    "avg_dollar_volume_20d": 10000000000,
+    "price": 380.0,
+    "spread_bps": 2
+  },
+  "NVDA": {
+    "symbol": "NVDA",
+    "market_cap_usd": 1800000000000,
+    "avg_dollar_volume_20d": 25000000000,
+    "price": 500.0,
+    "spread_bps": 3
+  },
+  "GOOGL": {
+    "symbol": "GOOGL",
+    "market_cap_usd": 1700000000000,
+    "avg_dollar_volume_20d": 8000000000,
+    "price": 140.0,
+    "spread_bps": 2
+  },
+  "AMZN": {
+    "symbol": "AMZN",
+    "market_cap_usd": 1600000000000,
+    "avg_dollar_volume_20d": 12000000000,
+    "price": 170.0,
+    "spread_bps": 3
+  },
+  "META": {
+    "symbol": "META",
+    "market_cap_usd": 1200000000000,
+    "avg_dollar_volume_20d": 9000000000,
+    "price": 450.0,
+    "spread_bps": 3
+  },
+  "TSLA": {
+    "symbol": "TSLA",
+    "market_cap_usd": 800000000000,
+    "avg_dollar_volume_20d": 20000000000,
+    "price": 250.0,
+    "spread_bps": 5
+  },
+  "AMD": {
+    "symbol": "AMD",
+    "market_cap_usd": 180000000000,
+    "avg_dollar_volume_20d": 8000000000,
+    "price": 120.0,
+    "spread_bps": 5
+  },
+  "SPY": {
+    "symbol": "SPY",
+    "market_cap_usd": 500000000000,
+    "avg_dollar_volume_20d": 50000000000,
+    "price": 480.0,
+    "spread_bps": 1
+  },
+  "QQQ": {
+    "symbol": "QQQ",
+    "market_cap_usd": 250000000000,
+    "avg_dollar_volume_20d": 30000000000,
+    "price": 420.0,
+    "spread_bps": 1
+  },
+  "XLE": {
+    "symbol": "XLE",
+    "market_cap_usd": 30000000000,
+    "avg_dollar_volume_20d": 1500000000,
+    "price": 85.0,
+    "spread_bps": 3
+  },
+  "XLF": {
+    "symbol": "XLF",
+    "market_cap_usd": 40000000000,
+    "avg_dollar_volume_20d": 2000000000,
+    "price": 40.0,
+    "spread_bps": 2
+  },
+  "XLV": {
+    "symbol": "XLV",
+    "market_cap_usd": 35000000000,
+    "avg_dollar_volume_20d": 1800000000,
+    "price": 145.0,
+    "spread_bps": 2
+  },
+
+  "_small_cap_examples": "Examples of small/mid caps that would pass small_cap_swing filter (300M-10B)",
+  "AFRM": {
+    "symbol": "AFRM",
+    "market_cap_usd": 9000000000,
+    "avg_dollar_volume_20d": 200000000,
+    "price": 35.0,
+    "spread_bps": 15
+  },
+  "PLTR": {
+    "symbol": "PLTR",
+    "market_cap_usd": 45000000000,
+    "avg_dollar_volume_20d": 1200000000,
+    "price": 22.0,
+    "spread_bps": 8
+  },
+  "SOFI": {
+    "symbol": "SOFI",
+    "market_cap_usd": 8000000000,
+    "avg_dollar_volume_20d": 150000000,
+    "price": 8.5,
+    "spread_bps": 12
+  },
+  "IONQ": {
+    "symbol": "IONQ",
+    "market_cap_usd": 3500000000,
+    "avg_dollar_volume_20d": 80000000,
+    "price": 18.0,
+    "spread_bps": 20
+  },
+  "RIVN": {
+    "symbol": "RIVN",
+    "market_cap_usd": 12000000000,
+    "avg_dollar_volume_20d": 300000000,
+    "price": 11.0,
+    "spread_bps": 10
+  }
+}

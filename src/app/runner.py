@@ -35,16 +35,23 @@ from src.broker import AlpacaBroker, MockBroker
 
 from .allocator import Allocator
 from .candidates.store import get_tradeable_candidates, load_candidates
-from .config import load_config_with_yaml, validate_alpaca_credentials
+from .config import (
+    get_active_mode_profile,
+    load_config_with_yaml,
+    load_mode_profiles,
+    validate_alpaca_credentials,
+)
 from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .decision_logger import DecisionLogger, TradingDecision, create_decision_from_intent
 from .execution import AlpacaExecutor
+from .execution.tradability_filter import ExecutionGateConfig
 from .exit_advisor import ExitAdvisor
-from .ledger import CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
+from .ledger import AICopilotTickSummaryEvent, CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
 from .sell_scanner import SellScanner, SellSignal
-from .strategies import MeanReversionStrategy, TrendStrategy
+from .strategies import AICopilotWeightedStrategy, MeanReversionStrategy, TrendStrategy
 from .strategy_registry import StrategyRegistry
+from src.market_data.fundamentals_cache import FundamentalsCache
 
 
 def get_market_time_now() -> datetime:
@@ -209,12 +216,15 @@ def _run_sell_scan(
         # Convert to format expected by sell scanner: {symbol: (quantity, avg_price)}
         current_positions = {}
         for symbol, position in positions.items():
-            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
-            avg_price = (
-                position.get("avg_entry_price", 0)
-                if isinstance(position, dict)
-                else getattr(position, "avg_entry_price", 0)
-            )
+            # Handle different position formats: dict, tuple (qty, price), or object
+            if isinstance(position, dict):
+                qty = position.get("qty", 0)
+                avg_price = position.get("avg_entry_price", 0)
+            elif isinstance(position, tuple):
+                qty, avg_price = position
+            else:
+                qty = getattr(position, "qty", 0)
+                avg_price = getattr(position, "avg_entry_price", 0)
 
             if qty > 0:  # Only include long positions
                 current_positions[symbol] = (int(qty), float(avg_price))
@@ -843,12 +853,15 @@ def run_paper_mode(
         # Convert positions to format expected by exit advisor: {symbol: (quantity, avg_price)}
         current_positions = {}
         for symbol, position in positions.items():
-            qty = position.get("qty", 0) if isinstance(position, dict) else position.qty
-            avg_price = (
-                position.get("avg_entry_price", 0)
-                if isinstance(position, dict)
-                else getattr(position, "avg_entry_price", 0)
-            )
+            # Handle different position formats: dict, tuple (qty, price), or object
+            if isinstance(position, dict):
+                qty = position.get("qty", 0)
+                avg_price = position.get("avg_entry_price", 0)
+            elif isinstance(position, tuple):
+                qty, avg_price = position
+            else:
+                qty = getattr(position, "qty", 0)
+                avg_price = getattr(position, "avg_entry_price", 0)
 
             if qty > 0:  # Only include long positions
                 current_positions[symbol] = (int(qty), float(avg_price))
@@ -896,11 +909,38 @@ def run_paper_mode(
     # End Exit Advisor Integration
     # ============================================================================
 
-    # Initialize strategies
-    strategies = [
-        TrendStrategy(ma_period=20),
-        MeanReversionStrategy(zscore_threshold=1.0),
-    ]
+    # Initialize strategies dynamically from registry
+    strategies = []
+
+    if registry:
+        # Load strategies from registry (enabled strategies only)
+        for strategy_config in registry.get_enabled_strategies():
+            if strategy_config.strategy_id == "Trend_MA20":
+                strategies.append(TrendStrategy(
+                    ma_period=strategy_config.params.get("sma_slow_period", 20)
+                ))
+            elif strategy_config.strategy_id == "MeanRev_Z1.0":
+                strategies.append(MeanReversionStrategy(
+                    zscore_threshold=strategy_config.params.get("zscore_threshold", 1.0)
+                ))
+            elif strategy_config.strategy_id == "Momentum_MACD":
+                # Momentum strategy uses TrendStrategy with different MA periods
+                strategies.append(TrendStrategy(
+                    ma_period=strategy_config.params.get("sma_slow_period", 26)
+                ))
+            elif strategy_config.strategy_id == "AI_COPILOT_WEIGHTED":
+                strategies.append(AICopilotWeightedStrategy(
+                    per_sector_weights=strategy_config.params.get("per_sector_weights", {}),
+                    execution_enabled=strategy_config.params.get("execution_enabled", False),
+                    rebalance_threshold_pct=strategy_config.params.get("rebalance_threshold_pct", 0.02),
+                    allow_shorts=strategy_config.params.get("allow_shorts", False),
+                ))
+    else:
+        # Fallback to hardcoded strategies if no registry
+        strategies = [
+            TrendStrategy(ma_period=20),
+            MeanReversionStrategy(zscore_threshold=1.0),
+        ]
 
     # Run each strategy and collect intents
     strategy_intents = {}
@@ -928,6 +968,27 @@ def run_paper_mode(
 
         print()
         strategy_intents[strategy.name] = intents
+
+        # Emit AI Co-Pilot tick summary event if applicable
+        if isinstance(strategy, AICopilotWeightedStrategy):
+            # Determine active sectors (sectors with at least one active symbol in universe)
+            active_sectors = []
+            universe_set = set(universe)
+            for sector, ticker_weights in strategy.per_sector_weights.items():
+                if any(ticker in universe_set for ticker in ticker_weights.keys()):
+                    active_sectors.append(sector)
+
+            ledger.append(
+                AICopilotTickSummaryEvent(
+                    strategy_id=strategy.name,
+                    allocated_budget=0.0,  # Unknown at this stage (allocator computes later)
+                    active_sectors=active_sectors,
+                    intents_generated=len(intents),
+                    symbols_targeted=[intent.symbol for intent in intents],
+                    execution_enabled=strategy.execution_enabled,
+                    weights_applied={intent.symbol: intent.conviction for intent in intents},
+                )
+            )
 
         # Emit strategy_intent_created events
         for intent in intents:
@@ -1011,7 +1072,37 @@ def run_paper_mode(
 
     # Execute orders (both buy and sell)
     print("Executing orders...")
-    executor = AlpacaExecutor(broker, config, dry_run=dry_run)
+
+    # Load execution gate config from active mode profile
+    execution_gate_config = None
+    fundamentals_cache = None
+    try:
+        modes_config = load_mode_profiles()
+        active_profile_name, active_profile = get_active_mode_profile(modes_config)
+
+        if "execution_gate" in active_profile:
+            execution_gate_config = ExecutionGateConfig.from_dict(active_profile["execution_gate"])
+            fundamentals_cache = FundamentalsCache()
+            print(f"\nExecution gate ENABLED (mode: {active_profile_name})")
+            print(f"  Market cap range: ${execution_gate_config.min_market_cap_usd:,.0f} - ${execution_gate_config.max_market_cap_usd:,.0f}")
+            print(f"  Price range: ${execution_gate_config.min_price:.2f} - ${execution_gate_config.max_price:.2f}")
+            print(f"  Min liquidity: ${execution_gate_config.min_avg_dollar_volume_20d:,.0f}/day")
+            print()
+        else:
+            print(f"\nExecution gate DISABLED (mode: {active_profile_name} has no gate config)")
+            print()
+    except Exception as e:
+        print(f"\nWarning: Failed to load execution gate config: {e}")
+        print("Continuing without execution gate constraints.")
+        print()
+
+    executor = AlpacaExecutor(
+        broker,
+        config,
+        dry_run=dry_run,
+        execution_gate_config=execution_gate_config,
+        fundamentals_cache=fundamentals_cache,
+    )
     execution_result = executor.reconcile_and_execute(
         merged_target_positions,
         current_prices,
