@@ -4,10 +4,16 @@ import logging
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 from src.app.config import Config
 from src.app.models import OrderSide, OrderType
 from src.broker import Broker
+from src.market_data.fundamentals_cache import FundamentalsCache
+from src.app.execution.tradability_filter import (
+    ExecutionGateConfig,
+    TradabilityGate,
+)
 
 
 @dataclass
@@ -52,7 +58,14 @@ class AlpacaExecutor:
     - max_daily_loss (basic check, full enforcement requires tracking)
     """
 
-    def __init__(self, broker: Broker, config: Config, dry_run: bool = False):
+    def __init__(
+        self,
+        broker: Broker,
+        config: Config,
+        dry_run: bool = False,
+        execution_gate_config: ExecutionGateConfig | None = None,
+        fundamentals_cache: FundamentalsCache | None = None,
+    ):
         """
         Initialize executor.
 
@@ -60,11 +73,23 @@ class AlpacaExecutor:
             broker: Broker instance for order placement
             config: Trading configuration with risk parameters
             dry_run: If True, only print orders without placing
+            execution_gate_config: Optional execution gate configuration (from mode profile)
+            fundamentals_cache: Optional fundamentals cache (created if not provided)
         """
         self.broker = broker
         self.config = config
         self.dry_run = dry_run
         self.logger = logging.getLogger("ai-trader")
+
+        # Initialize execution gate if config provided
+        if execution_gate_config:
+            if fundamentals_cache is None:
+                fundamentals_cache = FundamentalsCache()
+            self.execution_gate = TradabilityGate(execution_gate_config, fundamentals_cache)
+            self.logger.info("Execution gate enabled with tradability filtering")
+        else:
+            self.execution_gate = None
+            self.logger.info("Execution gate disabled (no constraints configured)")
 
     def reconcile_and_execute(
         self,
@@ -368,6 +393,22 @@ class AlpacaExecutor:
                         )
                         self.logger.warning(f"{slice_instruction.symbol}: {reason}")
                         orders_skipped.append((slice_instruction.symbol, reason))
+                        continue
+
+                # Check execution gate (hard tradability filter)
+                if self.execution_gate:
+                    tradability_result = self.execution_gate.check_tradability(
+                        slice_instruction.symbol,
+                        slice_instruction.limit_price or price,
+                    )
+                    if not tradability_result.allowed:
+                        reason = (
+                            f"BLOCKED by execution gate: {tradability_result.message} "
+                            f"(reason: {tradability_result.reason.value if tradability_result.reason else 'unknown'})"
+                        )
+                        self.logger.warning(f"{slice_instruction.symbol}: {reason}")
+                        orders_skipped.append((slice_instruction.symbol, reason))
+                        print(f"  {slice_instruction.symbol}: BLOCKED - {tradability_result.message}")
                         continue
 
                 # Place order (or dry-run)

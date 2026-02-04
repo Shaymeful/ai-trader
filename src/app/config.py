@@ -1,6 +1,8 @@
 """Configuration loader for the trading bot."""
 
+import json
 import os
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -213,6 +215,13 @@ class Config(BaseModel):
     )
     ai_copilot_strategy_critique_max_tokens: int = Field(
         default=900, description="Max output tokens for strategy critique"
+    )
+
+    ai_copilot_universe_ticker_manager_enabled: bool = Field(
+        default=False, description="Enable universe ticker manager (dynamic add/remove recommendations)"
+    )
+    ai_copilot_universe_ticker_manager_max_tokens: int = Field(
+        default=800, description="Max output tokens for universe ticker manager"
     )
 
 
@@ -686,4 +695,132 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "max_output_tokens" in ui_feature:
                     config.ai_copilot_strategy_critique_max_tokens = int(ui_feature["max_output_tokens"])
 
+            # Universe ticker manager feature
+            if "universe_ticker_manager" in ai_copilot:
+                feature = ai_copilot["universe_ticker_manager"]
+                if "enabled" in feature:
+                    config.ai_copilot_universe_ticker_manager_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_universe_ticker_manager_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override universe ticker manager
+            if "universe_ticker_manager" in ui_copilot:
+                ui_feature = ui_copilot["universe_ticker_manager"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_universe_ticker_manager_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_universe_ticker_manager_max_tokens = int(ui_feature["max_output_tokens"])
+
     return config
+
+
+def load_mode_profiles(modes_path: Path | None = None) -> dict[str, Any]:
+    """
+    Load mode profiles from modes.yaml.
+
+    Args:
+        modes_path: Path to modes config file (defaults to config/modes.yaml)
+
+    Returns:
+        Dictionary with profiles and active_profile
+    """
+    if modes_path is None:
+        repo_root = Path(__file__).resolve().parents[2]
+        modes_path = repo_root / "config" / "modes.yaml"
+
+    if not modes_path.exists():
+        # Return default if file doesn't exist
+        return {
+            "profiles": {
+                "normal": {
+                    "description": "Default mode",
+                    "strategies": {},
+                    "universe": {"sectors": {}},
+                    "selector": {},
+                    "ai_copilot": {},
+                }
+            },
+            "active_profile": "normal",
+        }
+
+    with open(modes_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def get_active_mode_profile(modes_config: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """
+    Get the active mode profile from configuration.
+
+    Checks for runtime override in data/mode_override.json first,
+    then falls back to modes.yaml active_profile.
+
+    Args:
+        modes_config: Optional pre-loaded modes config (loads if None)
+
+    Returns:
+        Tuple of (profile_name, profile_dict)
+    """
+    if modes_config is None:
+        modes_config = load_mode_profiles()
+
+    # Check for runtime override
+    override_path = Path("data/mode_override.json")
+    if override_path.exists():
+        try:
+            with open(override_path) as f:
+                override_data = json.load(f)
+                profile_name = override_data.get("active_profile")
+                if profile_name and profile_name in modes_config.get("profiles", {}):
+                    return profile_name, modes_config["profiles"][profile_name]
+        except Exception:
+            pass  # Fall through to default
+
+    # Use active_profile from modes.yaml
+    active_profile_name = modes_config.get("active_profile", "normal")
+    profiles = modes_config.get("profiles", {})
+
+    if active_profile_name in profiles:
+        return active_profile_name, profiles[active_profile_name]
+
+    # Fallback to first profile or empty
+    if profiles:
+        first_name = next(iter(profiles))
+        return first_name, profiles[first_name]
+
+    return "normal", {}
+
+
+def save_mode_override(profile_name: str) -> bool:
+    """
+    Save mode profile override to data/mode_override.json.
+
+    Args:
+        profile_name: Name of profile to activate
+
+    Returns:
+        True if successful, False otherwise
+    """
+    override_path = Path("data/mode_override.json")
+
+    try:
+        override_path.parent.mkdir(parents=True, exist_ok=True)
+
+        data = {
+            "active_profile": profile_name,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+
+        # Atomic write
+        temp_path = override_path.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        temp_path.replace(override_path)
+        return True
+
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger("ai-trader")
+        logger.error(f"Failed to save mode override: {e}")
+        return False

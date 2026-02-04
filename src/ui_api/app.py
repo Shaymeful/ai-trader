@@ -2732,6 +2732,204 @@ def _toggle_copilot_feature(feature_name: str, enabled: bool) -> ChangeResponse:
 
 
 # ============================================================================
+# Mode Switching (Aggressive Tech+Energy Daytrade Mode)
+# ============================================================================
+
+
+class ModeRequest(BaseModel):
+    """Request to switch trading mode profile."""
+
+    profile: Literal["normal", "aggressive_tech_energy"] = Field(
+        ..., description="Mode profile to activate"
+    )
+
+
+class ModeStatusResponse(BaseModel):
+    """Mode status response."""
+
+    active_profile: str
+    available_profiles: list[str]
+    profile_description: str
+    coordinated_settings: dict[str, Any]
+
+
+@app.post("/api/mode", response_model=ChangeResponse)
+async def switch_mode(request: ModeRequest):
+    """
+    Switch trading mode profile.
+
+    This endpoint coordinates changes across:
+    - Strategy enable/weight/params (AI_COPILOT_WEIGHTED)
+    - Universe sector toggles
+    - Selector overrides
+    - AI Co-Pilot feature flags
+
+    Args:
+        request: Mode switch request
+
+    Returns:
+        Change confirmation with pending versions
+    """
+    from src.app.config import load_mode_profiles, save_mode_override
+    from src.app.selector_overrides import save_selector_overrides
+
+    profile_name = request.profile
+
+    # Load mode profiles
+    modes_config = load_mode_profiles()
+    profiles = modes_config.get("profiles", {})
+
+    if profile_name not in profiles:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown profile: {profile_name}. Available: {list(profiles.keys())}"
+        )
+
+    profile = profiles[profile_name]
+
+    # SAFETY: Check if trading is paused
+    pause_flag = Path("state/pause_trading.flag")
+    if pause_flag.exists():
+        return ChangeResponse(
+            success=False,
+            message=f"Trading is paused. Mode switch to '{profile_name}' saved but execution remains disabled.",
+            pending_version=None,
+        )
+
+    # Save mode override
+    if not save_mode_override(profile_name):
+        raise HTTPException(status_code=500, detail="Failed to save mode override")
+
+    pending_versions = []
+
+    # 1. Apply strategy changes
+    strategy_config = profile.get("strategies", {}).get("AI_COPILOT_WEIGHTED", {})
+    if strategy_config and registry:
+        strategy_id = "AI_COPILOT_WEIGHTED"
+
+        # Enable/disable
+        enabled = strategy_config.get("enabled", False)
+        current_strategy = registry.get_strategy(strategy_id)
+        current_enabled = current_strategy.enabled if current_strategy else False
+        if enabled != current_enabled:
+            new_version = registry.stage_change(strategy_id, {"enabled": enabled})
+            if new_version:
+                pending_versions.append(f"strategy_{strategy_id}_enable_v{new_version}")
+
+        # Weight
+        weight = strategy_config.get("weight")
+        if weight is not None:
+            new_version = registry.stage_change(strategy_id, {"weight": weight})
+            if new_version:
+                pending_versions.append(f"strategy_{strategy_id}_weight_v{new_version}")
+
+        # Params (execution_enabled)
+        params = strategy_config.get("params", {})
+        if params:
+            new_version = registry.stage_change(strategy_id, {"params": params})
+            if new_version:
+                pending_versions.append(f"strategy_{strategy_id}_params_v{new_version}")
+
+    # 2. Apply universe sector changes
+    universe_config = profile.get("universe", {}).get("sectors", {})
+    if universe_config and universe_registry:
+        for sector_name, enabled in universe_config.items():
+            # Check current enabled status from sectors dict
+            current_sector = universe_registry.sectors.get(sector_name)
+            current_enabled = current_sector.enabled if current_sector else False
+            if enabled != current_enabled:
+                new_version = universe_registry.stage_change(sector_name, enabled)
+                if new_version:
+                    pending_versions.append(f"universe_{sector_name}_v{new_version}")
+
+    # 3. Apply selector overrides
+    selector_config = profile.get("selector", {})
+    if selector_config:
+        from src.app.selector_overrides import (
+            get_aggressive_selector_overrides,
+            get_normal_selector_overrides,
+        )
+
+        if profile_name == "aggressive_tech_energy":
+            overrides = get_aggressive_selector_overrides()
+        else:
+            overrides = get_normal_selector_overrides()
+
+        # Merge with custom selector config from profile
+        overrides.update(selector_config)
+
+        if not save_selector_overrides(profile_name, overrides):
+            # Log warning but don't fail
+            pass
+
+    # 4. Apply AI Co-Pilot feature flags
+    ai_copilot_config = profile.get("ai_copilot", {})
+    if ai_copilot_config:
+        overrides_path = Path("data/ui_runtime_overrides.json")
+        overrides_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing overrides
+        overrides = {}
+        if overrides_path.exists():
+            try:
+                with open(overrides_path, "r", encoding="utf-8") as f:
+                    overrides = json.load(f)
+            except Exception:
+                overrides = {}
+
+        # Update AI Co-Pilot features
+        if "ai_copilot" not in overrides:
+            overrides["ai_copilot"] = {}
+
+        for feature_name, enabled in ai_copilot_config.items():
+            if feature_name not in overrides["ai_copilot"]:
+                overrides["ai_copilot"][feature_name] = {}
+            overrides["ai_copilot"][feature_name]["enabled"] = enabled
+
+        overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+
+        # Write overrides atomically
+        temp_path = overrides_path.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(overrides, f, indent=2)
+        temp_path.replace(overrides_path)
+
+    return ChangeResponse(
+        success=True,
+        message=f"Mode switched to '{profile_name}'. Changes will take effect on next loop iteration. Profile: {profile.get('description', '')} | Pending versions: {', '.join(pending_versions) if pending_versions else 'none'}",
+        pending_version=len(pending_versions) if pending_versions else None,
+    )
+
+
+@app.get("/api/mode", response_model=ModeStatusResponse)
+async def get_mode_status():
+    """
+    Get current mode status.
+
+    Returns:
+        Current active profile and available profiles
+    """
+    from src.app.config import get_active_mode_profile, load_mode_profiles
+
+    modes_config = load_mode_profiles()
+    profile_name, profile = get_active_mode_profile(modes_config)
+
+    profiles = modes_config.get("profiles", {})
+
+    return ModeStatusResponse(
+        active_profile=profile_name,
+        available_profiles=list(profiles.keys()),
+        profile_description=profile.get("description", ""),
+        coordinated_settings={
+            "strategies": profile.get("strategies", {}),
+            "universe": profile.get("universe", {}),
+            "selector": profile.get("selector", {}),
+            "ai_copilot": profile.get("ai_copilot", {}),
+            "execution_gate": profile.get("execution_gate", {}),
+        },
+    )
+
+
+# ============================================================================
 # HTML Dashboard (Phase 3)
 # ============================================================================
 

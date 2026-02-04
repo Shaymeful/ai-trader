@@ -1,0 +1,129 @@
+# Trading Mode Profiles
+# Each profile defines coordinated settings across strategies, universe, selector, and AI features
+#
+# Design: Future-proof for adding more profiles (e.g., conservative, swing_trade, etc.)
+
+profiles:
+  # Default balanced trading mode
+  normal:
+    description: "Balanced trading with standard risk controls and full AI features"
+
+    # Strategy configuration
+    strategies:
+      AI_COPILOT_WEIGHTED:
+        enabled: false
+        weight: 0.10
+        params:
+          execution_enabled: false
+
+    # Universe sector enables
+    universe:
+      sectors:
+        core_index: true       # SPY, QQQ
+        mega_cap_tech: true    # AAPL, MSFT, NVDA, etc.
+        us_sector_etfs: true   # XLF, XLE, XLV
+        automation: false
+
+    # Selector (candidate engine) settings
+    selector:
+      candidates_max_count: 40
+      candidates_min_confidence: 0.65
+      duplicate_suppression_minutes: 30
+      ttl_minutes_buy: 180
+      ttl_minutes_sell: 120
+      max_candidates_per_run: 15
+
+    # AI Co-Pilot feature toggles
+    ai_copilot:
+      trade_rationale: true
+      daily_journal: true
+      strategy_critique: true
+      universe_ticker_manager: false
+
+  # Aggressive intraday tech/energy focus
+  aggressive_tech_energy:
+    description: "Aggressive tech+energy daytrade with dynamic ticker management and reduced noise"
+
+    # Strategy configuration
+    strategies:
+      AI_COPILOT_WEIGHTED:
+        enabled: true
+        weight: 0.35  # Higher allocation for aggressive mode
+        params:
+          execution_enabled: true  # Enable execution (still respects global guardrails)
+
+    # Universe sector enables
+    universe:
+      sectors:
+        core_index: false      # Disable SPY/QQQ to reduce noise
+        mega_cap_tech: true    # Focus on tech
+        us_sector_etfs: true   # Includes XLE for energy
+        automation: false
+
+    # Selector (candidate engine) settings - more aggressive
+    selector:
+      candidates_max_count: 80
+      candidates_min_confidence: 0.52  # Lower threshold for more candidates
+      duplicate_suppression_minutes: 12  # Allow faster re-evaluation
+      ttl_minutes_buy: 90      # Shorter TTL for daytrade
+      ttl_minutes_sell: 60
+      max_candidates_per_run: 25  # More candidates per run
+
+    # AI Co-Pilot feature toggles - redirect thinking power
+    ai_copilot:
+      trade_rationale: true         # Keep for trade justification
+      daily_journal: false          # Disable to save tokens
+      strategy_critique: false      # Disable to save tokens
+      universe_ticker_manager: true # Enable dynamic ticker management
+
+  # Small/mid cap swing trading mode
+  small_cap_swing:
+    description: "Small/mid cap swing trading with market cap constraints and longer hold periods"
+
+    # Strategy configuration
+    strategies:
+      AI_COPILOT_WEIGHTED:
+        enabled: true
+        weight: 0.50  # Higher allocation for focused swing trading
+        params:
+          execution_enabled: true  # Enable execution (respects global guardrails + execution gate)
+
+    # Universe sector enables - disable mega caps, enable all others
+    universe:
+      sectors:
+        core_index: false       # Disable SPY/QQQ (mega caps)
+        mega_cap_tech: false    # Disable AAPL/MSFT/NVDA (mega caps)
+        us_sector_etfs: false   # Disable sector ETFs (not small caps)
+        automation: true        # Enable automation sector (if has small caps)
+
+    # Selector (candidate engine) settings - swing trading profile
+    selector:
+      candidates_max_count: 60            # Moderate candidate count
+      candidates_min_confidence: 0.55     # Lower threshold for more opportunities
+      duplicate_suppression_minutes: 30   # Standard for swing
+      ttl_minutes_buy: 720                # 12 hours - longer for swing setups
+      ttl_minutes_sell: 480               # 8 hours - longer hold consideration
+      max_candidates_per_run: 20          # More candidates to find small caps
+
+    # AI Co-Pilot feature toggles - focus on ticker discovery and swing setups
+    ai_copilot:
+      trade_rationale: true               # Keep for swing trade justification
+      daily_journal: false                # Disable to save tokens
+      strategy_critique: false            # Disable to save tokens
+      universe_ticker_manager: true       # Enable for small cap discovery
+
+    # Execution gate - HARD constraints for small/mid cap targeting
+    execution_gate:
+      min_market_cap_usd: 300000000       # $300M minimum (small cap floor)
+      max_market_cap_usd: 10000000000     # $10B maximum (exclude mega caps)
+      min_price: 3.00                     # Avoid penny stocks
+      max_price: 80.00                    # Reasonable upper bound for small caps
+      min_avg_dollar_volume_20d: 5000000  # $5M min daily volume (liquidity floor)
+      max_spread_bps: 100                 # 1.00% max spread (allow wider for small caps)
+      require_fundamentals: false         # Don't block if data unavailable
+      strict_mode: true                   # Hard block (not advisory)
+      exclude_symbols: []                 # Ban list (empty by default)
+      allow_symbols: []                   # Allowlist override (empty by default)
+
+# Active profile (can be overridden at runtime)
+active_profile: "normal"

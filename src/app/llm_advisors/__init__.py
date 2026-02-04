@@ -20,6 +20,11 @@ from src.app.llm_advisors.trade_rationale import (
     enrich_candidates_with_rationale,
     generate_trade_rationale,
 )
+from src.app.llm_advisors.universe_ticker_manager import (
+    TickerAction,
+    TickerManagerRecommendation,
+    UniverseTickerManager,
+)
 
 __all__ = [
     "CoPilotClient",
@@ -33,4 +38,7 @@ __all__ = [
     "StatusSnapshot",
     "load_latest_status",
     "write_run_summary",
+    "UniverseTickerManager",
+    "TickerManagerRecommendation",
+    "TickerAction",
 ]

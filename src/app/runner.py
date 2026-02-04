@@ -35,16 +35,23 @@ from src.broker import AlpacaBroker, MockBroker
 
 from .allocator import Allocator
 from .candidates.store import get_tradeable_candidates, load_candidates
-from .config import load_config_with_yaml, validate_alpaca_credentials
+from .config import (
+    get_active_mode_profile,
+    load_config_with_yaml,
+    load_mode_profiles,
+    validate_alpaca_credentials,
+)
 from .data_providers import MarketDataProvider
 from .data_providers.hourly_provider import HourlyMarketDataProvider, MockMarketDataProvider
 from .decision_logger import DecisionLogger, TradingDecision, create_decision_from_intent
 from .execution import AlpacaExecutor
+from .execution.tradability_filter import ExecutionGateConfig
 from .exit_advisor import ExitAdvisor
 from .ledger import AICopilotTickSummaryEvent, CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
 from .sell_scanner import SellScanner, SellSignal
 from .strategies import AICopilotWeightedStrategy, MeanReversionStrategy, TrendStrategy
 from .strategy_registry import StrategyRegistry
+from src.market_data.fundamentals_cache import FundamentalsCache
 
 
 def get_market_time_now() -> datetime:
@@ -1065,7 +1072,37 @@ def run_paper_mode(
 
     # Execute orders (both buy and sell)
     print("Executing orders...")
-    executor = AlpacaExecutor(broker, config, dry_run=dry_run)
+
+    # Load execution gate config from active mode profile
+    execution_gate_config = None
+    fundamentals_cache = None
+    try:
+        modes_config = load_mode_profiles()
+        active_profile_name, active_profile = get_active_mode_profile(modes_config)
+
+        if "execution_gate" in active_profile:
+            execution_gate_config = ExecutionGateConfig.from_dict(active_profile["execution_gate"])
+            fundamentals_cache = FundamentalsCache()
+            print(f"\nExecution gate ENABLED (mode: {active_profile_name})")
+            print(f"  Market cap range: ${execution_gate_config.min_market_cap_usd:,.0f} - ${execution_gate_config.max_market_cap_usd:,.0f}")
+            print(f"  Price range: ${execution_gate_config.min_price:.2f} - ${execution_gate_config.max_price:.2f}")
+            print(f"  Min liquidity: ${execution_gate_config.min_avg_dollar_volume_20d:,.0f}/day")
+            print()
+        else:
+            print(f"\nExecution gate DISABLED (mode: {active_profile_name} has no gate config)")
+            print()
+    except Exception as e:
+        print(f"\nWarning: Failed to load execution gate config: {e}")
+        print("Continuing without execution gate constraints.")
+        print()
+
+    executor = AlpacaExecutor(
+        broker,
+        config,
+        dry_run=dry_run,
+        execution_gate_config=execution_gate_config,
+        fundamentals_cache=fundamentals_cache,
+    )
     execution_result = executor.reconcile_and_execute(
         merged_target_positions,
         current_prices,

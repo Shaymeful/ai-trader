@@ -1660,6 +1660,153 @@
         .btn-view-edit:hover {
             background: #2563eb;
         }
+
+        /* Mode Selector Panel */
+        .mode-selector-panel {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .mode-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .mode-badge {
+            background: #3b82f6;
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .mode-badge.aggressive {
+            background: #f59e0b;
+        }
+
+        .mode-badge.small-cap {
+            background: #8b5cf6;
+        }
+
+        .mode-description {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            margin: 0.75rem 0 1rem 0;
+        }
+
+        .mode-controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .mode-button {
+            background: #334155;
+            border: 2px solid #475569;
+            border-radius: 8px;
+            padding: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+        }
+
+        .mode-button:hover {
+            border-color: #3b82f6;
+            background: #3b4a5e;
+        }
+
+        .mode-button.active {
+            border-color: #3b82f6;
+            background: #2d3748;
+        }
+
+        .mode-button-title {
+            color: #f1f5f9;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .mode-button-desc {
+            color: #94a3b8;
+            font-size: 0.875rem;
+        }
+
+        .mode-changes {
+            background: #0f172a;
+            border-radius: 6px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .mode-changes ul {
+            margin: 0.5rem 0 0 1.5rem;
+            color: #94a3b8;
+            font-size: 0.875rem;
+        }
+
+        .mode-changes li {
+            margin-bottom: 0.25rem;
+        }
+
+        /* Execution Filters Panel */
+        .execution-filters-panel {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+
+        .filters-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .filter-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .filter-label {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .filter-value {
+            color: #f1f5f9;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .filter-note {
+            background: #0f172a;
+            border-left: 3px solid #3b82f6;
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+            margin-top: 1rem;
+            font-size: 0.875rem;
+            color: #cbd5e1;
+        }
+
+        .badge-success {
+            background: #10b981;
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
 </head>
@@ -1717,6 +1864,64 @@
                     <span class="toggle-slider"></span>
                 </label>
                 <label for="pause-trading-toggle">Pause Trading</label>
+            </div>
+        </div>
+
+        <!-- Trading Mode Selector -->
+        <div class="mode-selector-panel">
+            <div class="section-header">
+                <h2>Trading Mode</h2>
+                <div class="mode-status" id="mode-status">
+                    <span class="mode-badge" id="mode-badge">Normal</span>
+                </div>
+            </div>
+            <p class="mode-description" id="mode-description">Balanced trading with standard risk controls and full AI features</p>
+            <div class="mode-controls">
+                <button class="mode-button" id="mode-normal" onclick="switchMode('normal')">
+                    <div class="mode-button-title">Normal</div>
+                    <div class="mode-button-desc">Balanced risk, full AI features</div>
+                </button>
+                <button class="mode-button" id="mode-aggressive" onclick="switchMode('aggressive_tech_energy')">
+                    <div class="mode-button-title">Aggressive Tech+Energy Daytrade</div>
+                    <div class="mode-button-desc">Higher risk, tech/energy focus, dynamic tickers</div>
+                </button>
+                <button class="mode-button" id="mode-small-cap" onclick="switchMode('small_cap_swing')">
+                    <div class="mode-button-title">Small Cap Swing</div>
+                    <div class="mode-button-desc">Small/mid caps only, swing trading, 12hr+ holds</div>
+                </button>
+            </div>
+            <div class="mode-changes" id="mode-changes" style="display: none;">
+                <strong>Coordinated Changes:</strong>
+                <ul id="mode-changes-list"></ul>
+            </div>
+        </div>
+
+        <!-- Execution Gate Filters (only shown when active) -->
+        <div class="execution-filters-panel" id="execution-filters-panel" style="display: none;">
+            <div class="section-header">
+                <h2>Execution Gate Filters</h2>
+                <span class="badge-success">ACTIVE</span>
+            </div>
+            <div class="filters-grid">
+                <div class="filter-item">
+                    <div class="filter-label">Market Cap Range</div>
+                    <div class="filter-value" id="filter-market-cap">$0 - $0</div>
+                </div>
+                <div class="filter-item">
+                    <div class="filter-label">Price Range</div>
+                    <div class="filter-value" id="filter-price">$0.00 - $0.00</div>
+                </div>
+                <div class="filter-item">
+                    <div class="filter-label">Min Daily Volume</div>
+                    <div class="filter-value" id="filter-volume">$0</div>
+                </div>
+                <div class="filter-item">
+                    <div class="filter-label">Max Spread</div>
+                    <div class="filter-value" id="filter-spread">0 bps</div>
+                </div>
+            </div>
+            <div class="filter-note">
+                <strong>Note:</strong> These constraints apply to ALL orders regardless of strategy or universe configuration.
             </div>
         </div>
 
@@ -2917,6 +3122,158 @@
                     triggerBtn.textContent = '⚡ Trigger Now';
                 }, 5000);
             }
+        }
+
+        // Mode Switching Functions
+        async function switchMode(profileName) {
+            try {
+                const response = await fetch('/api/mode', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({profile: profileName})
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Show success message
+                showNotification(`Mode switched to '${profileName}'. Changes will take effect on next loop iteration.`, 'success');
+
+                // Update UI
+                await loadModeStatus();
+
+                // Show coordinated changes
+                if (data.details && data.details.pending_versions) {
+                    const changesList = document.getElementById('mode-changes-list');
+                    const changesContainer = document.getElementById('mode-changes');
+
+                    changesList.innerHTML = '';
+                    data.details.pending_versions.forEach(v => {
+                        const li = document.createElement('li');
+                        li.textContent = v;
+                        changesList.appendChild(li);
+                    });
+
+                    if (data.details.pending_versions.length > 0) {
+                        changesContainer.style.display = 'block';
+                        setTimeout(() => {
+                            changesContainer.style.display = 'none';
+                        }, 10000);
+                    }
+                }
+
+            } catch (error) {
+                showNotification(`Failed to switch mode: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadModeStatus() {
+            try {
+                const response = await fetch('/api/mode');
+                const data = await response.json();
+
+                // Update badge
+                const badge = document.getElementById('mode-badge');
+                let badgeText = 'Normal';
+                if (data.active_profile === 'aggressive_tech_energy') {
+                    badgeText = 'Aggressive';
+                } else if (data.active_profile === 'small_cap_swing') {
+                    badgeText = 'Small Cap Swing';
+                }
+                badge.textContent = badgeText;
+                badge.className = 'mode-badge';
+                if (data.active_profile === 'aggressive_tech_energy') {
+                    badge.classList.add('aggressive');
+                } else if (data.active_profile === 'small_cap_swing') {
+                    badge.classList.add('small-cap');
+                }
+
+                // Update description
+                document.getElementById('mode-description').textContent = data.profile_description;
+
+                // Update button states
+                document.getElementById('mode-normal').classList.toggle('active', data.active_profile === 'normal');
+                document.getElementById('mode-aggressive').classList.toggle('active', data.active_profile === 'aggressive_tech_energy');
+                document.getElementById('mode-small-cap').classList.toggle('active', data.active_profile === 'small_cap_swing');
+
+                // Load execution gate filters if available
+                await loadExecutionGateFilters(data.active_profile);
+
+            } catch (error) {
+                console.error('Failed to load mode status:', error);
+            }
+        }
+
+        async function loadExecutionGateFilters(activeProfile) {
+            try {
+                const response = await fetch('/api/mode');
+                const data = await response.json();
+
+                // Check if execution_gate config exists in coordinated_settings
+                const executionGate = data.coordinated_settings?.execution_gate;
+
+                const filtersPanel = document.getElementById('execution-filters-panel');
+
+                if (executionGate && executionGate.min_market_cap_usd) {
+                    // Show filters panel
+                    filtersPanel.style.display = 'block';
+
+                    // Format market cap
+                    const minCap = executionGate.min_market_cap_usd || 0;
+                    const maxCap = executionGate.max_market_cap_usd || 0;
+                    const minCapStr = minCap >= 1e9 ? `$${(minCap / 1e9).toFixed(1)}B` : `$${(minCap / 1e6).toFixed(0)}M`;
+                    const maxCapStr = maxCap >= 1e9 ? `$${(maxCap / 1e9).toFixed(1)}B` : `$${(maxCap / 1e6).toFixed(0)}M`;
+                    document.getElementById('filter-market-cap').textContent = `${minCapStr} - ${maxCapStr}`;
+
+                    // Format price
+                    const minPrice = executionGate.min_price || 0;
+                    const maxPrice = executionGate.max_price || 0;
+                    document.getElementById('filter-price').textContent = `$${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)}`;
+
+                    // Format volume
+                    const minVolume = executionGate.min_avg_dollar_volume_20d || 0;
+                    const volumeStr = minVolume >= 1e6 ? `$${(minVolume / 1e6).toFixed(1)}M` : `$${(minVolume / 1e3).toFixed(0)}K`;
+                    document.getElementById('filter-volume').textContent = `${volumeStr}/day`;
+
+                    // Format spread
+                    const maxSpread = executionGate.max_spread_bps || 0;
+                    document.getElementById('filter-spread').textContent = `${maxSpread.toFixed(0)} bps`;
+                } else {
+                    // Hide filters panel
+                    filtersPanel.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to load execution gate filters:', error);
+            }
+        }
+
+        function showNotification(message, type) {
+            // Simple notification (can be enhanced with a toast library)
+            const color = type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#f59e0b';
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: ${color};
+                color: white;
+                padding: 1rem 1.5rem;
+                border-radius: 8px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+                z-index: 10000;
+                max-width: 400px;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.transition = 'opacity 0.3s';
+                notification.style.opacity = '0';
+                setTimeout(() => notification.remove(), 300);
+            }, 5000);
         }
 
         async function loadDashboard() {
@@ -4585,7 +4942,11 @@
 
         // Initial load
         loadDashboard();
+        loadModeStatus();
         loadAICoPilot();
+
+        // Auto-refresh mode status every 30 seconds
+        setInterval(loadModeStatus, 30000);
     </script>
 </body>
 </html>
