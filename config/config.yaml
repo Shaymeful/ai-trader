@@ -90,11 +90,11 @@ llm:
 
   # Constituent change proposals
   enable_constituent_proposals: true
-  allow_constituent_removals: false
+  allow_constituent_removals: true  # Enable removals for dynamic ticker management
   max_add_per_run: 3  # Increased from 2 to allow more new candidates
-  max_remove_per_run: 1
+  max_remove_per_run: 1  # Keep small for safety (only remove 1 per run)
   min_confidence_add: 0.70  # Lowered from 0.80 to allow more adds
-  min_confidence_remove: 0.85
+  min_confidence_remove: 0.85  # Keep high for safety (only remove high-confidence)
   cooldown_days_per_ticker: 5  # Reduced from 7 to allow faster re-evaluation
   ticker_blacklist: []
 
@@ -133,3 +133,7 @@ ai_copilot:
   strategy_critique:
     enabled: true
     max_output_tokens: 900  # Per-call token limit for strategy critique
+
+  universe_ticker_manager:
+    enabled: false  # Dynamic ticker add/remove recommendations (enabled in Aggressive mode)
+    max_output_tokens: 800  # Per-call token limit for universe ticker manager
