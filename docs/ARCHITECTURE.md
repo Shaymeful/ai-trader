@@ -6235,21 +6235,30 @@ class RuntimeState(BaseModel):
    save_runtime_state(runtime_state)
    ```
 
-4. **Iteration End - Error (line 1098-1105):**
+4. **Iteration End - Always (finally block):**
    ```python
-   # Same timing update even on error
-   loop_end_utc = datetime.now(UTC)
-   runtime_state.last_loop_end = loop_end_utc.isoformat()
-   next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
-   runtime_state.next_loop_at = next_run_utc.isoformat()
-   save_runtime_state(runtime_state)
+   finally:
+       # CRITICAL: ALWAYS update loop timing state, even if iteration failed unexpectedly
+       loop_end_utc = datetime.now(UTC)
+       runtime_state.last_loop_end = loop_end_utc.isoformat()
+       next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
+       runtime_state.next_loop_at = next_run_utc.isoformat()
+
+       # Preserve loop_interval_seconds from file (may have been changed by UI)
+       preserved_state = load_runtime_state()
+       runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
+
+       # Save with error handling (don't crash if save fails)
+       save_runtime_state(runtime_state)
    ```
 
 **Behavior:**
-- State updates at start and end of each iteration (success or error)
+- State updates ALWAYS happen via finally block (even on unexpected failures)
 - Next loop time calculated as `loop_end + sleep_seconds`
 - All timestamps stored in UTC for consistency
 - Atomic file writes prevent corruption
+- Error handling in finally block prevents cascading failures
+- Preserves loop_interval_seconds from disk (allows UI to change interval)
 
 ### API Endpoint
 

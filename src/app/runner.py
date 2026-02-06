@@ -787,7 +787,20 @@ def run_paper_mode(
 
     # Fetch market data
     print("Fetching market data...")
-    market_data = provider.get_market_data(universe)
+    try:
+        market_data = provider.get_market_data(universe)
+    except Exception as e:
+        print(f"ERROR: Failed to fetch market data: {e}")
+        print("Skipping this iteration - will retry next cycle")
+        traceback.print_exc()
+        return RunResult(
+            mode="paper",
+            dry_run=dry_run,
+            orders_placed=0,
+            orders_skipped=0,
+            strategy_weights={},
+            timestamp=datetime.now(UTC).isoformat(),
+        )
 
     # Check for symbols with insufficient data
     missing_symbols = [s for s in universe if s not in market_data]
@@ -797,6 +810,21 @@ def run_paper_mode(
         )
         print("These symbols will be skipped in strategy generation.")
         print()
+
+    # If ALL symbols are missing data, log warning but continue (no-op iteration)
+    if not market_data:
+        print("WARNING: No market data available for any symbol in universe")
+        print("This may be due to market hours, API issues, or symbol availability")
+        print("Skipping this iteration - will retry next cycle")
+        print()
+        return RunResult(
+            mode="paper",
+            dry_run=dry_run,
+            orders_placed=0,
+            orders_skipped=0,
+            strategy_weights={},
+            timestamp=datetime.now(UTC).isoformat(),
+        )
 
     # Extract prices for allocator
     current_prices = {symbol: Decimal(str(data["price"])) for symbol, data in market_data.items()}
@@ -1351,11 +1379,13 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         preserved_state = load_runtime_state()
         runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
         save_runtime_state(runtime_state)
+        print(f"DEBUG: Saved loop start time: {runtime_state.last_loop_start}")
 
         print(f"\n{'=' * 80}")
         print(f"LOOP ITERATION {iteration} - {run_timestamp}")
         print(f"{'=' * 80}\n")
 
+        iteration_success = False
         try:
             # Auto-generate advisor proposals if interval elapsed (best-effort)
             if config.llm_auto_generate_enabled and universe_registry is not None:
@@ -1530,16 +1560,8 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             with open(status_log, "a") as f:
                 f.write(status_line)
 
-            # Record loop iteration end time and calculate next run
-            loop_end_utc = datetime.now(UTC)
-            runtime_state.last_loop_end = loop_end_utc.isoformat()
-            # Calculate next run time (loop_end + sleep_seconds)
-            next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
-            runtime_state.next_loop_at = next_run_utc.isoformat()
-            # Preserve loop_interval_seconds from file (may have been changed by UI)
-            preserved_state = load_runtime_state()
-            runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
-            save_runtime_state(runtime_state)
+            # Mark iteration as successful
+            iteration_success = True
 
             # Capture equity snapshot (best-effort)
             if not dry_run and config.alpaca_api_key:
@@ -1597,23 +1619,37 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             with open(status_log, "a") as f:
                 f.write(status_line)
 
-            # Record loop iteration end time even on error
-            loop_end_utc = datetime.now(UTC)
-            runtime_state.last_loop_end = loop_end_utc.isoformat()
-            # Calculate next run time (loop_end + sleep_seconds)
-            next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
-            runtime_state.next_loop_at = next_run_utc.isoformat()
-            # Preserve loop_interval_seconds from file (may have been changed by UI)
-            preserved_state = load_runtime_state()
-            runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
-            save_runtime_state(runtime_state)
-
             print(f"\n{'=' * 80}")
             print(f"ERROR IN ITERATION {iteration}")
             print(f"Exception: {type(e).__name__}: {str(e)}")
             print(f"Error logged to: {error_log}")
             print("Continuing to next iteration...")
             print(f"{'=' * 80}\n")
+
+        finally:
+            # CRITICAL: ALWAYS update loop timing state, even if iteration failed unexpectedly
+            # This ensures dashboard shows correct "next run" time and prevents "overdue" status
+            loop_end_utc = datetime.now(UTC)
+            runtime_state.last_loop_end = loop_end_utc.isoformat()
+
+            # Calculate next run time (loop_end + current sleep_seconds)
+            next_run_utc = loop_end_utc + timedelta(seconds=sleep_seconds)
+            runtime_state.next_loop_at = next_run_utc.isoformat()
+
+            # Preserve loop_interval_seconds from file (may have been changed by UI)
+            try:
+                preserved_state = load_runtime_state()
+                runtime_state.loop_interval_seconds = preserved_state.loop_interval_seconds
+            except Exception as e:
+                print(f"WARNING: Failed to reload loop_interval_seconds: {e}")
+
+            # Save state (fail-safe: catch and log errors, don't crash)
+            try:
+                save_runtime_state(runtime_state)
+                print(f"DEBUG: Saved loop state - next_loop_at: {runtime_state.next_loop_at}")
+            except Exception as e:
+                print(f"CRITICAL: Failed to save runtime state: {e}")
+                print("Loop timing may be incorrect in dashboard until next successful save")
 
         # Hot-reload loop interval from runtime state (allows changing interval without restart)
         try:
