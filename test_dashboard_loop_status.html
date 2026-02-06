@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Loop Status Test</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #0f172a; color: #f1f5f9; }
+        .status-box { background: #1e293b; padding: 20px; border-radius: 8px; margin: 10px 0; }
+        .success { color: #10b981; }
+        .error { color: #ef4444; }
+        .info { color: #3b82f6; }
+        pre { background: #0f172a; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Dashboard Loop Status Test</h1>
+
+    <div class="status-box">
+        <h2>Test Results:</h2>
+        <div id="results">Testing...</div>
+    </div>
+
+    <div class="status-box">
+        <h2>Runtime Data:</h2>
+        <pre id="data">Loading...</pre>
+    </div>
+
+    <script>
+        async function testLoopStatus() {
+            const results = document.getElementById('results');
+            const dataEl = document.getElementById('data');
+
+            try {
+                // Test /runtime endpoint
+                results.innerHTML = '<p class="info">Fetching /runtime endpoint...</p>';
+
+                const response = await fetch('http://localhost:8000/runtime');
+
+                if (!response.ok) {
+                    results.innerHTML = `<p class="error">❌ ERROR: ${response.status} ${response.statusText}</p>`;
+                    return;
+                }
+
+                const data = await response.json();
+
+                // Display success
+                results.innerHTML = `
+                    <p class="success">✅ Runtime endpoint is working!</p>
+                    <p class="info">Loop Interval: ${data.loop_interval_seconds} seconds (${(data.loop_interval_seconds / 3600).toFixed(1)}h)</p>
+                    <p class="info">Last Loop: ${data.last_loop_end ? new Date(data.last_loop_end).toLocaleString() : 'N/A'}</p>
+                    <p class="info">Next Loop: ${data.next_loop_at ? new Date(data.next_loop_at).toLocaleString() : 'N/A'}</p>
+                    <p class="info">Countdown: ${formatCountdown(data.seconds_until_next_loop)}</p>
+                `;
+
+                // Display raw data
+                dataEl.textContent = JSON.stringify(data, null, 2);
+
+            } catch (error) {
+                results.innerHTML = `<p class="error">❌ ERROR: ${error.message}</p>`;
+                dataEl.textContent = error.stack;
+            }
+        }
+
+        function formatCountdown(seconds) {
+            if (!seconds) return 'N/A';
+            if (seconds <= 0) return 'Overdue';
+
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+
+            if (hours > 0) return `${hours}h ${mins}m`;
+            if (mins > 0) return `${mins}m ${secs}s`;
+            return `${secs}s`;
+        }
+
+        // Run test on load
+        testLoopStatus();
+
+        // Refresh every 5 seconds
+        setInterval(testLoopStatus, 5000);
+    </script>
+</body>
+</html>

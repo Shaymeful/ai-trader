@@ -1,0 +1,24 @@
+{
+  "profile": "aggressive_tech_energy",
+  "overrides": {
+    "defaults": {
+      "min_confidence": 0.52,
+      "ttl_minutes_buy": 90,
+      "ttl_minutes_sell": 60,
+      "ttl_minutes_watch": 120
+    },
+    "safety": {
+      "max_candidates_per_run": 25
+    },
+    "screening": {
+      "duplicate_suppression_minutes": 12
+    },
+    "candidates_min_confidence": 0.52,
+    "candidates_max_count": 80,
+    "duplicate_suppression_minutes": 12,
+    "ttl_minutes_buy": 90,
+    "ttl_minutes_sell": 60,
+    "max_candidates_per_run": 25
+  },
+  "updated_at": "2026-02-06T17:16:13.045162+00:00"
+}

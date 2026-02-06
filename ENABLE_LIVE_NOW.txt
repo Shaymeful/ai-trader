@@ -1,0 +1,75 @@
+==========================================
+ENABLE LIVE PAPER TRADING - Quick Guide
+==========================================
+
+The system is ready to enable live paper trading!
+
+IMPORTANT: This will place REAL orders on your Alpaca paper account.
+(Paper account uses simulated money, but orders are real and tracked by Alpaca)
+
+==========================================
+STEP 1: Run as Administrator
+==========================================
+
+1. Find this file in Windows Explorer:
+   C:\dev\ai-trader\enable_live_paper_trading.cmd
+
+2. RIGHT-CLICK the file
+
+3. Select "Run as administrator"
+
+4. Click "Yes" when Windows asks for permission
+
+5. Press any key when prompted
+
+==========================================
+WHAT HAPPENS
+==========================================
+
+✅ Current DRY-RUN mode will stop
+✅ Task updates to LIVE mode (no -DryRun flag)
+✅ Loop restarts automatically
+✅ Next iteration will place REAL orders on Alpaca
+
+==========================================
+VERIFY IT WORKED
+==========================================
+
+After running the script, check:
+
+1. Task configuration:
+   schtasks /query /tn AITrader-Loop /fo LIST /v | findstr PowerShell
+
+   Should show:
+   ... -Mode paper -SleepSeconds 3600 -LogToFile
+   (notice: NO -DryRun flag)
+
+2. Dashboard at http://localhost:8000
+   - Check "Data Source" shows "alpaca" instead of "mock"
+
+3. Next loop iteration will show actual Alpaca API calls
+
+==========================================
+ALTERNATIVE: Manual Method
+==========================================
+
+If you prefer to do it manually:
+
+1. Open Task Scheduler (taskschd.msc)
+2. Find "AITrader-Loop"
+3. Right-click → Properties
+4. Go to Actions tab
+5. Edit the action
+6. In Arguments field, remove "-DryRun"
+7. Should read: -Mode paper -SleepSeconds 3600 -LogToFile
+8. Click OK to save
+
+==========================================
+TO REVERT LATER
+==========================================
+
+To go back to DRY-RUN mode:
+1. Right-click: revert_to_dryrun.cmd
+2. Select "Run as administrator"
+
+==========================================

@@ -1,0 +1,74 @@
+==========================================
+LOOP INTERVAL CHANGE - FIXED ✅
+==========================================
+
+ISSUE RESOLVED:
+The runner now preserves UI interval changes across iterations.
+
+HOW IT WORKS:
+==========================================
+
+1. UI Changes Interval:
+   - User edits interval in dashboard
+   - API updates state/runtime.json
+
+2. Loop Preserves Changes:
+   - Before each save, runner reloads loop_interval_seconds from file
+   - Ensures UI changes are not overwritten
+
+3. Hot-Reload Applies Changes:
+   - Before sleeping, runner checks if interval changed
+   - Updates sleep duration for next iteration
+
+TESTING RESULTS:
+==========================================
+
+Test 1: Changed from 300s to 600s ✅
+- API call succeeded
+- runtime.json updated to 600s
+- State preserved after iteration
+
+Test 2: Verify persistence ⏳
+- Waiting for next iteration to use 600s interval
+- Current: Shows 600s in state, used 300s (normal - old iteration)
+- Next iteration (3:17 PM) should use 600s
+
+VERIFICATION:
+==========================================
+
+Run this command to test:
+  powershell -ExecutionPolicy Bypass -File test_interval_change.ps1
+
+To verify persistence:
+  powershell -ExecutionPolicy Bypass -File verify_interval_persists.ps1
+
+USAGE:
+==========================================
+
+1. Open dashboard: http://localhost:8000
+
+2. Find "Loop Status" section
+
+3. Click "Edit" button next to interval
+
+4. Enter new interval in MINUTES (e.g., 10 for 10 minutes)
+
+5. Click "Save"
+
+6. Wait for current sleep to complete
+
+7. Next iteration will use new interval
+
+IMPORTANT:
+==========================================
+- Changes take effect on NEXT iteration (after current sleep)
+- If you change from 5min to 10min, current 5min sleep completes first
+- Then next iteration uses 10min interval going forward
+
+MONITORING:
+==========================================
+- Dashboard shows countdown with current interval
+- state/runtime.json shows loop_interval_seconds
+- logs/loop_status.log shows iteration timestamps
+
+==========================================

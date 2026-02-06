@@ -1,0 +1,33 @@
+================================================================================
+RUNNER STARTUP DIAGNOSTICS
+================================================================================
+PID:         218292
+Parent PID:  219952
+Interpreter: C:\dev\ai-trader\.venv\Scripts\python.exe
+Arguments:   C:\dev\ai-trader\src\app\runner.py --mode paper --dry-run
+Market time: 2026-01-06 17:32:55 EST
+
+WARNING: Parent process is python.exe running runner
+  Parent PID: 219952
+  Parent Cmd: CommandLine=C:\dev\ai-trader\.venv\Scripts\python.exe -m src.app.runner --mode p...
+  This indicates Windows python->python re-exec
+  This may be normal Windows python->python re-exec behavior
+  Continuing normally; single-instance guard will block true duplicates
+================================================================================
+
+================================================================================
+SINGLE INSTANCE GUARD: Another instance is already running
+================================================================================
+Mutex: Local\AI_TRADER__PAPER_DRYRUN_LOOP
+Lock file: logs\paper_dryrun.lock
+
+This instance (blocked):
+  PID:         218292
+  Interpreter: C:\dev\ai-trader\.venv\Scripts\python.exe
+
+  Re-exec child: Parent PID 219952 is python.exe running runner
+  This is expected Windows python->python re-exec behavior
+
+Another runner is already active. This instance will exit.
+To force-stop all runners, kill the existing process first.
+================================================================================

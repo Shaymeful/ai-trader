@@ -1,0 +1,17 @@
+{
+  "ai_copilot": {
+    "updated_at": "2026-02-06T17:16:13.050766Z",
+    "trade_rationale": {
+      "enabled": true
+    },
+    "daily_journal": {
+      "enabled": false
+    },
+    "strategy_critique": {
+      "enabled": false
+    },
+    "universe_ticker_manager": {
+      "enabled": true
+    }
+  }
+}

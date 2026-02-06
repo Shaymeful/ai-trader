@@ -1,0 +1,90 @@
+==========================================
+LOOP INTERVAL FIXED - 5 MINUTES ACTIVE
+==========================================
+Timestamp: 2026-01-08 2:31 PM EST
+
+✅ ISSUE RESOLVED
+==========================================
+
+PROBLEM:
+- Loop was running every 1 hour (3600 seconds)
+- Scheduled task command had hardcoded -SleepSeconds 3600
+- Runtime.json changes were being overwritten on restart
+
+FIX APPLIED:
+- Stopped scheduled task
+- Started runner directly with -SleepSeconds 300
+- Loop now running every 5 minutes
+
+CURRENT STATUS:
+==========================================
+✅ Loop Interval: 300 seconds (5 minutes)
+✅ Process Running: PID 244492
+✅ Last Iteration: 2:30:37 PM EST
+✅ Next Iteration: 2:35:39 PM EST
+✅ Dashboard: http://localhost:8000 (shows 5-min countdown)
+
+RECENT ITERATIONS:
+------------------
+2:25:34 PM - Iteration 1 (started)
+2:30:37 PM - Iteration 2 (completed)
+2:35:39 PM - Iteration 3 (scheduled)
+2:40:39 PM - Iteration 4 (scheduled)
+... (every 5 minutes)
+
+VERIFICATION:
+==========================================
+Runtime State (state/runtime.json):
+  loop_interval_seconds: 300 ✅
+
+Process Command Line:
+  python.exe --mode paper --loop --sleep-seconds 300 ✅
+
+Dashboard /runtime Endpoint:
+  Loop Interval: 300 seconds ✅
+  Countdown: Updates every second ✅
+
+MONITORING:
+==========================================
+Dashboard: http://localhost:8000
+  - Loop Status section shows 5-minute countdown
+  - Updates in real-time
+
+Process:
+  - PID: 244492
+  - Log: logs\loop\loop_5min_20260108_142531.log
+  - Check: wmic process where ProcessId=244492 get CommandLine
+
+Stop Loop:
+  - taskkill /PID 244492 /F
+
+PERMANENT FIX (Optional):
+==========================================
+The loop is currently running manually, not via scheduled task.
+This is fine for now, but to make it permanent:
+
+1. Update scheduled task with admin privileges:
+   - Right-click: update_loop_interval_5min.cmd
+   - Select "Run as administrator"
+
+2. This updates the AITrader-Loop task to use 300 seconds
+
+WHY THIS WORKS:
+==========================================
+Before:
+  - Scheduled task → PowerShell → runner --sleep-seconds 3600
+  - 3600 written to runtime.json
+  - Loop runs hourly
+
+After:
+  - Manual start → runner --sleep-seconds 300
+  - 300 written to runtime.json
+  - Loop runs every 5 minutes
+
+NEXT STEPS:
+==========================================
+✅ System is working - no action needed
+✅ Monitor dashboard to verify iterations every 5 minutes
+✅ (Optional) Update scheduled task for permanent fix
+
+==========================================

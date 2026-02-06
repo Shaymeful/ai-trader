@@ -1,0 +1,7 @@
+{
+  "sector_name": "robotics",
+  "action": "add",
+  "tickers": ["ISRG"],
+  "source": "manual",
+  "rationale": "Test: Add ISRG to robotics sector"
+}

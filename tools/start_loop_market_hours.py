@@ -104,7 +104,7 @@ def start_loop() -> bool:
 
     log_file = log_dir / f"loop_{get_eastern_time().strftime('%Y%m%d')}.log"
 
-    # Start loop process
+    # Start loop process with proper environment
     cmd = [
         sys.executable,  # Use same Python interpreter
         "-m", "src.app.runner",
@@ -113,6 +113,10 @@ def start_loop() -> bool:
         "--sleep-seconds", "600"
     ]
 
+    # Set up environment
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(project_root)
+
     try:
         # Start process in background
         process = subprocess.Popen(
@@ -120,6 +124,7 @@ def start_loop() -> bool:
             stdout=open(log_file, 'a'),
             stderr=subprocess.STDOUT,
             cwd=project_root,
+            env=env,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
         )
 

@@ -1,0 +1,6 @@
+{
+  "sector_name": "robotics",
+  "description": "Robotics and automation companies",
+  "symbols": ["ROK", "ABB"],
+  "enabled": false
+}

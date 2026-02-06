@@ -1,0 +1,7 @@
+{
+  "sector_name": "mega_cap_tech",
+  "action": "add",
+  "tickers": ["ISRG"],
+  "source": "manual",
+  "rationale": "Test: Add ISRG surgical robotics to mega_cap_tech"
+}
