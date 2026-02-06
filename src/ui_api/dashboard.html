@@ -1256,6 +1256,52 @@
             margin-bottom: 1rem;
         }
 
+        /* Candidates Tabs */
+        .candidates-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #334155;
+        }
+
+        .candidates-tab {
+            padding: 0.75rem 1.5rem;
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+
+        .candidates-tab:hover {
+            color: #e2e8f0;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .candidates-tab.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+
+        .tab-badge {
+            display: inline-block;
+            background: #334155;
+            color: #cbd5e1;
+            padding: 0.15rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            margin-left: 0.5rem;
+        }
+
+        .candidates-tab.active .tab-badge {
+            background: #3b82f6;
+            color: white;
+        }
+
         .candidates-filters {
             display: flex;
             gap: 0.75rem;
@@ -2397,6 +2443,16 @@
                 </div>
             </div>
 
+            <!-- Candidates Tabs -->
+            <div class="candidates-tabs">
+                <button class="candidates-tab active" onclick="switchCandidatesTab('active')">
+                    Active <span class="tab-badge" id="active-candidates-count">0</span>
+                </button>
+                <button class="candidates-tab" onclick="switchCandidatesTab('history')">
+                    History <span class="tab-badge" id="history-candidates-count">0</span>
+                </button>
+            </div>
+
             <div class="candidates-filters">
                 <select id="filter-action" class="filter-input" onchange="filterCandidates()">
                     <option value="">All Actions</option>
@@ -2577,6 +2633,8 @@
         let currentEditStrategy = null;
         let currentProposeSymbol = null;
         let currentProposeCandidateId = null;
+        let currentCandidatesTab = 'active'; // Track current tab: 'active' or 'history'
+        let archivedCandidates = new Set(); // Track archived candidate IDs
 
         // Universe Sectors Management
 
@@ -3276,8 +3334,70 @@
             }, 5000);
         }
 
+        // Load archived candidates from localStorage
+        function loadArchivedCandidates() {
+            try {
+                const archived = localStorage.getItem('archivedCandidates');
+                if (archived) {
+                    archivedCandidates = new Set(JSON.parse(archived));
+                }
+            } catch (error) {
+                console.error('Error loading archived candidates:', error);
+                archivedCandidates = new Set();
+            }
+        }
+
+        // Save archived candidates to localStorage
+        function saveArchivedCandidates() {
+            try {
+                localStorage.setItem('archivedCandidates', JSON.stringify(Array.from(archivedCandidates)));
+            } catch (error) {
+                console.error('Error saving archived candidates:', error);
+            }
+        }
+
+        // Archive a candidate (move to history)
+        function archiveCandidate(candidateId) {
+            archivedCandidates.add(candidateId);
+            saveArchivedCandidates();
+            updateCandidatesBadges();
+            renderCandidates(candidatesData);
+        }
+
+        // Switch between Active and History tabs
+        function switchCandidatesTab(tab) {
+            currentCandidatesTab = tab;
+
+            // Update tab buttons
+            const tabs = document.querySelectorAll('.candidates-tab');
+            tabs.forEach((t, index) => {
+                t.classList.remove('active');
+                // Active tab is index 0, History tab is index 1
+                if ((tab === 'active' && index === 0) || (tab === 'history' && index === 1)) {
+                    t.classList.add('active');
+                }
+            });
+
+            // Re-render candidates
+            renderCandidates(candidatesData);
+        }
+
+        // Update badge counts for tabs
+        function updateCandidatesBadges() {
+            if (!candidatesData) return;
+
+            const activeCount = candidatesData.filter(c => !archivedCandidates.has(c.candidate_id)).length;
+            const historyCount = candidatesData.filter(c => archivedCandidates.has(c.candidate_id)).length;
+
+            document.getElementById('active-candidates-count').textContent = activeCount;
+            document.getElementById('history-candidates-count').textContent = historyCount;
+        }
+
         async function loadDashboard() {
             try {
+                // Load archived candidates from localStorage
+                loadArchivedCandidates();
+
                 // Load health status
                 const healthResponse = await fetch('/health/detailed');
                 const healthData = await healthResponse.json();
@@ -3475,12 +3595,25 @@
 
         function renderCandidates(candidates) {
             const tbody = document.getElementById('candidates-tbody');
-            if (candidates.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #64748b;">No candidates available</td></tr>';
+
+            // Filter candidates based on current tab
+            const filteredCandidates = candidates.filter(c => {
+                const isArchived = archivedCandidates.has(c.candidate_id);
+                return currentCandidatesTab === 'active' ? !isArchived : isArchived;
+            });
+
+            // Update badge counts
+            updateCandidatesBadges();
+
+            if (filteredCandidates.length === 0) {
+                const message = currentCandidatesTab === 'active'
+                    ? 'No active candidates'
+                    : 'No archived candidates';
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b;">${message}</td></tr>`;
                 return;
             }
 
-            tbody.innerHTML = candidates.map(c => {
+            tbody.innerHTML = filteredCandidates.map(c => {
                 const expiresDate = c.expires_at ? new Date(c.expires_at) : null;
                 const expiresText = expiresDate ? expiresDate.toLocaleString() : 'N/A';
                 const actionClass = `action-${c.action}`;
@@ -4598,13 +4731,27 @@
 
                     if (!response.ok) {
                         showError(result.detail || 'Failed to create sector');
+                        // Close modal after error
+                        setTimeout(() => closeProposeAddModal(), 2000);
                         return;
                     }
 
                     showSuccess(result.message);
+                    // Archive candidate since it was added to new sector
+                    if (currentProposeCandidateId) {
+                        archiveCandidate(currentProposeCandidateId);
+                    }
+                    // Close modal and refresh
+                    closeProposeAddModal();
+                    setTimeout(() => {
+                        loadUniverseSectors();
+                    }, 500);
+                    return; // Exit early since sector was created with symbol already
                 } catch (error) {
                     console.error('Error creating sector:', error);
                     showError('Failed to create sector');
+                    // Close modal after error
+                    setTimeout(() => closeProposeAddModal(), 2000);
                     return;
                 }
             } else {
@@ -4638,6 +4785,11 @@
                 const result = await response.json();
 
                 if (response.ok) {
+                    // Archive the candidate (move to history)
+                    if (currentProposeCandidateId) {
+                        archiveCandidate(currentProposeCandidateId);
+                    }
+
                     showSuccess(result.message);
                     closeProposeAddModal();
                     setTimeout(() => {
@@ -4646,10 +4798,14 @@
                     }, 500);
                 } else {
                     showError(result.detail || 'Failed to create proposal');
+                    // Close modal after a short delay even on error
+                    setTimeout(() => closeProposeAddModal(), 2000);
                 }
             } catch (error) {
                 console.error('Error creating proposal:', error);
                 showError('Failed to create proposal');
+                // Close modal after a short delay even on error
+                setTimeout(() => closeProposeAddModal(), 2000);
             }
         }
 
