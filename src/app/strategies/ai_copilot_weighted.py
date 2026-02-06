@@ -77,11 +77,13 @@ class AICopilotWeightedStrategy(Strategy):
 
         Process:
         1. Filter per_sector_weights to only active universe symbols
-        2. Normalize weights globally (all tickers sum to 1.0)
-        3. Generate intents with conviction = normalized_weight
+        2. Identify symbols in universe but not in config (positions from disabled sectors)
+        3. Normalize weights globally (all tickers sum to 1.0)
+        4. Generate intents with conviction = normalized_weight
+        5. For unlisted symbols, generate exit intent (conviction=0)
 
         Args:
-            universe: List of active symbols (from UniverseRegistry)
+            universe: List of active symbols (from UniverseRegistry + existing positions)
             market_data: Dict of symbol -> {"price": float, ...}
             candidate_map: Optional symbol -> candidate_id mapping (unused)
 
@@ -90,6 +92,7 @@ class AICopilotWeightedStrategy(Strategy):
                 - target_quantity = 1 (fixed, allocator scales)
                 - conviction = normalized_weight (allocator multiplies by budget)
                 - reason = weight percentage description
+                - For unlisted symbols: conviction=0 (forces exit)
         """
         # GUARDRAIL: Return empty if execution disabled
         if not self.execution_enabled:
@@ -99,8 +102,15 @@ class AICopilotWeightedStrategy(Strategy):
         active_symbols = set(universe)
         filtered_weights = self._filter_to_active_universe(active_symbols)
 
+        # Identify symbols in universe but not in config (positions from disabled sectors)
+        # These should be exited (conviction=0)
+        configured_symbols = set()
+        for sector_weights in self.per_sector_weights.values():
+            configured_symbols.update(sector_weights.keys())
+        unlisted_symbols = active_symbols - configured_symbols
+
         # Handle empty case (no active symbols)
-        if not filtered_weights:
+        if not filtered_weights and not unlisted_symbols:
             return []
 
         # Normalize weights globally (all tickers sum to 1.0)
@@ -108,6 +118,8 @@ class AICopilotWeightedStrategy(Strategy):
 
         # Generate intents using conviction as weight encoding
         intents = []
+
+        # Generate intents for configured symbols
         for symbol, weight in normalized_weights.items():
             # Skip symbols without price data
             if symbol not in market_data:
@@ -124,6 +136,27 @@ class AICopilotWeightedStrategy(Strategy):
                     target_quantity=1,  # Fixed (allocator scales by conviction)
                     conviction=weight,  # Weight as fraction (allocator multiplies by budget)
                     reason=f"AI Co-Pilot: {weight*100:.1f}% allocation",
+                    candidate_id=None,
+                )
+            )
+
+        # Generate exit intents for unlisted symbols (positions from disabled sectors)
+        for symbol in unlisted_symbols:
+            # Skip symbols without price data
+            if symbol not in market_data:
+                continue
+
+            price = market_data[symbol].get("price")
+            if not price or price <= 0:
+                continue
+
+            # Create exit intent (conviction=0 signals position reduction)
+            intents.append(
+                PositionIntent(
+                    symbol=symbol,
+                    target_quantity=1,  # Fixed (allocator scales by conviction)
+                    conviction=0.0,  # Zero weight = exit signal
+                    reason="AI Co-Pilot: Exit position from disabled sector",
                     candidate_id=None,
                 )
             )

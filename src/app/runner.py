@@ -397,6 +397,20 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
             resolution = universe_registry.resolve()
             universe = resolution.symbols
             print(f"  Universe from registry: {', '.join(universe)} ({resolution.source})")
+
+            # Augment universe with existing positions from disabled sectors (for exits)
+            # This allows AI Copilot and other strategies to exit positions even from disabled sectors
+            try:
+                positions = broker.get_positions()
+                position_symbols = set(positions.keys())
+                enabled_universe_set = set(universe)
+                disabled_position_symbols = position_symbols - enabled_universe_set
+
+                if disabled_position_symbols:
+                    universe = list(enabled_universe_set | disabled_position_symbols)
+                    print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
+            except Exception as e:
+                print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
         else:
             universe = (
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
@@ -734,6 +748,20 @@ def run_paper_mode(
             resolution = universe_registry.resolve()
             universe = resolution.symbols
             print(f"  Universe from registry: {', '.join(universe)} ({resolution.source})")
+
+            # Augment universe with existing positions from disabled sectors (for exits)
+            # This allows AI Copilot and other strategies to exit positions even from disabled sectors
+            try:
+                positions = broker.get_positions()
+                position_symbols = set(positions.keys())
+                enabled_universe_set = set(universe)
+                disabled_position_symbols = position_symbols - enabled_universe_set
+
+                if disabled_position_symbols:
+                    universe = list(enabled_universe_set | disabled_position_symbols)
+                    print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
+            except Exception as e:
+                print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
         else:
             universe = (
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
