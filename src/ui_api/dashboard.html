@@ -2632,7 +2632,7 @@
         let candidatesData = [];
         let currentEditStrategy = null;
         let currentProposeSymbol = null;
-        let currentProposeCandidateId = null;
+        let currentProposeCandidateSymbol = null;
         let currentCandidatesTab = 'active'; // Track current tab: 'active' or 'history'
         let archivedCandidates = new Set(); // Track archived candidate IDs
 
@@ -3386,8 +3386,8 @@
         function updateCandidatesBadges() {
             if (!candidatesData) return;
 
-            const activeCount = candidatesData.filter(c => !archivedCandidates.has(c.candidate_id)).length;
-            const historyCount = candidatesData.filter(c => archivedCandidates.has(c.candidate_id)).length;
+            const activeCount = candidatesData.filter(c => !archivedCandidates.has(c.symbol)).length;
+            const historyCount = candidatesData.filter(c => archivedCandidates.has(c.symbol)).length;
 
             document.getElementById('active-candidates-count').textContent = activeCount;
             document.getElementById('history-candidates-count').textContent = historyCount;
@@ -3598,7 +3598,7 @@
 
             // Filter candidates based on current tab
             const filteredCandidates = candidates.filter(c => {
-                const isArchived = archivedCandidates.has(c.candidate_id);
+                const isArchived = archivedCandidates.has(c.symbol);
                 return currentCandidatesTab === 'active' ? !isArchived : isArchived;
             });
 
@@ -3646,7 +3646,7 @@
                         <td>
                             ${showProposeButton ? `
                                 <button class="btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;"
-                                    onclick="showProposeAddModal('${c.symbol}', '${c.sector || ''}', '${c.candidate_id}')">
+                                    onclick="showProposeAddModal('${c.symbol}', '${c.sector || ''}')">
                                     Propose Add
                                 </button>
                             ` : '-'}
@@ -4631,9 +4631,9 @@
         }
 
         // Propose Add to Sector Functions
-        async function showProposeAddModal(symbol, suggestedSector, candidateId) {
+        async function showProposeAddModal(symbol, suggestedSector) {
             currentProposeSymbol = symbol;
-            currentProposeCandidateId = candidateId;
+            currentProposeCandidateSymbol = symbol;
 
             // Show modal
             document.getElementById('propose-add-modal').classList.add('active');
@@ -4672,7 +4672,7 @@
         function closeProposeAddModal() {
             document.getElementById('propose-add-modal').classList.remove('active');
             currentProposeSymbol = null;
-            currentProposeCandidateId = null;
+            currentProposeCandidateSymbol = null;
             document.getElementById('create-sector-checkbox').checked = false;
             document.getElementById('create-sector-form').style.display = 'none';
             document.getElementById('propose-sector-select').value = '';
@@ -4738,8 +4738,8 @@
 
                     showSuccess(result.message);
                     // Archive candidate since it was added to new sector
-                    if (currentProposeCandidateId) {
-                        archiveCandidate(currentProposeCandidateId);
+                    if (currentProposeCandidateSymbol) {
+                        archiveCandidate(currentProposeCandidateSymbol);
                     }
                     // Close modal and refresh
                     closeProposeAddModal();
@@ -4777,7 +4777,6 @@
                         action: 'add',
                         tickers: [currentProposeSymbol],
                         source: 'candidates',
-                        candidate_id: currentProposeCandidateId,
                         rationale: rationale,
                     }),
                 });
@@ -4786,8 +4785,8 @@
 
                 if (response.ok) {
                     // Archive the candidate (move to history)
-                    if (currentProposeCandidateId) {
-                        archiveCandidate(currentProposeCandidateId);
+                    if (currentProposeCandidateSymbol) {
+                        archiveCandidate(currentProposeCandidateSymbol);
                     }
 
                     showSuccess(result.message);
