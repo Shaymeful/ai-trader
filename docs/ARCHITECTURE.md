@@ -5997,6 +5997,71 @@ llm:
 **Config Model:** `src/app/config.py`
 - Added fields: `llm_mode`, `llm_primary`, `llm_openai_model`, `llm_anthropic_model`, `llm_timeout`, `llm_min_confidence`, `llm_proposal_ttl_minutes`, `llm_max_sector_toggles_per_day`, `llm_cooldown_days`, `llm_rss_lookback_hours`, `llm_rss_max_headlines`, `llm_auto_generate_enabled`, `llm_auto_generate_interval_hours`
 
+### AI Co-Pilot Sector Recommendations Feature Flag
+
+**Purpose:** Fine-grained control over whether AI Co-Pilot can generate sector enable/disable recommendations. Default is OFF for safety.
+
+**Architecture:** Defense-in-depth approach with three layers:
+
+1. **Config Flag** (`src/app/config.py`):
+   - `ai_copilot_sector_recommendations_enabled: bool` (default: False)
+   - Precedence: Trading disabled → Env vars → UI overrides → YAML → Default
+   - Accessible via helper: `is_sector_recommendations_enabled()`
+
+2. **Endpoint Guard** (`src/ui_api/app.py`):
+   - POST /universe/proposals/generate returns HTTP 409 when disabled
+   - Blocks manual/UI-initiated generation attempts
+   - Logs blocked requests to `ai-trader.ui-api` logger
+
+3. **Prompt Context Gating** (`src/app/universe_advisor/generate.py`):
+   - `build_prompt()` accepts `include_sector_context` parameter
+   - When False, omits sector data from LLM prompt
+   - Prevents proposals even if endpoint guard bypassed
+
+**Configuration:**
+
+```yaml
+ai_copilot:
+  sector_recommendations:
+    enabled: false  # Default OFF
+    max_output_tokens: 600
+```
+
+**UI Control:**
+
+- Dashboard > AI Co-Pilot > Features tab
+- Toggle labeled "Sector Recommendations"
+- Persisted in `data/ui_runtime_overrides.json`
+- Shows "Disabled (safe)" status when OFF
+
+**Runtime Override Example:**
+
+```json
+{
+  "ai_copilot": {
+    "sector_recommendations": {
+      "enabled": false
+    }
+  }
+}
+```
+
+**Safety Rationale:**
+
+Sector recommendations can significantly impact trading exposure by enabling/disabling entire sectors. The feature is OFF by default and requires explicit operator opt-in. The three-layer architecture ensures:
+- UI attempts are blocked at the API boundary
+- Automatic generation omits sector context from prompts
+- No proposals generated even if flag is bypassed
+
+**Added Files:**
+
+- Config: `src/app/config.py` (fields + loading logic)
+- Utils: `src/app/llm_advisors/utils.py` (helper + validation)
+- Endpoint: `src/ui_api/app.py` (guard + request model)
+- Prompt: `src/app/universe_advisor/generate.py` (context gating)
+- UI: `src/ui_api/dashboard.html` (toggle control)
+- Config Helpers: `src/app/llm_advisors/config_helpers.py` (effective config)
+
 ### Testing
 
 **Test Files:**
