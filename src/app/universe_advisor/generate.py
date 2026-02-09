@@ -85,8 +85,20 @@ def build_prompt(
     regime: RegimeData,
     events: list[dict],
     sectors: dict[str, dict],  # sector_name -> {description, symbols}
+    include_sector_context: bool = True,
 ) -> str:
-    """Build prompt for LLM."""
+    """
+    Build prompt for LLM.
+
+    Args:
+        regime: Market regime data
+        events: Recent RSS events
+        sectors: Sector definitions
+        include_sector_context: If False, omit sector data (defense-in-depth)
+
+    Returns:
+        Formatted prompt string
+    """
     # Format regime
     regime_desc = f"""Current Market Regime: {regime.regime.value}
 - SPY Price: ${regime.spy_price:.2f}
@@ -102,7 +114,22 @@ def build_prompt(
         action = event.get("action", "N/A")
         headlines_desc += f"{i}. [{symbol}] {headline} (action: {action})\n"
 
-    # Format sectors
+    # Defense-in-depth: If sector recommendations disabled, omit sector context entirely
+    if not include_sector_context:
+        # Return minimal prompt that will yield empty proposals
+        prompt = f"""{regime_desc}
+
+{headlines_desc}
+
+Note: Sector recommendations are currently disabled. No proposals should be generated.
+
+Respond with empty JSON:
+{{
+  "proposals": []
+}}"""
+        return prompt
+
+    # Format sectors (only when enabled)
     sectors_desc = "\n\nAvailable Sectors:\n"
     for name, data in sectors.items():
         symbols = ", ".join(data["symbols"][:5])  # Show first 5 symbols
@@ -330,7 +357,18 @@ def generate_proposals(
         )
 
     try:
-        prompt = build_prompt(regime, events, sectors)
+        # Check if sector recommendations are enabled
+        from src.app.llm_advisors.utils import is_sector_recommendations_enabled
+
+        include_sector_context = is_sector_recommendations_enabled()
+
+        if not include_sector_context:
+            import logging
+
+            logger = logging.getLogger("ai-trader.universe-advisor")
+            logger.info("Sector recommendations disabled - omitting sector context from prompt")
+
+        prompt = build_prompt(regime, events, sectors, include_sector_context)
         schema = {
             "proposals": [
                 {
