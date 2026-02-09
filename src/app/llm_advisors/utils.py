@@ -147,6 +147,8 @@ def validate_ui_overrides(overrides: dict[str, Any]) -> tuple[bool, list[str]]:
         "trade_rationale",
         "daily_journal",
         "strategy_critique",
+        "universe_ticker_manager",
+        "sector_recommendations",
         "updated_at",  # metadata
     }
 
@@ -189,7 +191,7 @@ def validate_ui_overrides(overrides: dict[str, Any]) -> tuple[bool, list[str]]:
                     errors.append("global_max_output_tokens must be positive integer")
 
     # Validate feature sections
-    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique"]:
+    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique", "universe_ticker_manager", "sector_recommendations"]:
         if feature_name in ai_copilot:
             feature = ai_copilot[feature_name]
             if not isinstance(feature, dict):
@@ -252,3 +254,44 @@ def get_config_source(
     if yaml_value is not None:
         return yaml_value, "yaml"
     return default_value, "default"
+
+
+def is_sector_recommendations_enabled(config: Any = None) -> bool:
+    """
+    Check if AI Co-Pilot sector recommendations feature is enabled.
+
+    Checks config flag with proper precedence:
+    - If trading disabled → False
+    - Otherwise uses config.ai_copilot_sector_recommendations_enabled
+
+    Args:
+        config: Config object (loads if None)
+
+    Returns:
+        True if sector recommendations are enabled, False otherwise
+
+    Safety:
+        - Always returns False if config unavailable
+        - Never raises exceptions
+    """
+    try:
+        # Check trading disabled first
+        if is_trading_disabled():
+            return False
+
+        # Load config if not provided
+        if config is None:
+            from src.app.config import load_config_with_yaml
+
+            config = load_config_with_yaml()
+
+        # Check master AI Copilot switch
+        if not config.ai_copilot_enabled:
+            return False
+
+        # Check sector recommendations flag
+        return config.ai_copilot_sector_recommendations_enabled
+
+    except Exception as e:
+        logger.warning(f"Error checking sector recommendations enabled: {e}")
+        return False

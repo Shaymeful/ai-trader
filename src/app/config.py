@@ -224,6 +224,13 @@ class Config(BaseModel):
         default=800, description="Max output tokens for universe ticker manager"
     )
 
+    ai_copilot_sector_recommendations_enabled: bool = Field(
+        default=False, description="Enable AI Co-Pilot sector enable/disable recommendations"
+    )
+    ai_copilot_sector_recommendations_max_tokens: int = Field(
+        default=600, description="Max output tokens for sector recommendations"
+    )
+
 
 def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
     """
@@ -710,6 +717,22 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                     config.ai_copilot_universe_ticker_manager_enabled = bool(ui_feature["enabled"])
                 if "max_output_tokens" in ui_feature:
                     config.ai_copilot_universe_ticker_manager_max_tokens = int(ui_feature["max_output_tokens"])
+
+            # Sector recommendations feature
+            if "sector_recommendations" in ai_copilot:
+                feature = ai_copilot["sector_recommendations"]
+                if "enabled" in feature:
+                    config.ai_copilot_sector_recommendations_enabled = bool(feature["enabled"])
+                if "max_output_tokens" in feature:
+                    config.ai_copilot_sector_recommendations_max_tokens = int(feature["max_output_tokens"])
+
+            # UI can override sector recommendations
+            if "sector_recommendations" in ui_copilot:
+                ui_feature = ui_copilot["sector_recommendations"]
+                if "enabled" in ui_feature:
+                    config.ai_copilot_sector_recommendations_enabled = bool(ui_feature["enabled"])
+                if "max_output_tokens" in ui_feature:
+                    config.ai_copilot_sector_recommendations_max_tokens = int(ui_feature["max_output_tokens"])
 
     return config
 
