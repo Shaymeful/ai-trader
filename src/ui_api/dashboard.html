@@ -2568,6 +2568,7 @@
                 <h3 id="sector-editor-title">Edit Sector</h3>
                 <button class="modal-close" onclick="closeSectorEditor()">&times;</button>
             </div>
+            <p id="sector-editor-description" style="color: #94a3b8; font-size: 0.9rem; margin: 0 0 1rem 0; display: none;"></p>
             <div class="form-group">
                 <label>Current Tickers (<span id="sector-ticker-count">0</span>)</label>
                 <div id="sector-ticker-list" class="ticker-list"></div>
@@ -2682,7 +2683,10 @@
             // Store sector data globally for editor access
             window.sectorDataCache = {};
             data.sectors.forEach(sector => {
-                window.sectorDataCache[sector.sector_name] = sector.symbols;
+                window.sectorDataCache[sector.sector_name] = {
+                    symbols: sector.symbols,
+                    description: sector.description
+                };
             });
 
             grid.innerHTML = data.sectors.map(sector => {
@@ -2760,7 +2764,8 @@
 
         async function exitSectorPositions(sectorName) {
             // Get sector symbols
-            const symbols = window.sectorDataCache[sectorName];
+            const sectorData = window.sectorDataCache[sectorName];
+            const symbols = sectorData?.symbols || [];
             if (!symbols || symbols.length === 0) {
                 showError('No symbols in this sector');
                 return;
@@ -3664,7 +3669,7 @@
                         <td>
                             ${showProposeButton ? `
                                 <button class="btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;"
-                                    onclick="showProposeAddModal('${c.symbol}', '${c.sector || ''}')">
+                                    onclick="showProposeAddModal('${c.symbol}', '${c.sector || ''}', \`${c.reason.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`)">
                                     Propose Add
                                 </button>
                             ` : '-'}
@@ -4515,18 +4520,29 @@
         let tickersToRemove = [];
 
         function openSectorEditorById(sectorName) {
-            // Retrieve tickers from cached data
-            const tickers = window.sectorDataCache?.[sectorName] || [];
-            openSectorEditor(sectorName, tickers);
+            // Retrieve tickers and description from cached data
+            const sectorData = window.sectorDataCache?.[sectorName] || {};
+            const tickers = sectorData.symbols || [];
+            const description = sectorData.description || '';
+            openSectorEditor(sectorName, tickers, description);
         }
 
-        function openSectorEditor(sectorName, tickers) {
+        function openSectorEditor(sectorName, tickers, description = '') {
             currentSector = sectorName;
             currentTickers = [...tickers];
             tickersToAdd = [];
             tickersToRemove = [];
 
             document.getElementById('sector-editor-title').textContent = 'Edit ' + sectorName;
+
+            // Show description if available
+            const descriptionEl = document.getElementById('sector-editor-description');
+            if (description) {
+                descriptionEl.textContent = description;
+                descriptionEl.style.display = 'block';
+            } else {
+                descriptionEl.style.display = 'none';
+            }
             renderTickerList();
 
             document.getElementById('add-tickers-input').value = '';
@@ -4649,7 +4665,7 @@
         }
 
         // Propose Add to Sector Functions
-        async function showProposeAddModal(symbol, suggestedSector) {
+        async function showProposeAddModal(symbol, suggestedSector, reason = '') {
             currentProposeSymbol = symbol;
             currentProposeCandidateSymbol = symbol;
 
@@ -4658,6 +4674,11 @@
 
             // Set symbol
             document.getElementById('propose-symbol').textContent = symbol;
+
+            // Auto-populate rationale from candidate reason
+            if (reason) {
+                document.getElementById('proposal-rationale').value = reason;
+            }
 
             // Load sectors and populate dropdown
             try {
