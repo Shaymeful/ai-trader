@@ -32,6 +32,8 @@ class SectorOverride:
     last_modified: str | None
     # Ticker overrides (None = use base config, [] = empty, [...] = custom list)
     tickers: list[str] | None = None
+    # Ticker rationales (optional descriptions for each ticker)
+    rationales: dict[str, str] | None = None
 
 
 @dataclass
@@ -127,6 +129,7 @@ class UniverseRegistry:
                 pending_version=override_data.get("pending_version"),
                 last_modified=override_data.get("last_modified"),
                 tickers=override_data.get("tickers"),
+                rationales=override_data.get("rationales"),
             )
 
             # Apply to sector config
@@ -189,13 +192,20 @@ class UniverseRegistry:
 
         return override.pending_version
 
-    def stage_constituent_change(self, sector_name: str, action: str, tickers: list[str]) -> int:
+    def stage_constituent_change(
+        self,
+        sector_name: str,
+        action: str,
+        tickers: list[str],
+        rationales: dict[str, str] | None = None
+    ) -> int:
         """Stage a constituent add/remove change.
 
         Args:
             sector_name: Name of sector to modify
             action: "add" or "remove"
             tickers: List of tickers to add/remove
+            rationales: Optional dict of ticker -> rationale/description
 
         Returns:
             New pending version number
@@ -211,19 +221,27 @@ class UniverseRegistry:
         if action not in ["add", "remove"]:
             raise ValueError(f"Invalid action: {action}")
 
-        # 3. Get current ticker list (from override or base config)
+        # 3. Get current ticker list and rationales (from override or base config)
         if sector_name in self.overrides and self.overrides[sector_name].tickers is not None:
             current_tickers = self.overrides[sector_name].tickers.copy()
+            current_rationales = (self.overrides[sector_name].rationales or {}).copy()
         else:
             current_tickers = self.sectors[sector_name].symbols.copy()
+            current_rationales = {}
 
         # 4. Apply action
         if action == "add":
             for ticker in tickers:
                 if ticker not in current_tickers:
                     current_tickers.append(ticker)
+                # Add rationale if provided
+                if rationales and ticker in rationales:
+                    current_rationales[ticker] = rationales[ticker]
         elif action == "remove":
             current_tickers = [t for t in current_tickers if t not in tickers]
+            # Remove rationales for removed tickers
+            for ticker in tickers:
+                current_rationales.pop(ticker, None)
 
         # 5. Update in-memory sector config
         self.sectors[sector_name].symbols = current_tickers
@@ -232,6 +250,7 @@ class UniverseRegistry:
         if sector_name in self.overrides:
             override = self.overrides[sector_name]
             override.tickers = current_tickers
+            override.rationales = current_rationales if current_rationales else None
             override.pending_version = (override.active_version or 0) + 1
         else:
             override = SectorOverride(
@@ -240,6 +259,7 @@ class UniverseRegistry:
                 pending_version=1,
                 last_modified=None,
                 tickers=current_tickers,
+                rationales=current_rationales if current_rationales else None,
             )
             self.overrides[sector_name] = override
 
@@ -269,13 +289,17 @@ class UniverseRegistry:
         }
 
         for sector_name, override in self.overrides.items():
-            overrides_data["sectors"][sector_name] = {
+            sector_data = {
                 "enabled": override.enabled,
                 "active_version": override.active_version,
                 "pending_version": override.pending_version,
                 "last_modified": override.last_modified,
                 "tickers": override.tickers,
             }
+            # Add rationales if present
+            if override.rationales:
+                sector_data["rationales"] = override.rationales
+            overrides_data["sectors"][sector_name] = sector_data
 
         # 2. Ensure output directory exists
         self.overrides_path.parent.mkdir(parents=True, exist_ok=True)

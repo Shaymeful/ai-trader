@@ -29,10 +29,19 @@ def apply_proposal(
     # Stage change in UniverseRegistry based on proposal type
     if proposal.proposal_type == "constituent_change" and proposal.constituent_change:
         # For constituent changes, add/remove tickers
+        # Build rationales dict (same rationale for all tickers in this proposal)
+        rationales = None
+        if proposal.constituent_change.reason:
+            rationales = {
+                ticker: proposal.constituent_change.reason
+                for ticker in proposal.constituent_change.tickers
+            }
+
         new_version = universe_registry.stage_constituent_change(
             proposal.sector_name,
             proposal.constituent_change.action.value,
             proposal.constituent_change.tickers,
+            rationales=rationales,
         )
     else:
         # For sector toggle, enable/disable sector

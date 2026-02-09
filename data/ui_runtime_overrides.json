@@ -1,6 +1,6 @@
 {
   "ai_copilot": {
-    "updated_at": "2026-02-06T17:16:13.050766Z",
+    "updated_at": "2026-02-09T18:34:44.392628Z",
     "trade_rationale": {
       "enabled": true
     },
@@ -12,6 +12,9 @@
     },
     "universe_ticker_manager": {
       "enabled": true
+    },
+    "sector_recommendations": {
+      "enabled": false
     }
   }
 }

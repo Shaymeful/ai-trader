@@ -307,6 +307,7 @@ class SectorInfo(BaseModel):
     symbols: list[str]
     symbol_count: int
     pending_version: int | None = None
+    rationales: dict[str, str] = Field(default_factory=dict, description="Ticker rationales")
 
 
 class UniverseSectorsResponse(BaseModel):
@@ -388,6 +389,7 @@ class UpdateTickersRequest(BaseModel):
 
     add: list[str] = Field(default_factory=list, description="Tickers to add")
     remove: list[str] = Field(default_factory=list, description="Tickers to remove")
+    rationales: dict[str, str] = Field(default_factory=dict, description="Ticker rationales/descriptions")
 
 
 class CreateSectorRequest(BaseModel):
@@ -1039,11 +1041,13 @@ async def get_universe_sectors():
     # Build sector list with pending version indicators
     sectors_list = []
     for sector_name, sector_config in universe_registry.sectors.items():
-        # Check for pending version
+        # Check for pending version and rationales
         pending_version = None
+        rationales = {}
         if sector_name in universe_registry.overrides:
             override = universe_registry.overrides[sector_name]
             pending_version = override.pending_version
+            rationales = override.rationales or {}
 
         sectors_list.append(
             SectorInfo(
@@ -1053,6 +1057,7 @@ async def get_universe_sectors():
                 symbols=sector_config.symbols,
                 symbol_count=len(sector_config.symbols),
                 pending_version=pending_version,
+                rationales=rationales,
             )
         )
 
@@ -2044,8 +2049,10 @@ async def update_sector_tickers(sector_name: str, request: UpdateTickersRequest)
         pending_version = None
 
         if add_tickers:
+            # Filter rationales for only the tickers being added
+            add_rationales = {t: request.rationales.get(t, "") for t in add_tickers if request.rationales.get(t)}
             pending_version = universe_registry.stage_constituent_change(
-                sector_name, "add", add_tickers
+                sector_name, "add", add_tickers, rationales=add_rationales if add_rationales else None
             )
 
         if remove_tickers:
