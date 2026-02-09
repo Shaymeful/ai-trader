@@ -2220,6 +2220,24 @@
                             <span class="feature-stat">Last run: <strong id="feature-strategy-critique-last">N/A</strong></span>
                         </div>
                     </div>
+
+                    <!-- Sector Recommendations -->
+                    <div class="copilot-feature-item">
+                        <div class="feature-header">
+                            <div>
+                                <strong>Sector Recommendations</strong>
+                                <div class="feature-description">Allow AI Co-Pilot to generate sector enable/disable recommendations (default OFF for safety)</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="feature-sector-recommendations" onchange="toggleCoPilotFeature('sector_recommendations', this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="feature-meta">
+                            <span class="feature-stat">Token limit: <strong id="feature-sector-recommendations-tokens">600</strong></span>
+                            <span class="feature-stat">Status: <strong id="feature-sector-recommendations-status">Disabled (safe)</strong></span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -4863,7 +4881,8 @@
             const featuresActive = [
                 effective.trade_rationale.enabled,
                 effective.daily_journal.enabled,
-                effective.strategy_critique.enabled
+                effective.strategy_critique.enabled,
+                effective.sector_recommendations?.enabled
             ].filter(Boolean).length;
             document.getElementById('copilot-features-active').textContent = featuresActive;
 
@@ -4902,6 +4921,21 @@
             document.getElementById('feature-strategy-critique-tokens').textContent = effective.strategy_critique.max_output_tokens;
             document.getElementById('feature-strategy-critique-last').textContent =
                 status.features.strategy_critique.ran ? 'This run' : (status.features.strategy_critique.skipped_reason || 'Not run');
+
+            const sectorRecommendations = document.getElementById('feature-sector-recommendations');
+            if (effective.sector_recommendations) {
+                sectorRecommendations.checked = effective.sector_recommendations.enabled;
+                sectorRecommendations.disabled = tradingDisabled || !effective.enabled;
+                document.getElementById('feature-sector-recommendations-tokens').textContent = effective.sector_recommendations.max_output_tokens || 600;
+                document.getElementById('feature-sector-recommendations-status').textContent =
+                    effective.sector_recommendations.enabled ? 'Enabled' : 'Disabled (safe)';
+            } else {
+                // Default to disabled if not in config
+                sectorRecommendations.checked = false;
+                sectorRecommendations.disabled = tradingDisabled || !effective.enabled;
+                document.getElementById('feature-sector-recommendations-tokens').textContent = 600;
+                document.getElementById('feature-sector-recommendations-status').textContent = 'Disabled (safe)';
+            }
 
             // Artifacts tab
             if (status.artifacts.latest_journal_path) {

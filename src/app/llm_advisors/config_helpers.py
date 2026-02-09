@@ -104,6 +104,10 @@ def get_effective_config_with_sources(config: Config, yaml_config: dict[str, Any
             "enabled": config.ai_copilot_strategy_critique_enabled,
             "max_output_tokens": config.ai_copilot_strategy_critique_max_tokens,
         },
+        "sector_recommendations": {
+            "enabled": config.ai_copilot_sector_recommendations_enabled,
+            "max_output_tokens": config.ai_copilot_sector_recommendations_max_tokens,
+        },
     }
 
     sources = {
@@ -128,6 +132,10 @@ def get_effective_config_with_sources(config: Config, yaml_config: dict[str, Any
         "strategy_critique": {
             "enabled": get_source("strategy_critique.enabled"),
             "max_output_tokens": get_source("strategy_critique.max_output_tokens"),
+        },
+        "sector_recommendations": {
+            "enabled": get_source("sector_recommendations.enabled"),
+            "max_output_tokens": get_source("sector_recommendations.max_output_tokens"),
         },
     }
 

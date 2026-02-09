@@ -2350,6 +2350,7 @@ class AICopilotConfigUpdateRequest(BaseModel):
     trade_rationale: dict[str, Any] | None = Field(None, description="Trade rationale settings")
     daily_journal: dict[str, Any] | None = Field(None, description="Daily journal settings")
     strategy_critique: dict[str, Any] | None = Field(None, description="Strategy critique settings")
+    sector_recommendations: dict[str, Any] | None = Field(None, description="Sector recommendations settings")
 
 
 @app.get("/api/ai-copilot/config")
@@ -2419,7 +2420,7 @@ async def update_ai_copilot_config(
         overrides["ai_copilot"]["budgets"].update(request.budgets)
 
     # Update feature settings
-    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique"]:
+    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique", "sector_recommendations"]:
         feature_data = getattr(request, feature_name, None)
         if feature_data is not None:
             if feature_name not in overrides["ai_copilot"]:
