@@ -418,6 +418,17 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
             print(f"  Universe from config: {', '.join(universe)}")
         candidate_map = {}
 
+    # Filter excluded tickers (broker constraints, bad news, etc.)
+    try:
+        from src.app.ticker_exclusions import TickerExclusionManager
+        exclusion_mgr = TickerExclusionManager()
+        excluded_symbols = [s for s in universe if exclusion_mgr.is_excluded(s)]
+        if excluded_symbols:
+            universe = [s for s in universe if not exclusion_mgr.is_excluded(s)]
+            print(f"  - Excluded {len(excluded_symbols)} symbol(s): {', '.join(sorted(excluded_symbols))}")
+    except Exception as e:
+        print(f"WARNING: Failed to apply ticker exclusions: {e}")
+
     if not universe:
         error_msg = "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
         print(error_msg)
@@ -768,6 +779,17 @@ def run_paper_mode(
             )
             print(f"  Universe from config: {', '.join(universe)}")
         candidate_map = {}
+
+    # Filter excluded tickers (broker constraints, bad news, etc.)
+    try:
+        from src.app.ticker_exclusions import TickerExclusionManager
+        exclusion_mgr = TickerExclusionManager()
+        excluded_symbols = [s for s in universe if exclusion_mgr.is_excluded(s)]
+        if excluded_symbols:
+            universe = [s for s in universe if not exclusion_mgr.is_excluded(s)]
+            print(f"  - Excluded {len(excluded_symbols)} symbol(s): {', '.join(sorted(excluded_symbols))}")
+    except Exception as e:
+        print(f"WARNING: Failed to apply ticker exclusions: {e}")
 
     if not universe:
         error_msg = "ERROR: No symbols in universe. Check config/config.yaml, ALLOWED_SYMBOLS env var, or candidate snapshot."
