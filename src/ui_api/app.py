@@ -1520,6 +1520,19 @@ async def generate_proposals_endpoint(request: GenerateRequest):
     try:
         config = load_config_with_yaml()
 
+        # GUARD: Check if sector recommendations are enabled
+        from src.app.llm_advisors.utils import is_sector_recommendations_enabled
+
+        if not is_sector_recommendations_enabled(config):
+            import logging
+
+            logger = logging.getLogger("ai-trader.ui-api")
+            logger.warning("Blocked sector proposal generation: sector_recommendations feature disabled")
+            raise HTTPException(
+                status_code=409,
+                detail="Sector recommendations are currently disabled. Enable in AI Co-Pilot settings to generate proposals.",
+            )
+
         # Check if recently generated (unless force=True)
         if not request.force:
             proposals_file = Path("out/universe_proposals.json")
