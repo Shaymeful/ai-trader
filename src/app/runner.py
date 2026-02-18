@@ -1422,6 +1422,48 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         market_time = get_market_time_now()
         run_timestamp = market_time.isoformat()
 
+        # Check if market is open - skip iteration if closed
+        from .market_hours import is_market_hours, seconds_until_market_open
+
+        if not is_market_hours(market_time):
+            wait_seconds = seconds_until_market_open(market_time)
+            wait_hours = wait_seconds / 3600
+            next_open_time = market_time + timedelta(seconds=wait_seconds)
+
+            print(f"\n{'=' * 80}")
+            print(f"MARKET CLOSED - {run_timestamp}")
+            print(f"{'=' * 80}")
+            print(f"Market is currently closed (hours: Mon-Fri 9:30 AM - 4:00 PM ET)")
+            print(f"Next market open: {next_open_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            print(f"Sleeping for {wait_hours:.1f} hours ({wait_seconds} seconds)...")
+            print(f"{'=' * 80}\n")
+
+            try:
+                # Use interruptible sleep that checks for trigger flag every 60 seconds
+                trigger_flag = Path("state/trigger_loop.flag")
+                sleep_remaining = wait_seconds
+                check_interval = 60  # Check every minute during market closed period
+
+                while sleep_remaining > 0:
+                    # Check if early wake-up requested (allows manual override)
+                    if trigger_flag.exists():
+                        print("\n*** Early wake-up triggered! Checking market hours... ***")
+                        trigger_flag.unlink()  # Remove flag
+                        break
+
+                    # Sleep for shorter interval or remaining time
+                    sleep_duration = min(check_interval, sleep_remaining)
+                    time.sleep(sleep_duration)
+                    sleep_remaining -= sleep_duration
+
+            except KeyboardInterrupt:
+                print("\n\nKeyboard interrupt received. Shutting down loop mode...")
+                print(f"Total iterations completed: {iteration - 1}")
+                sys.exit(0)
+
+            # Continue to next iteration to re-check market hours
+            continue
+
         # Record loop iteration start time (UTC for state tracking)
         loop_start_utc = datetime.now(UTC)
         runtime_state.last_loop_start = loop_start_utc.isoformat()

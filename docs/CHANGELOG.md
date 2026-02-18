@@ -2,6 +2,21 @@
 
 All notable changes to AI-Trader will be documented in this file.
 
+## 2026-02-18 - Market Hours Checking
+
+### Changed
+- **Loop Mode Market Hours**: Loop now automatically checks market hours before each iteration
+  - Skips execution when market is closed (nights, weekends, holidays)
+  - Sleeps until next market open (Monday-Friday, 9:30 AM - 4:00 PM ET)
+  - Prevents unnecessary market data fetching and strategy execution outside trading hours
+  - Manual override: Create `state/trigger_loop.flag` file to force immediate wake-up (useful for testing)
+  - No configuration required - market hours checking is always enabled
+
+### Technical
+- Added market hours checking in `src/app/runner.py:run_loop()` using existing `market_hours.py` utilities
+- Loop uses 60-second check intervals during closed periods (faster response to manual triggers)
+- Keyboard interrupt (Ctrl+C) works during market closed sleep periods
+
 ## 2026-01-06 - Universe Advisor
 
 ### Added

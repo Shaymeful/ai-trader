@@ -2157,10 +2157,20 @@ python -m src.app.runner --mode paper --loop
 
 **Execution Flow:**
 1. Print loop mode banner with configuration
-2. Execute strategy runner (shadow or paper mode)
-3. Log result to `logs/loop_status.log`
-4. Sleep for --sleep-seconds
-5. Repeat from step 2
+2. Check if market is open (Mon-Fri 9:30 AM - 4:00 PM ET)
+   - If market closed: Sleep until next market open, then continue to step 2
+   - If market open: Continue to step 3
+3. Execute strategy runner (shadow or paper mode)
+4. Log result to `logs/loop_status.log`
+5. Sleep for --sleep-seconds
+6. Repeat from step 2
+
+**Market Hours Checking:**
+- Loop automatically checks if market is open before each iteration
+- During market closed periods (nights, weekends), loop sleeps until next market open
+- Market hours: Monday-Friday, 9:30 AM - 4:00 PM Eastern Time
+- Manual override: Create `state/trigger_loop.flag` to force immediate wake-up (useful for testing)
+- No strategy execution or market data fetching occurs when market is closed
 
 **Exception Handling:**
 - All exceptions caught and logged to `logs/loop_errors.log`
