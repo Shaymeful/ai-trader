@@ -1,6 +1,7 @@
 """CLI entry point for running RSS selector once."""
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -26,8 +27,26 @@ def main() -> int:
     print("=" * 50)
 
     try:
-        # Initialize selector
-        selector = RSSSelector()
+        # Initialize Alpaca client for sentiment scoring (if credentials available)
+        alpaca_client = None
+        api_key = os.getenv("ALPACA_PAPER_KEY_ID")
+        secret_key = os.getenv("ALPACA_PAPER_SECRET_KEY")
+
+        if api_key and secret_key:
+            try:
+                from alpaca.data.historical import StockHistoricalDataClient
+                alpaca_client = StockHistoricalDataClient(api_key, secret_key)
+                print("[OK] Alpaca client initialized for sentiment scoring")
+            except Exception as e:
+                print(f"[WARN] Could not initialize Alpaca client: {e}")
+                print("  Sentiment scoring will be disabled (falling back to keyword-based)")
+        else:
+            print("[WARN] No Alpaca credentials found - sentiment scoring disabled")
+
+        print()
+
+        # Initialize selector with Alpaca client for sentiment scoring
+        selector = RSSSelector(alpaca_client=alpaca_client)
         print(f"Loaded config: {selector.config_path}")
         print(f"Enabled sectors: {', '.join(selector.config.sectors_enabled)}")
         print(f"RSS feeds configured: {len(selector.config.rss_feeds)}")
