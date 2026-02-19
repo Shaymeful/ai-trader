@@ -374,6 +374,15 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
 
     print(f"  Loaded {len(raw_candidates)} candidates, {len(tradeable_candidates)} tradeable")
 
+    # Build sentiment cache from candidates (for sentiment-adjusted strategies)
+    sentiment_cache = {}
+    for candidate in tradeable_candidates:
+        if hasattr(candidate, "sentiment_factors") and candidate.sentiment_factors:
+            sentiment_cache[candidate.symbol] = candidate.sentiment_factors.get("combined", 0.0)
+
+    if sentiment_cache:
+        print(f"  Built sentiment cache for {len(sentiment_cache)} symbols")
+
     # Emit candidate_loaded event
     if raw_candidates:
         ledger.append(
@@ -478,6 +487,11 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
 
     print("Running strategies...")
     print()
+
+    # Update sentiment cache for AI Copilot strategies (if sentiment adjustment enabled)
+    for strategy in strategies:
+        if isinstance(strategy, AICopilotWeightedStrategy) and sentiment_cache:
+            strategy.update_sentiment_cache(sentiment_cache)
 
     for strategy in strategies:
         intents = strategy.generate_intents(universe, market_data, candidate_map)
@@ -736,6 +750,15 @@ def run_paper_mode(
 
     print(f"  Loaded {len(raw_candidates)} candidates, {len(tradeable_candidates)} tradeable")
 
+    # Build sentiment cache from candidates (for sentiment-adjusted strategies)
+    sentiment_cache = {}
+    for candidate in tradeable_candidates:
+        if hasattr(candidate, "sentiment_factors") and candidate.sentiment_factors:
+            sentiment_cache[candidate.symbol] = candidate.sentiment_factors.get("combined", 0.0)
+
+    if sentiment_cache:
+        print(f"  Built sentiment cache for {len(sentiment_cache)} symbols")
+
     # Emit candidate_loaded event
     if raw_candidates:
         ledger.append(
@@ -919,9 +942,30 @@ def run_paper_mode(
 
     # Initialize Exit Advisor to emit SELL candidates into the candidate pipeline
     print("Initializing Exit Advisor...")
+
+    # Load exit thresholds from active profile (if configured)
+    exit_thresholds = active_profile.get("exit_thresholds", {}) if active_profile else {}
     exit_advisor = ExitAdvisor(
-        sell_scanner=sell_scanner, cooldown_hours=4, output_dir=Path("out/exit_advisor")
+        sell_scanner=sell_scanner,
+        cooldown_hours=4,
+        output_dir=Path("out/exit_advisor"),
+        stop_loss_pct=exit_thresholds.get("stop_loss_pct"),
+        take_profit_pct=exit_thresholds.get("take_profit_pct"),
+        trailing_stop_trigger_pct=exit_thresholds.get("trailing_stop_trigger_pct"),
+        trailing_stop_pct=exit_thresholds.get("trailing_stop_pct"),
     )
+
+    if exit_thresholds:
+        print(f"  Exit thresholds enabled:")
+        if exit_thresholds.get("stop_loss_pct"):
+            print(f"    Stop loss: {exit_thresholds['stop_loss_pct']}%")
+        if exit_thresholds.get("take_profit_pct"):
+            print(f"    Take profit: {exit_thresholds['take_profit_pct']}%")
+        if exit_thresholds.get("trailing_stop_trigger_pct"):
+            print(f"    Trailing stop trigger: {exit_thresholds['trailing_stop_trigger_pct']}%")
+        if exit_thresholds.get("trailing_stop_pct"):
+            print(f"    Trailing stop: {exit_thresholds['trailing_stop_pct']}%")
+
     print()
 
     # Get current positions for exit scanning
@@ -1012,6 +1056,7 @@ def run_paper_mode(
                     execution_enabled=strategy_config.params.get("execution_enabled", False),
                     rebalance_threshold_pct=strategy_config.params.get("rebalance_threshold_pct", 0.02),
                     allow_shorts=strategy_config.params.get("allow_shorts", False),
+                    sentiment_adjustment_enabled=sentiment_adjustment_enabled,
                 ))
     else:
         # Fallback to hardcoded strategies if no registry
@@ -1025,6 +1070,11 @@ def run_paper_mode(
 
     print("Running strategies...")
     print()
+
+    # Update sentiment cache for AI Copilot strategies (if sentiment adjustment enabled)
+    for strategy in strategies:
+        if isinstance(strategy, AICopilotWeightedStrategy) and sentiment_cache:
+            strategy.update_sentiment_cache(sentiment_cache)
 
     for strategy in strategies:
         intents = strategy.generate_intents(universe, market_data, candidate_map)
@@ -1158,6 +1208,9 @@ def run_paper_mode(
         modes_config = load_mode_profiles()
         active_profile_name, active_profile = get_active_mode_profile(modes_config)
 
+        # Check if sentiment adjustment should be enabled (for aggressive_small_mid_sentiment mode)
+        sentiment_adjustment_enabled = (active_profile_name == "aggressive_small_mid_sentiment")
+
         if "execution_gate" in active_profile:
             execution_gate_config = ExecutionGateConfig.from_dict(active_profile["execution_gate"])
             fundamentals_cache = FundamentalsCache()
@@ -1169,8 +1222,13 @@ def run_paper_mode(
         else:
             print(f"\nExecution gate DISABLED (mode: {active_profile_name} has no gate config)")
             print()
+
+        if sentiment_adjustment_enabled:
+            print(f"Sentiment adjustment ENABLED (mode: {active_profile_name})")
+            print()
     except Exception as e:
         print(f"\nWarning: Failed to load execution gate config: {e}")
+        sentiment_adjustment_enabled = False
         print("Continuing without execution gate constraints.")
         print()
 

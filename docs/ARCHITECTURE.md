@@ -7279,3 +7279,453 @@ Or query `orders_skipped` from `ExecutionResult`.
 **Last Updated:** 2026-02-04
 **Feature:** Small Cap Swing Trading Mode + Execution Gate
 **Compliance:** Spec Sync Rule ✓
+
+---
+
+## Aggressive Small/Mid Sentiment Trading Mode
+
+### Overview
+
+Added "Aggressive Small/Mid Sentiment" trading mode that combines **multi-factor sentiment scoring** with **hard exit thresholds** for aggressive short-term trading of small/mid-cap automation and energy stocks.
+
+**Key Features:**
+- Multi-factor sentiment scoring (RSS + momentum + volume)
+- Sentiment-adjusted position weighting
+- Hard exit thresholds (stop loss, take profit, trailing stop)
+- Market cap constraints ($300M-$20B)
+- 1-5 day swing trading horizon
+
+**Implementation Date:** 2026-02-18
+
+---
+
+### Mode Profile: aggressive_small_mid_sentiment
+
+**Location:** `config/modes.yaml`
+
+**Description:** Sentiment-driven automation+energy swing trading with multi-factor scoring
+
+**Configuration:**
+
+```yaml
+aggressive_small_mid_sentiment:
+  description: "Sentiment-driven automation+energy swing trading with multi-factor scoring"
+
+  strategies:
+    AI_COPILOT_WEIGHTED:
+      enabled: true
+      weight: 0.60  # 60% portfolio allocation
+      params:
+        execution_enabled: true
+        per_sector_weights:
+          automation:
+            ARRY: 0.10  # Array Technologies
+            FROG: 0.08  # JFrog
+            PATH: 0.08  # UiPath
+          energy:
+            FSLR: 0.12  # First Solar
+            ENPH: 0.10  # Enphase Energy
+            RUN: 0.08   # Sunrun
+
+  universe:
+    sectors:
+      core_index: false
+      mega_cap_tech: false
+      us_sector_etfs: false
+      automation: true  # LOCK to automation + energy only
+      energy: true
+
+  selector:
+    candidates_max_count: 80
+    candidates_min_confidence: 0.55  # Lowered for sentiment mode
+    duplicate_suppression_minutes: 30
+    ttl_minutes_buy: 1440  # 24 hours
+    ttl_minutes_sell: 1440
+    max_candidates_per_run: 25
+    market_cap_filter:
+      enabled: true
+      min_usd: 300000000    # $300M
+      max_usd: 20000000000  # $20B
+
+  execution_gate:
+    min_market_cap_usd: 300000000
+    max_market_cap_usd: 20000000000
+    min_price: 5.00
+    max_price: 150.00
+    min_avg_dollar_volume_20d: 5000000
+    strict_mode: true
+
+  exit_thresholds:
+    stop_loss_pct: 6.0           # Hard stop loss at -6%
+    take_profit_pct: 10.0        # Hard take profit at +10%
+    trailing_stop_trigger_pct: 5.0  # Start trailing after +5%
+    trailing_stop_pct: 3.0       # Trail by 3% from peak
+
+  risk_limits:
+    max_portfolio_exposure_pct: 0.60  # 60% max allocation
+    max_per_position_pct: 0.15        # 15% max per position
+    max_positions: 10                 # 5-10 concurrent positions
+```
+
+**Activation:**
+```bash
+# Via UI dashboard mode selector (button)
+# Or via API
+POST /api/mode
+{"profile": "aggressive_small_mid_sentiment"}
+```
+
+---
+
+### Sentiment Scoring System
+
+**Location:** `src/app/selector/sentiment_scorer.py`
+
+**Purpose:** Multi-factor sentiment scoring for RSS candidates
+
+**Scoring Formula:**
+```
+combined_sentiment = (rss_score × 0.4) + (momentum_score × 0.3) + (volume_score × 0.3)
+```
+
+**Components:**
+
+1. **RSS Confidence (40% weight)**
+   - Base confidence from RSS keyword matching
+   - Scaled to [-1.0, 1.0] range
+
+2. **Momentum Score (30% weight)**
+   - 5-day SMA vs 20-day SMA comparison
+   - Positive momentum: 5-day > 20-day → score toward +1.0
+   - Negative momentum: 5-day < 20-day → score toward -1.0
+   - Scales percentage difference (±10% = ±1.0)
+
+3. **Volume Surge Score (30% weight)**
+   - 3-day avg volume vs 20-day avg volume
+   - High surge: ratio > 2.0 → +1.0
+   - Normal volume: ratio = 1.0 → 0.0
+   - Low volume: ratio < 0.5 → -1.0
+
+**Action Mapping:**
+```python
+# Sentiment thresholds (config/selector.yaml)
+sentiment_thresholds:
+  buy: 0.65   # Combined sentiment >= 0.65 → BUY
+  sell: -0.55  # Combined sentiment <= -0.55 → SELL
+```
+
+**Data Sources:**
+- Alpaca `get_bars()` for price and volume data
+- Handles missing data gracefully (returns neutral 0.0 scores)
+
+**Integration Points:**
+- `rss_selector.py`: Computes sentiment during candidate creation
+- Stores `sentiment_factors` dict in Candidate model
+- Falls back to keyword-based action mapping if sentiment unavailable
+
+---
+
+### Sentiment-Adjusted Position Weighting
+
+**Location:** `src/app/strategies/ai_copilot_weighted.py`
+
+**Purpose:** Dynamically adjust position sizes based on sentiment
+
+**Mechanism:**
+```python
+# Multiply config weights by sentiment multiplier
+sentiment_multiplier = (sentiment_score + 1.0) / 2.0  # Map [-1, 1] to [0, 1]
+adjusted_weight = config_weight × sentiment_multiplier
+
+# Example:
+# ARRY: config_weight=0.10, sentiment=0.8 → multiplier=0.9 → adjusted=0.09
+# FROG: config_weight=0.08, sentiment=0.2 → multiplier=0.6 → adjusted=0.048
+
+# Normalize all adjusted weights to sum=1.0
+```
+
+**Activation:**
+- Only enabled in `aggressive_small_mid_sentiment` mode
+- Requires `sentiment_adjustment_enabled=True` parameter
+- Runner builds sentiment cache from candidates
+- Updates strategy via `update_sentiment_cache()` before execution
+
+---
+
+### Hard Exit Thresholds
+
+**Location:** `src/app/exit_advisor.py`
+
+**Purpose:** Automatic position exits based on hard P&L thresholds
+
+**Threshold Checks (evaluated BEFORE LLM scan):**
+
+1. **Stop Loss (-6%)**
+   ```python
+   if pnl_pct <= -6.0:
+       → SELL_ALL (confidence=1.0, urgent 2hr TTL)
+   ```
+
+2. **Take Profit (+10%)**
+   ```python
+   if pnl_pct >= +10.0:
+       → TAKE_PROFIT (confidence=0.95, 2hr TTL)
+   ```
+
+3. **Trailing Stop**
+   ```python
+   # Start trailing after +5% gain
+   if pnl_pct >= +5.0:
+       track peak_price
+       if drawdown_from_peak <= -3.0:
+           → TRAILING_STOP (confidence=0.95, 2hr TTL)
+   ```
+
+**Execution Flow:**
+1. Check hard thresholds for all positions
+2. Generate hard exit candidates (bypass cooldown)
+3. Filter remaining positions by cooldown
+4. Run LLM scan on remaining positions
+5. Combine hard exits + LLM exits
+
+**Configuration:**
+```python
+# From active_profile["exit_thresholds"]
+exit_advisor = ExitAdvisor(
+    sell_scanner=sell_scanner,
+    stop_loss_pct=6.0,
+    take_profit_pct=10.0,
+    trailing_stop_trigger_pct=5.0,
+    trailing_stop_pct=3.0,
+)
+```
+
+**Event Tagging:**
+- `event_type: "exit_advisor_hard_threshold"`
+- `tags: ["hard_exit", action_type, market_regime]`
+
+---
+
+### Candidate Schema Extension
+
+**Location:** `src/app/candidates/schema.py`
+
+**New Field:**
+```python
+class Candidate(BaseModel):
+    # ... existing fields ...
+    sentiment_factors: dict[str, float] | None = Field(
+        None,
+        description="Multi-factor sentiment scores (combined, rss, momentum, volume)",
+    )
+```
+
+**Example:**
+```python
+candidate.sentiment_factors = {
+    "combined": 0.65,   # Overall sentiment score
+    "rss": 0.5,         # RSS confidence component
+    "momentum": 0.7,    # Momentum component
+    "volume": 0.6,      # Volume component
+}
+```
+
+---
+
+### Configuration Files Updated
+
+**1. config/config.yaml**
+- Added `energy` sector to universe
+  ```yaml
+  energy:
+    enabled: false
+    description: "Energy and renewable energy stocks"
+    symbols: [FSLR, ENPH, RUN, PLUG, SEDG, BE, CHPT]
+  ```
+
+**2. config/selector.yaml**
+- Added sentiment scoring weights
+  ```yaml
+  sentiment_weights:
+    rss: 0.4
+    momentum: 0.3
+    volume: 0.3
+
+  sentiment_thresholds:
+    buy: 0.65
+    sell: -0.55
+  ```
+- Updated defaults for sentiment mode
+  ```yaml
+  defaults:
+    min_confidence: 0.55  # Lowered from 0.60
+    ttl_minutes_buy: 1440  # 24 hours (was 180)
+    ttl_minutes_sell: 1440  # 24 hours (was 120)
+    horizon_default: swing  # Changed from intraday
+  ```
+
+**3. config/modes.yaml**
+- Added `aggressive_small_mid_sentiment` profile (see above)
+
+**4. src/ui_api/app.py**
+- Updated mode profile type
+  ```python
+  profile: Literal[
+      "normal",
+      "aggressive_tech_energy",
+      "small_cap_swing",
+      "aggressive_small_mid_sentiment",
+  ]
+  ```
+
+**5. src/ui_api/dashboard.html**
+- Added mode selector button for sentiment mode
+- Updated JavaScript to handle new mode badge and active state
+
+---
+
+### Data Flow
+
+```
+RSS Feed → RSSSelector.process_headline()
+  ↓
+SentimentScorer.compute_sentiment_score()
+  ├─ RSS confidence (0.4)
+  ├─ Momentum (0.3) [Alpaca bars]
+  └─ Volume (0.3) [Alpaca bars]
+  ↓
+Candidate with sentiment_factors
+  ↓
+Runner builds sentiment_cache {symbol → sentiment_score}
+  ↓
+AICopilotWeightedStrategy.update_sentiment_cache()
+  ↓
+_normalize_weights() applies sentiment multipliers
+  ↓
+Position intents → Orders
+  ↓
+Open positions monitored
+  ↓
+ExitAdvisor.scan_and_emit_candidates()
+  ├─ Hard thresholds (6%/10%/5%/3%)
+  └─ LLM scan (remaining positions)
+  ↓
+Exit candidates → SELL orders
+```
+
+---
+
+### Safety Guarantees
+
+1. **Sentiment Scoring**
+   - Optional (only if alpaca_client provided to RSSSelector)
+   - Graceful degradation (returns neutral 0.0 if data unavailable)
+   - Falls back to keyword-based action mapping
+
+2. **Sentiment Adjustment**
+   - Opt-in (only in aggressive_small_mid_sentiment mode)
+   - Disabled by default for other modes
+   - Weights still normalized to sum=1.0
+
+3. **Hard Exit Thresholds**
+   - Optional (None parameters in ExitAdvisor)
+   - Only active when configured in mode profile
+   - Does not bypass execution gate or risk manager
+
+4. **Backward Compatibility**
+   - Existing modes unchanged
+   - Candidates without sentiment_factors still valid
+   - Strategies without sentiment adjustment work as before
+
+---
+
+### Risk Mitigation
+
+**Multi-Layer Safety:**
+1. **Execution Gate** (strict mode)
+   - Blocks orders outside $300M-$20B market cap
+   - Enforces price and liquidity constraints
+
+2. **Risk Manager**
+   - 60% max portfolio exposure
+   - 15% max per position
+   - 3% max daily loss
+
+3. **Hard Exit Thresholds**
+   - Automatic stop loss at -6%
+   - Take profit at +10%
+   - Trailing stop protection
+
+4. **Position Limits**
+   - Max 10 concurrent positions
+   - Prevents over-diversification
+
+---
+
+### Monitoring & Telemetry
+
+**Sentiment Scores:**
+- Logged in candidate creation events
+- Stored in snapshot.json for audit
+- Visible in dashboard (if implemented)
+
+**Exit Threshold Hits:**
+- Logged with `event_type: "exit_advisor_hard_threshold"`
+- Tracked in out/exit_advisor/events.jsonl
+- Cooldown still applied after hard exit
+
+**Performance Metrics:**
+- Track % of exits via hard thresholds vs LLM
+- Monitor sentiment score distribution
+- Measure hold duration (target: 1-5 days)
+
+---
+
+### Testing & Validation
+
+**Unit Tests:**
+- `test_sentiment_scorer.py` - momentum, volume, error handling
+- `test_rss_selector_sentiment.py` - scoring, filtering, action mapping
+- `test_ai_copilot_sentiment.py` - weight adjustment
+- `test_exit_advisor_thresholds.py` - hard exit triggers
+
+**Integration Tests:**
+- Validation script: `test_sentiment_implementation.py`
+- All components verified: sentiment scoring, candidate schema, strategy adjustment, exit thresholds, mode profile loading
+
+**Manual Testing Checklist:**
+- [ ] Mode switch to aggressive_small_mid_sentiment via UI
+- [ ] RSS feed generates sentiment-scored candidates
+- [ ] AI Copilot applies sentiment-adjusted weights
+- [ ] Hard exit triggers on -6% stop loss
+- [ ] Execution gate blocks out-of-range symbols
+
+---
+
+### Future Enhancements
+
+**1. Additional Sentiment Data Sources**
+- News sentiment APIs (AlphaVantage, MarketPsych)
+- Social media sentiment (Twitter/X, Reddit)
+- Options flow indicators
+
+**2. Dynamic Threshold Adjustment**
+- Adjust exit thresholds based on volatility (VIX)
+- Tighter stops in high-volatility regimes
+- Wider stops for high-conviction positions
+
+**3. Sentiment-Based Sector Rotation**
+- Track sector-level sentiment trends
+- Dynamically enable/disable sectors based on aggregate sentiment
+- Integrate with UniverseTickerManager
+
+**4. Enhanced UI**
+- Sentiment heatmap visualization
+- Real-time sentiment score updates
+- Exit threshold progress bars
+
+---
+
+**Last Updated:** 2026-02-18
+**Feature:** Aggressive Small/Mid Sentiment Trading Mode
+**Compliance:** Spec Sync Rule ✓

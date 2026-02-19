@@ -59,6 +59,18 @@ universe:
       description: "Automation and industrial technology stocks"
       symbols: []
 
+    energy:
+      enabled: false
+      description: "Energy and renewable energy stocks"
+      symbols:
+        - FSLR  # First Solar
+        - ENPH  # Enphase Energy
+        - RUN   # Sunrun
+        - PLUG  # Plug Power
+        - SEDG  # SolarEdge Technologies
+        - BE    # Bloom Energy
+        - CHPT  # ChargePoint Holdings
+
 # LLM Universe Advisor Configuration
 llm:
   # Provider mode: primary_fallback | ensemble | openai_only | anthropic_only

@@ -84,6 +84,10 @@ class Candidate(BaseModel):
         description="Average daily dollar volume for liquidity filtering",
         ge=0.0,
     )
+    sentiment_factors: dict[str, float] | None = Field(
+        None,
+        description="Multi-factor sentiment scores (combined, rss, momentum, volume)",
+    )
 
     @field_validator("created_at", "expires_at")
     @classmethod

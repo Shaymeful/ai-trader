@@ -1935,6 +1935,10 @@
                     <div class="mode-button-title">Small Cap Swing</div>
                     <div class="mode-button-desc">Small/mid caps only, swing trading, 12hr+ holds</div>
                 </button>
+                <button class="mode-button" id="mode-sentiment" onclick="switchMode('aggressive_small_mid_sentiment')">
+                    <div class="mode-button-title">Aggressive Small/Mid Sentiment</div>
+                    <div class="mode-button-desc">Sentiment-driven automation+energy, 1-5 day holds</div>
+                </button>
             </div>
             <div class="mode-changes" id="mode-changes" style="display: none;">
                 <strong>Coordinated Changes:</strong>
@@ -3266,6 +3270,8 @@
                     badgeText = 'Aggressive';
                 } else if (data.active_profile === 'small_cap_swing') {
                     badgeText = 'Small Cap Swing';
+                } else if (data.active_profile === 'aggressive_small_mid_sentiment') {
+                    badgeText = 'Aggressive Sentiment';
                 }
                 badge.textContent = badgeText;
                 badge.className = 'mode-badge';
@@ -3273,6 +3279,8 @@
                     badge.classList.add('aggressive');
                 } else if (data.active_profile === 'small_cap_swing') {
                     badge.classList.add('small-cap');
+                } else if (data.active_profile === 'aggressive_small_mid_sentiment') {
+                    badge.classList.add('aggressive');
                 }
 
                 // Update description
@@ -3282,6 +3290,7 @@
                 document.getElementById('mode-normal').classList.toggle('active', data.active_profile === 'normal');
                 document.getElementById('mode-aggressive').classList.toggle('active', data.active_profile === 'aggressive_tech_energy');
                 document.getElementById('mode-small-cap').classList.toggle('active', data.active_profile === 'small_cap_swing');
+                document.getElementById('mode-sentiment').classList.toggle('active', data.active_profile === 'aggressive_small_mid_sentiment');
 
                 // Load execution gate filters if available
                 await loadExecutionGateFilters(data.active_profile);
@@ -4926,8 +4935,8 @@
             }
 
             // Update stats
-            document.getElementById('copilot-calls-used').textContent = status.budgets.calls_used;
-            document.getElementById('copilot-calls-max').textContent = status.budgets.max_calls_per_run;
+            document.getElementById('copilot-calls-used').textContent = status.budget.calls_used;
+            document.getElementById('copilot-calls-max').textContent = status.budget.max_calls_per_run;
 
             const featuresActive = [
                 effective.trade_rationale.enabled,
@@ -4945,9 +4954,9 @@
             // Status tab
             document.getElementById('copilot-enabled-text').textContent = effective.enabled ? 'Enabled' : 'Disabled';
             document.getElementById('copilot-enabled-source').textContent = `source: ${sources.enabled}`;
-            document.getElementById('copilot-budget-used').textContent = status.budgets.calls_used;
-            document.getElementById('copilot-budget-max').textContent = status.budgets.max_calls_per_run;
-            document.getElementById('copilot-token-limit').textContent = status.budgets.global_max_output_tokens;
+            document.getElementById('copilot-budget-used').textContent = status.budget.calls_used;
+            document.getElementById('copilot-budget-max').textContent = status.budget.max_calls_per_run;
+            document.getElementById('copilot-token-limit').textContent = effective.budgets.global_max_output_tokens;
             document.getElementById('copilot-dry-run-text').textContent = effective.dry_run ? 'Yes' : 'No';
             document.getElementById('copilot-dry-run-source').textContent = `source: ${sources.dry_run}`;
 
@@ -5012,9 +5021,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        ai_copilot: {
-                            enabled: enabled
-                        }
+                        enabled: enabled
                     })
                 });
 
@@ -5036,10 +5043,8 @@
 
         async function toggleCoPilotFeature(featureName, enabled) {
             try {
-                const payload = {
-                    ai_copilot: {}
-                };
-                payload.ai_copilot[featureName] = {
+                const payload = {};
+                payload[featureName] = {
                     enabled: enabled
                 };
 

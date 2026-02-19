@@ -2760,9 +2760,12 @@ def _toggle_copilot_feature(feature_name: str, enabled: bool) -> ChangeResponse:
 class ModeRequest(BaseModel):
     """Request to switch trading mode profile."""
 
-    profile: Literal["normal", "aggressive_tech_energy"] = Field(
-        ..., description="Mode profile to activate"
-    )
+    profile: Literal[
+        "normal",
+        "aggressive_tech_energy",
+        "small_cap_swing",
+        "aggressive_small_mid_sentiment",
+    ] = Field(..., description="Mode profile to activate")
 
 
 class ModeStatusResponse(BaseModel):

@@ -125,5 +125,83 @@ profiles:
       exclude_symbols: []                 # Ban list (empty by default)
       allow_symbols: []                   # Allowlist override (empty by default)
 
+  # Aggressive small/mid cap sentiment trading mode
+  aggressive_small_mid_sentiment:
+    description: "Sentiment-driven automation+energy swing trading with multi-factor scoring"
+
+    # Strategy configuration - AI Copilot with sentiment-adjusted weights
+    strategies:
+      AI_COPILOT_WEIGHTED:
+        enabled: true
+        weight: 0.60  # 60% portfolio allocation
+        params:
+          execution_enabled: true  # Enable execution (respects global guardrails + execution gate)
+          # Specific position weights per symbol (within allocated 60%)
+          per_sector_weights:
+            automation:
+              ARRY: 0.10  # Array Technologies
+              FROG: 0.08  # JFrog
+              PATH: 0.08  # UiPath
+            energy:
+              FSLR: 0.12  # First Solar
+              ENPH: 0.10  # Enphase Energy
+              RUN: 0.08   # Sunrun
+
+    # Universe sector enables - LOCK to automation + energy only
+    universe:
+      sectors:
+        core_index: false       # Disable SPY/QQQ
+        mega_cap_tech: false    # Disable mega caps
+        us_sector_etfs: false   # Disable sector ETFs
+        automation: true        # Enable automation sector
+        energy: true            # Enable energy sector
+
+    # Selector (candidate engine) settings - sentiment mode profile
+    selector:
+      candidates_max_count: 80              # Higher for sentiment-driven discovery
+      candidates_min_confidence: 0.55       # Lowered threshold for sentiment mode
+      duplicate_suppression_minutes: 30     # Standard for swing trading
+      ttl_minutes_buy: 1440                 # 24 hours for sentiment setups
+      ttl_minutes_sell: 1440                # 24 hours for exit signals
+      max_candidates_per_run: 25            # More candidates for sentiment evaluation
+      # Market cap filter for small/mid cap targeting
+      market_cap_filter:
+        enabled: true
+        min_usd: 300000000                  # $300M minimum (small cap floor)
+        max_usd: 20000000000                # $20B maximum (mid cap ceiling)
+
+    # AI Co-Pilot feature toggles - focus on sentiment and execution
+    ai_copilot:
+      trade_rationale: true                 # Keep for sentiment trade justification
+      daily_journal: false                  # Disable to save tokens
+      strategy_critique: false              # Disable to save tokens
+      universe_ticker_manager: true         # Enable for dynamic ticker discovery
+
+    # Execution gate - HARD constraints for small/mid cap + sentiment mode
+    execution_gate:
+      min_market_cap_usd: 300000000         # $300M minimum (small cap floor)
+      max_market_cap_usd: 20000000000       # $20B maximum (exclude large caps)
+      min_price: 5.00                       # Avoid penny stocks
+      max_price: 150.00                     # Reasonable upper bound
+      min_avg_dollar_volume_20d: 5000000    # $5M min daily volume (liquidity floor)
+      max_spread_bps: 100                   # 1.00% max spread (allow wider for small caps)
+      require_fundamentals: false           # Don't block if data unavailable
+      strict_mode: true                     # Hard block (not advisory)
+      exclude_symbols: []                   # Ban list (empty by default)
+      allow_symbols: []                     # Allowlist override (empty by default)
+
+    # Exit thresholds - hard rules for sentiment trades
+    exit_thresholds:
+      stop_loss_pct: 6.0                    # 6% stop loss
+      take_profit_pct: 10.0                 # 10% take profit
+      trailing_stop_trigger_pct: 5.0        # Start trailing after 5% gain
+      trailing_stop_pct: 3.0                # Trail by 3% from peak
+
+    # Risk limits - tailored for sentiment mode
+    risk_limits:
+      max_portfolio_exposure_pct: 0.60      # 60% max portfolio exposure
+      max_per_position_pct: 0.15            # 15% max per position
+      max_positions: 10                     # 5-10 concurrent positions target
+
 # Active profile (can be overridden at runtime)
 active_profile: "normal"

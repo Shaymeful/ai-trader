@@ -134,13 +134,24 @@ confidence_modifiers:
   uncertain_symbol_penalty: 0.15
   vagueness_penalty: 0.10  # Subtract if speculative words without hard actions
 
+# Multi-factor sentiment scoring weights (RSS + momentum + volume)
+sentiment_weights:
+  rss: 0.4        # RSS confidence weight
+  momentum: 0.3   # Price momentum weight (5-day vs 20-day SMA)
+  volume: 0.3     # Volume surge weight (3-day vs 20-day avg)
+
+# Sentiment thresholds for action mapping (when sentiment scoring enabled)
+sentiment_thresholds:
+  buy: 0.65      # Combined sentiment >= 0.65 → BUY
+  sell: -0.55    # Combined sentiment <= -0.55 → SELL
+
 # Defaults for candidate expiration and behavior
 defaults:
-  min_confidence: 0.60
-  ttl_minutes_buy: 180      # 3 hours for buy signals
-  ttl_minutes_sell: 120     # 2 hours for sell signals
-  ttl_minutes_watch: 240    # 4 hours for watch signals
-  horizon_default: intraday
+  min_confidence: 0.55      # Lowered from 0.60 for sentiment mode
+  ttl_minutes_buy: 1440     # 24 hours for buy signals (was 180)
+  ttl_minutes_sell: 1440    # 24 hours for sell signals (was 120)
+  ttl_minutes_watch: 1440   # 24 hours for watch signals (was 240)
+  horizon_default: swing    # Changed from intraday for 1-5 day holds
 
 # Safety constraints
 safety:

@@ -49,6 +49,7 @@ class AICopilotWeightedStrategy(Strategy):
         execution_enabled: bool = False,
         rebalance_threshold_pct: float = 0.02,
         allow_shorts: bool = False,
+        sentiment_adjustment_enabled: bool = False,
     ):
         """
         Initialize AI Co-Pilot Weighted Strategy.
@@ -59,12 +60,15 @@ class AICopilotWeightedStrategy(Strategy):
             execution_enabled: Safety guardrail - must be true to trade
             rebalance_threshold_pct: Reserved for phase 2 (smart rebalancing)
             allow_shorts: Reserved for phase 2 (short positions)
+            sentiment_adjustment_enabled: Enable sentiment-based weight adjustment
         """
         super().__init__(name="AI_COPILOT_WEIGHTED")
         self.per_sector_weights = per_sector_weights or {}
         self.execution_enabled = execution_enabled
         self.rebalance_threshold_pct = rebalance_threshold_pct
         self.allow_shorts = allow_shorts
+        self.sentiment_adjustment_enabled = sentiment_adjustment_enabled
+        self.sentiment_cache: dict[str, float] = {}  # symbol -> sentiment_score (-1.0 to 1.0)
 
     def generate_intents(
         self,
@@ -190,11 +194,22 @@ class AICopilotWeightedStrategy(Strategy):
                 filtered[sector] = sector_filtered
         return filtered
 
+    def update_sentiment_cache(self, sentiment_scores: dict[str, float]) -> None:
+        """Update sentiment cache from runner.
+
+        Args:
+            sentiment_scores: Dict of symbol -> sentiment_score (-1.0 to 1.0)
+        """
+        self.sentiment_cache = sentiment_scores
+
     def _normalize_weights(
         self, filtered_weights: dict[str, dict[str, float]]
     ) -> dict[str, float]:
         """
         Flatten nested weights and normalize so sum = 1.0.
+
+        If sentiment_adjustment_enabled, multiplies config weights by sentiment scores
+        before normalization. This allows sentiment to dynamically adjust position sizes.
 
         This ensures full budget utilization by scaling all weights proportionally.
 
@@ -208,6 +223,20 @@ class AICopilotWeightedStrategy(Strategy):
         flat_weights = {}
         for sector, ticker_weights in filtered_weights.items():
             flat_weights.update(ticker_weights)
+
+        # Apply sentiment adjustment if enabled
+        if self.sentiment_adjustment_enabled and self.sentiment_cache:
+            adjusted_weights = {}
+            for ticker, weight in flat_weights.items():
+                # Get sentiment score (default to 0.5 if not available)
+                # Convert -1.0 to 1.0 range to 0.0 to 1.0 multiplier
+                sentiment_score = self.sentiment_cache.get(ticker, 0.0)
+                sentiment_multiplier = (sentiment_score + 1.0) / 2.0  # Map [-1, 1] to [0, 1]
+
+                # Multiply config weight by sentiment
+                adjusted_weights[ticker] = weight * sentiment_multiplier
+
+            flat_weights = adjusted_weights
 
         # Normalize so sum = 1.0
         total_weight = sum(flat_weights.values())

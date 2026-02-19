@@ -14,6 +14,7 @@ import yaml
 from pydantic import BaseModel
 
 from src.app.selector.llm_enrichment import create_enricher
+from src.app.selector.sentiment_scorer import SentimentScorer
 from src.app.selector.ticker_validation import create_validator
 
 
@@ -46,6 +47,7 @@ class Candidate(BaseModel):
     tags: list[str]
     reason: str
     avg_dollar_volume: float | None = None
+    sentiment_factors: dict[str, float] | None = None
 
 
 class SelectorEvent(BaseModel):
@@ -87,6 +89,19 @@ class RSSSelector:
 
         # Initialize LLM enricher (if enabled in config)
         self.enricher = create_enricher(self.config_dict)
+
+        # Initialize sentiment scorer (if alpaca_client provided)
+        self.sentiment_scorer = None
+        if alpaca_client:
+            rss_weight = self.config_dict.get("sentiment_weights", {}).get("rss", 0.4)
+            momentum_weight = self.config_dict.get("sentiment_weights", {}).get("momentum", 0.3)
+            volume_weight = self.config_dict.get("sentiment_weights", {}).get("volume", 0.3)
+            self.sentiment_scorer = SentimentScorer(
+                alpaca_client=alpaca_client,
+                rss_weight=rss_weight,
+                momentum_weight=momentum_weight,
+                volume_weight=volume_weight,
+            )
 
     def _load_config_dict(self) -> dict[str, Any]:
         """Load selector configuration from YAML as dict."""
@@ -178,8 +193,33 @@ class RSSSelector:
 
         return None, False
 
-    def map_action(self, text: str) -> str:
-        """Map headline text to action (buy/sell/watch)."""
+    def map_action(
+        self, text: str, sentiment_score: float | None = None
+    ) -> str:
+        """Map headline text to action (buy/sell/watch).
+
+        If sentiment_score provided, uses sentiment thresholds for action mapping.
+        Otherwise falls back to keyword-based mapping.
+
+        Args:
+            text: Headline text
+            sentiment_score: Optional combined sentiment score (-1.0 to 1.0)
+
+        Returns:
+            Action string (buy/sell/watch)
+        """
+        # If sentiment scoring enabled and available, use thresholds
+        if sentiment_score is not None:
+            buy_threshold = self.config_dict.get("sentiment_thresholds", {}).get("buy", 0.65)
+            sell_threshold = self.config_dict.get("sentiment_thresholds", {}).get("sell", -0.55)
+
+            if sentiment_score >= buy_threshold:
+                return "buy"
+            if sentiment_score <= sell_threshold:
+                return "sell"
+            # Fall through to watch
+
+        # Keyword-based action mapping (fallback or when sentiment not available)
         text_lower = text.lower()
 
         # Check buy keywords
@@ -197,11 +237,19 @@ class RSSSelector:
         # Default to watch
         return self.config.safety["action_default_when_uncertain"]
 
-    def compute_confidence(self, text: str, action: str, symbol_certain: bool) -> float:
+    def compute_confidence(
+        self, text: str, action: str, symbol_certain: bool, symbol: str | None = None
+    ) -> tuple[float, dict[str, float] | None]:
         """
-        Compute confidence score for candidate.
+        Compute confidence score for candidate with optional sentiment scoring.
 
         Base confidence + keyword bonus - uncertainty penalty - vagueness penalty.
+        If sentiment scorer available, computes multi-factor sentiment.
+
+        Returns:
+            (confidence, sentiment_factors) tuple
+            - confidence: RSS confidence score (0.0-1.0)
+            - sentiment_factors: Sentiment breakdown dict or None
         """
         base = self.config.confidence_modifiers["base_confidence"]
         bonus = self.config.confidence_modifiers["strong_keyword_bonus"]
@@ -231,7 +279,18 @@ class RSSSelector:
         confidence = max(self.config.defaults["min_confidence"], confidence)
         confidence = min(max_conf, confidence)
 
-        return round(confidence, 2)
+        confidence = round(confidence, 2)
+
+        # Compute sentiment factors if scorer available
+        sentiment_factors = None
+        if self.sentiment_scorer and symbol:
+            _, sentiment_factors = self.sentiment_scorer.compute_sentiment_score(
+                symbol=symbol,
+                text=text,
+                rss_confidence=confidence,
+            )
+
+        return confidence, sentiment_factors
 
     def create_candidate(
         self,
@@ -242,6 +301,7 @@ class RSSSelector:
         reason: str,
         tags: list[str],
         avg_dollar_volume: float | None = None,
+        sentiment_factors: dict[str, float] | None = None,
     ) -> Candidate:
         """Create candidate with expiration time."""
         now_et = datetime.now(self.eastern)
@@ -265,6 +325,7 @@ class RSSSelector:
             tags=tags,
             reason=reason[:200],  # Limit reason length
             avg_dollar_volume=avg_dollar_volume,  # May be None if not available
+            sentiment_factors=sentiment_factors,  # Multi-factor sentiment scores
         )
 
     def check_liquidity(self, avg_dollar_volume: float | None) -> bool:
@@ -377,11 +438,21 @@ class RSSSelector:
             )
             return None, events
 
-        # Map action
-        action = self.map_action(full_text)
+        # Compute confidence and sentiment factors (sentiment may be None)
+        confidence, sentiment_factors = self.compute_confidence(
+            full_text, "watch", symbol_certain, symbol
+        )
 
-        # Compute confidence
-        confidence = self.compute_confidence(full_text, action, symbol_certain)
+        # Map action (use sentiment score if available)
+        sentiment_score = None
+        if sentiment_factors:
+            sentiment_score = sentiment_factors.get("combined")
+        action = self.map_action(full_text, sentiment_score)
+
+        # Recompute confidence with actual action (for keyword matching)
+        confidence, sentiment_factors = self.compute_confidence(
+            full_text, action, symbol_certain, symbol
+        )
 
         # Check if meets minimum confidence
         if confidence < self.config.defaults["min_confidence"]:
@@ -488,6 +559,7 @@ class RSSSelector:
             reason=title,
             tags=tags,
             avg_dollar_volume=avg_dollar_volume,
+            sentiment_factors=sentiment_factors,
         )
 
         # Log candidate creation

@@ -51,6 +51,10 @@ class ExitAdvisor:
         sell_scanner: SellScanner,
         cooldown_hours: int = 4,
         output_dir: Path = Path("out/exit_advisor"),
+        stop_loss_pct: float | None = None,
+        take_profit_pct: float | None = None,
+        trailing_stop_trigger_pct: float | None = None,
+        trailing_stop_pct: float | None = None,
     ):
         """
         Initialize Exit Advisor.
@@ -59,6 +63,10 @@ class ExitAdvisor:
             sell_scanner: SellScanner instance
             cooldown_hours: Hours to wait before re-scanning same symbol
             output_dir: Directory for exit advisor outputs
+            stop_loss_pct: Hard stop loss threshold (e.g., 6.0 for -6%)
+            take_profit_pct: Hard take profit threshold (e.g., 10.0 for +10%)
+            trailing_stop_trigger_pct: Trigger trailing stop after gain (e.g., 5.0 for +5%)
+            trailing_stop_pct: Trailing stop distance from peak (e.g., 3.0 for -3% from peak)
         """
         self.sell_scanner = sell_scanner
         self.cooldown_hours = cooldown_hours
@@ -67,8 +75,17 @@ class ExitAdvisor:
         self.events_file = self.output_dir / "events.jsonl"
         self.logger = logging.getLogger("ai-trader.exit_advisor")
 
+        # Hard exit threshold parameters
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
+        self.trailing_stop_trigger_pct = trailing_stop_trigger_pct
+        self.trailing_stop_pct = trailing_stop_pct
+
         # Cooldown tracking: symbol -> last_scan_time
         self.last_scan_times = self._load_cooldowns()
+
+        # Trailing stop tracking: symbol -> peak_price
+        self.peak_prices: dict[str, float] = {}
 
     def _load_cooldowns(self) -> dict[str, datetime]:
         """Load cooldown state from events file."""
@@ -107,6 +124,111 @@ class ExitAdvisor:
         """Update cooldown timestamp for symbol."""
         self.last_scan_times[symbol] = datetime.now(UTC)
 
+    def _check_hard_thresholds(
+        self,
+        symbol: str,
+        current_price: float,
+        avg_entry_price: float,
+        market_regime: str | None,
+    ) -> ExitCandidate | None:
+        """Check hard exit thresholds and generate exit candidate if triggered.
+
+        Args:
+            symbol: Stock symbol
+            current_price: Current market price
+            avg_entry_price: Average entry price
+            market_regime: Current market regime
+
+        Returns:
+            ExitCandidate if threshold triggered, None otherwise
+        """
+        # Calculate gain/loss percentage
+        pnl_pct = ((current_price - avg_entry_price) / avg_entry_price) * 100
+
+        # Check stop loss
+        if self.stop_loss_pct and pnl_pct <= -self.stop_loss_pct:
+            return self._create_hard_exit_candidate(
+                symbol=symbol,
+                action="SELL_ALL",
+                confidence=1.0,
+                reason=f"Stop loss triggered: {pnl_pct:.1f}% loss (threshold: {self.stop_loss_pct}%)",
+                market_regime=market_regime,
+            )
+
+        # Check take profit
+        if self.take_profit_pct and pnl_pct >= self.take_profit_pct:
+            return self._create_hard_exit_candidate(
+                symbol=symbol,
+                action="TAKE_PROFIT",
+                confidence=0.95,
+                reason=f"Take profit triggered: {pnl_pct:.1f}% gain (threshold: {self.take_profit_pct}%)",
+                market_regime=market_regime,
+            )
+
+        # Check trailing stop
+        if (
+            self.trailing_stop_trigger_pct
+            and self.trailing_stop_pct
+            and pnl_pct >= self.trailing_stop_trigger_pct
+        ):
+            # Update peak price
+            if symbol not in self.peak_prices or current_price > self.peak_prices[symbol]:
+                self.peak_prices[symbol] = current_price
+
+            # Check trailing stop from peak
+            peak_price = self.peak_prices[symbol]
+            drawdown_from_peak_pct = ((current_price - peak_price) / peak_price) * 100
+
+            if drawdown_from_peak_pct <= -self.trailing_stop_pct:
+                return self._create_hard_exit_candidate(
+                    symbol=symbol,
+                    action="TRAILING_STOP",
+                    confidence=0.95,
+                    reason=f"Trailing stop triggered: {drawdown_from_peak_pct:.1f}% from peak (threshold: {self.trailing_stop_pct}%)",
+                    market_regime=market_regime,
+                )
+
+        return None
+
+    def _create_hard_exit_candidate(
+        self,
+        symbol: str,
+        action: str,
+        confidence: float,
+        reason: str,
+        market_regime: str | None,
+    ) -> ExitCandidate:
+        """Create exit candidate from hard threshold rule.
+
+        Args:
+            symbol: Stock symbol
+            action: Exit action (SELL_ALL, TAKE_PROFIT, TRAILING_STOP)
+            confidence: Confidence score
+            reason: Human-readable reason
+            market_regime: Current market regime
+
+        Returns:
+            ExitCandidate object
+        """
+        now = datetime.now(UTC)
+
+        # Urgent 2-hour TTL for hard exits
+        expires_at = now + timedelta(hours=2)
+
+        return ExitCandidate(
+            candidate_id=f"exit-hard-{now.strftime('%Y%m%d%H%M%S')}-{symbol}",
+            created_at=now.isoformat(),
+            expires_at=expires_at.isoformat(),
+            symbol=symbol,
+            action="sell",
+            confidence=confidence,
+            horizon="intraday",
+            sector=None,
+            event_type="exit_advisor_hard_threshold",
+            tags=["hard_exit", action.lower(), market_regime or "unknown"],
+            reason=reason,
+        )
+
     def scan_and_emit_candidates(
         self,
         current_positions: dict[str, tuple[int, float]],
@@ -142,11 +264,47 @@ class ExitAdvisor:
             regime=market_regime,
         )
 
-        # Filter out positions on cooldown
+        # Check hard thresholds first (before cooldown/LLM scan)
+        hard_exit_candidates = []
+        remaining_positions = {}
+
+        for symbol, position_data in current_positions.items():
+            quantity, avg_entry_price = position_data
+
+            # Get current price
+            current_price = market_data.get(symbol, {}).get("price")
+            if not current_price or current_price <= 0:
+                # No price data, keep for LLM scan
+                remaining_positions[symbol] = position_data
+                continue
+
+            # Check hard thresholds
+            hard_exit = self._check_hard_thresholds(
+                symbol=symbol,
+                current_price=current_price,
+                avg_entry_price=avg_entry_price,
+                market_regime=market_regime,
+            )
+
+            if hard_exit:
+                hard_exit_candidates.append(hard_exit)
+                self._update_cooldown(symbol)  # Apply cooldown to hard exits too
+                self.logger.info(f"Hard exit triggered for {symbol}: {hard_exit.reason}")
+            else:
+                # No hard exit, keep for LLM scan
+                remaining_positions[symbol] = position_data
+
+        # If we have hard exits, log them
+        if hard_exit_candidates:
+            context.add_rationale(
+                f"Generated {len(hard_exit_candidates)} hard threshold exits"
+            )
+
+        # Filter remaining positions by cooldown
         positions_to_scan = {}
         filtered_cooldown = 0
 
-        for symbol, position_data in current_positions.items():
+        for symbol, position_data in remaining_positions.items():
             if self._is_on_cooldown(symbol):
                 filtered_cooldown += 1
                 self.logger.debug(f"Skipping {symbol} - on cooldown")
@@ -156,7 +314,18 @@ class ExitAdvisor:
         if filtered_cooldown > 0:
             context.add_filtered("cooldown", filtered_cooldown)
 
+        # If no positions to scan, return hard exits (if any)
         if not positions_to_scan:
+            if hard_exit_candidates:
+                context.add_rationale("Remaining positions on cooldown, returning hard exits only")
+                context.set_final_count(len(hard_exit_candidates))
+                event = context.finalize()
+                from .advisor_telemetry import AdvisorTelemetry
+
+                telemetry = AdvisorTelemetry()
+                telemetry.log_run(event)
+                return hard_exit_candidates
+
             context.add_rationale("No positions to scan (all on cooldown)")
             context.set_final_count(0)
             event = context.finalize()
@@ -207,13 +376,16 @@ class ExitAdvisor:
             if filtered_hold > 0:
                 context.add_filtered("hold_signal", filtered_hold)
 
-            context.set_final_count(len(exit_candidates))
+            # Combine hard exits and LLM exits
+            all_exit_candidates = hard_exit_candidates + exit_candidates
+
+            context.set_final_count(len(all_exit_candidates))
 
             if exit_candidates:
                 context.add_rationale(
-                    f"Generated {len(exit_candidates)} exit signals from {len(positions_to_scan)} positions"
+                    f"Generated {len(exit_candidates)} LLM exit signals from {len(positions_to_scan)} positions"
                 )
-            else:
+            elif not hard_exit_candidates:
                 context.add_rationale("No exit signals met confidence threshold")
 
             # Finalize telemetry
@@ -223,7 +395,7 @@ class ExitAdvisor:
             telemetry = AdvisorTelemetry()
             telemetry.log_run(event)
 
-            return exit_candidates
+            return all_exit_candidates
 
         except Exception as e:
             self.logger.error(f"Exit advisor scan failed: {e}")
