@@ -1978,12 +1978,18 @@
         <div class="account-summary">
             <div class="section-header">
                 <h2>Account Summary</h2>
-                <button class="btn-secondary" onclick="openAccountSummaryEditor()" title="Edit account settings">
-                    Edit
-                </button>
+                <div style="display: flex; gap: 0.5rem;">
+                    <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; cursor: pointer;">
+                        <input type="checkbox" id="show-total-capital" onchange="toggleTotalCapital()" checked>
+                        Show Total Capital
+                    </label>
+                    <button class="btn-secondary" onclick="openAccountSummaryEditor()" title="Edit account settings">
+                        Edit
+                    </button>
+                </div>
             </div>
             <div class="account-grid">
-                <div class="account-stat">
+                <div class="account-stat" id="total-capital-stat">
                     <div class="account-stat-label">Total Capital</div>
                     <div class="account-stat-value" id="total-capital">$0</div>
                 </div>
@@ -4485,6 +4491,19 @@
             document.getElementById('account-summary-modal').classList.remove('active');
         }
 
+        function toggleTotalCapital() {
+            const checkbox = document.getElementById('show-total-capital');
+            const stat = document.getElementById('total-capital-stat');
+
+            if (checkbox.checked) {
+                stat.style.display = 'block';
+                localStorage.setItem('showTotalCapital', 'true');
+            } else {
+                stat.style.display = 'none';
+                localStorage.setItem('showTotalCapital', 'false');
+            }
+        }
+
         async function saveAccountSummary() {
             const totalCapital = parseFloat(document.getElementById('edit-total-capital').value);
             const maxDailyLoss = parseFloat(document.getElementById('edit-max-daily-loss').value);
@@ -5189,6 +5208,13 @@
         loadDashboard();
         loadModeStatus();
         loadAICoPilot();
+
+        // Initialize total capital toggle from localStorage
+        const showTotalCapital = localStorage.getItem('showTotalCapital');
+        if (showTotalCapital === 'false') {
+            document.getElementById('show-total-capital').checked = false;
+            document.getElementById('total-capital-stat').style.display = 'none';
+        }
 
         // Auto-refresh mode status every 30 seconds
         setInterval(loadModeStatus, 30000);
