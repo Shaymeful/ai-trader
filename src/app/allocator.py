@@ -343,6 +343,8 @@ class Allocator:
         Note: max_order_notional is enforced by the executor via order slicing.
         This method only enforces max_positions_notional (total portfolio cap).
 
+        Can be bypassed via UI toggle (data/ui_runtime_overrides.json).
+
         Args:
             targets: Dict of symbol -> target quantity
             prices: Dict of symbol -> current price
@@ -351,6 +353,26 @@ class Allocator:
         Returns:
             Capped target positions
         """
+        # Check if capital limit bypass is enabled
+        bypass_capital_limit = False
+        try:
+            import json
+            from pathlib import Path
+
+            ui_overrides_path = Path("data/ui_runtime_overrides.json")
+            if ui_overrides_path.exists():
+                with open(ui_overrides_path, "r") as f:
+                    overrides = json.load(f)
+                    bypass_capital_limit = overrides.get("allocator", {}).get("bypass_capital_limit", False)
+        except Exception as e:
+            self.logger.warning(f"Failed to load bypass setting, using default (False): {e}")
+
+        if bypass_capital_limit:
+            self.logger.warning("⚠️  CAPITAL LIMIT BYPASSED - max_positions_notional NOT enforced!")
+            warnings.append("Capital limit bypassed - no max_positions_notional cap applied")
+            # Return all targets without capping
+            return {symbol: qty for symbol, qty in targets.items() if qty != 0}
+
         capped_targets = {}
         total_notional = Decimal("0")
 

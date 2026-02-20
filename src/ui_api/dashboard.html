@@ -1978,10 +1978,14 @@
         <div class="account-summary">
             <div class="section-header">
                 <h2>Account Summary</h2>
-                <div style="display: flex; gap: 0.5rem;">
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
                     <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; cursor: pointer;">
                         <input type="checkbox" id="show-total-capital" onchange="toggleTotalCapital()" checked>
                         Show Total Capital
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; cursor: pointer; color: #fbbf24;" title="Disable max_positions_notional limit in allocator">
+                        <input type="checkbox" id="bypass-capital-limit" onchange="toggleCapitalLimitBypass()">
+                        Bypass Capital Limit
                     </label>
                     <button class="btn-secondary" onclick="openAccountSummaryEditor()" title="Edit account settings">
                         Edit
@@ -4504,6 +4508,36 @@
             }
         }
 
+        async function toggleCapitalLimitBypass() {
+            const checkbox = document.getElementById('bypass-capital-limit');
+            const bypass = checkbox.checked;
+
+            try {
+                const response = await fetch('/config/bypass-capital-limit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bypass: bypass })
+                });
+
+                if (response.ok) {
+                    const color = bypass ? '#fbbf24' : '#10b981';
+                    const message = bypass ? 'Capital limit BYPASSED (no max_positions_notional cap)' : 'Capital limit ENFORCED';
+                    showSuccess(message);
+                    console.log(`Capital limit bypass: ${bypass}`);
+                } else {
+                    const error = await response.json();
+                    showError(`Failed to update bypass setting: ${error.detail || 'Unknown error'}`);
+                    // Revert checkbox on error
+                    checkbox.checked = !bypass;
+                }
+            } catch (error) {
+                console.error('Error toggling capital limit bypass:', error);
+                showError('Failed to update bypass setting');
+                // Revert checkbox on error
+                checkbox.checked = !bypass;
+            }
+        }
+
         async function saveAccountSummary() {
             const totalCapital = parseFloat(document.getElementById('edit-total-capital').value);
             const maxDailyLoss = parseFloat(document.getElementById('edit-max-daily-loss').value);
@@ -5215,6 +5249,14 @@
             document.getElementById('show-total-capital').checked = false;
             document.getElementById('total-capital-stat').style.display = 'none';
         }
+
+        // Initialize capital limit bypass from config
+        fetch('/config/bypass-capital-limit')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('bypass-capital-limit').checked = data.bypass || false;
+            })
+            .catch(error => console.error('Error loading bypass config:', error));
 
         // Auto-refresh mode status every 30 seconds
         setInterval(loadModeStatus, 30000);

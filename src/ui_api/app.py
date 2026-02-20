@@ -2205,6 +2205,48 @@ async def update_account_summary(request: AccountSummaryUpdateRequest):
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}") from e
 
 
+@app.get("/config/bypass-capital-limit")
+async def get_bypass_capital_limit():
+    """Get the bypass capital limit setting."""
+    try:
+        ui_overrides_path = Path("data/ui_runtime_overrides.json")
+        if ui_overrides_path.exists():
+            with open(ui_overrides_path, "r") as f:
+                overrides = json.load(f)
+                bypass = overrides.get("allocator", {}).get("bypass_capital_limit", False)
+                return {"bypass": bypass}
+        return {"bypass": False}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load bypass setting: {e}") from e
+
+
+@app.post("/config/bypass-capital-limit")
+async def set_bypass_capital_limit(request: dict):
+    """Set the bypass capital limit setting."""
+    try:
+        bypass = request.get("bypass", False)
+
+        ui_overrides_path = Path("data/ui_runtime_overrides.json")
+        overrides = {}
+
+        if ui_overrides_path.exists():
+            with open(ui_overrides_path, "r") as f:
+                overrides = json.load(f)
+
+        if "allocator" not in overrides:
+            overrides["allocator"] = {}
+
+        overrides["allocator"]["bypass_capital_limit"] = bypass
+        overrides["allocator"]["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        with open(ui_overrides_path, "w") as f:
+            json.dump(overrides, f, indent=2)
+
+        return {"success": True, "bypass": bypass}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save bypass setting: {e}") from e
+
+
 @app.get("/account/performance", response_model=AccountPerformanceResponse)
 async def get_account_performance():
     """

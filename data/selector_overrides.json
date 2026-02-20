@@ -1,24 +1,29 @@
 {
-  "profile": "aggressive_tech_energy",
+  "profile": "aggressive_small_mid_sentiment",
   "overrides": {
     "defaults": {
-      "min_confidence": 0.52,
-      "ttl_minutes_buy": 90,
-      "ttl_minutes_sell": 60,
-      "ttl_minutes_watch": 120
+      "min_confidence": 0.65,
+      "ttl_minutes_buy": 180,
+      "ttl_minutes_sell": 120,
+      "ttl_minutes_watch": 240
     },
     "safety": {
-      "max_candidates_per_run": 25
+      "max_candidates_per_run": 15
     },
     "screening": {
-      "duplicate_suppression_minutes": 12
+      "duplicate_suppression_minutes": 30
     },
-    "candidates_min_confidence": 0.52,
+    "candidates_min_confidence": 0.55,
     "candidates_max_count": 80,
-    "duplicate_suppression_minutes": 12,
-    "ttl_minutes_buy": 90,
-    "ttl_minutes_sell": 60,
-    "max_candidates_per_run": 25
+    "duplicate_suppression_minutes": 30,
+    "ttl_minutes_buy": 1440,
+    "ttl_minutes_sell": 1440,
+    "max_candidates_per_run": 25,
+    "market_cap_filter": {
+      "enabled": true,
+      "min_usd": 300000000,
+      "max_usd": 20000000000
+    }
   },
-  "updated_at": "2026-02-06T17:16:13.045162+00:00"
+  "updated_at": "2026-02-19T15:00:23.804730+00:00"
 }
