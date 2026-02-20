@@ -1015,6 +1015,9 @@ def run_paper_mode(
     # End Exit Advisor Integration
     # ============================================================================
 
+    # Initialize sentiment adjustment flag (will be updated based on active profile later)
+    sentiment_adjustment_enabled = False
+
     # Initialize strategies dynamically from registry
     strategies = []
 
