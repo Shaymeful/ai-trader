@@ -1,6 +1,7 @@
 """Hourly market data provider using Alpaca API."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import timedelta
 
 from alpaca.data.requests import StockBarsRequest
@@ -64,7 +65,7 @@ class HourlyMarketDataProvider(MarketDataProvider):
         days_back = max(15, self.lookback_bars // 5)
         start = end - timedelta(days=days_back)
 
-        # Request hourly bars from Alpaca
+        # Request hourly bars from Alpaca with timeout
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=symbols,
@@ -74,7 +75,16 @@ class HourlyMarketDataProvider(MarketDataProvider):
                 feed="iex",  # IEX feed for paper/free tier
             )
 
-            bars_response = self.client.get_stock_bars(request)
+            # Wrap API call with timeout to prevent hanging
+            # Use ThreadPoolExecutor to run with timeout (works cross-platform)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self.client.get_stock_bars, request)
+                try:
+                    bars_response = future.result(timeout=30)  # 30 second timeout
+                except FuturesTimeoutError:
+                    self.logger.error(f"Timeout fetching bars from Alpaca (30s limit exceeded)")
+                    self.logger.warning(f"Symbols requested: {', '.join(symbols[:10])}{'...' if len(symbols) > 10 else ''}")
+                    return {}
         except Exception as e:
             self.logger.error(f"Failed to fetch bars from Alpaca: {e}")
             return {}
