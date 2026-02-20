@@ -2205,6 +2205,11 @@ async def update_account_summary(request: AccountSummaryUpdateRequest):
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}") from e
 
 
+class BypassCapitalLimitRequest(BaseModel):
+    """Request to set bypass capital limit setting."""
+    bypass: bool
+
+
 @app.get("/config/bypass-capital-limit")
 async def get_bypass_capital_limit():
     """Get the bypass capital limit setting."""
@@ -2221,10 +2226,10 @@ async def get_bypass_capital_limit():
 
 
 @app.post("/config/bypass-capital-limit")
-async def set_bypass_capital_limit(request: dict):
+async def set_bypass_capital_limit(request: BypassCapitalLimitRequest):
     """Set the bypass capital limit setting."""
     try:
-        bypass = request.get("bypass", False)
+        bypass = request.bypass
 
         ui_overrides_path = Path("data/ui_runtime_overrides.json")
         overrides = {}
