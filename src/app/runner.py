@@ -941,31 +941,15 @@ def run_paper_mode(
     # ============================================================================
 
     # Initialize Exit Advisor to emit SELL candidates into the candidate pipeline
+    # Note: Exit thresholds will be loaded later from active_profile
     print("Initializing Exit Advisor...")
-
-    # Load exit thresholds from active profile (if configured)
-    exit_thresholds = active_profile.get("exit_thresholds", {}) if active_profile else {}
     exit_advisor = ExitAdvisor(
         sell_scanner=sell_scanner,
         cooldown_hours=4,
         output_dir=Path("out/exit_advisor"),
-        stop_loss_pct=exit_thresholds.get("stop_loss_pct"),
-        take_profit_pct=exit_thresholds.get("take_profit_pct"),
-        trailing_stop_trigger_pct=exit_thresholds.get("trailing_stop_trigger_pct"),
-        trailing_stop_pct=exit_thresholds.get("trailing_stop_pct"),
+        # Exit thresholds will be set to None initially
+        # They will be loaded from active_profile later in the execution flow
     )
-
-    if exit_thresholds:
-        print(f"  Exit thresholds enabled:")
-        if exit_thresholds.get("stop_loss_pct"):
-            print(f"    Stop loss: {exit_thresholds['stop_loss_pct']}%")
-        if exit_thresholds.get("take_profit_pct"):
-            print(f"    Take profit: {exit_thresholds['take_profit_pct']}%")
-        if exit_thresholds.get("trailing_stop_trigger_pct"):
-            print(f"    Trailing stop trigger: {exit_thresholds['trailing_stop_trigger_pct']}%")
-        if exit_thresholds.get("trailing_stop_pct"):
-            print(f"    Trailing stop: {exit_thresholds['trailing_stop_pct']}%")
-
     print()
 
     # Get current positions for exit scanning
@@ -1226,6 +1210,27 @@ def run_paper_mode(
         if sentiment_adjustment_enabled:
             print(f"Sentiment adjustment ENABLED (mode: {active_profile_name})")
             print()
+
+        # Load exit thresholds from active profile (if configured)
+        exit_thresholds = active_profile.get("exit_thresholds", {})
+        if exit_thresholds:
+            # Update exit advisor with thresholds from active profile
+            exit_advisor.stop_loss_pct = exit_thresholds.get("stop_loss_pct")
+            exit_advisor.take_profit_pct = exit_thresholds.get("take_profit_pct")
+            exit_advisor.trailing_stop_trigger_pct = exit_thresholds.get("trailing_stop_trigger_pct")
+            exit_advisor.trailing_stop_pct = exit_thresholds.get("trailing_stop_pct")
+
+            print(f"Exit thresholds enabled (mode: {active_profile_name}):")
+            if exit_thresholds.get("stop_loss_pct"):
+                print(f"  Stop loss: {exit_thresholds['stop_loss_pct']}%")
+            if exit_thresholds.get("take_profit_pct"):
+                print(f"  Take profit: {exit_thresholds['take_profit_pct']}%")
+            if exit_thresholds.get("trailing_stop_trigger_pct"):
+                print(f"  Trailing stop trigger: {exit_thresholds['trailing_stop_trigger_pct']}%")
+            if exit_thresholds.get("trailing_stop_pct"):
+                print(f"  Trailing stop: {exit_thresholds['trailing_stop_pct']}%")
+            print()
+
     except Exception as e:
         print(f"\nWarning: Failed to load execution gate config: {e}")
         sentiment_adjustment_enabled = False
