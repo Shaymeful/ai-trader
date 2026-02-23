@@ -2242,7 +2242,7 @@ async def set_bypass_capital_limit(request: BypassCapitalLimitRequest):
             overrides["allocator"] = {}
 
         overrides["allocator"]["bypass_capital_limit"] = bypass
-        overrides["allocator"]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        overrides["allocator"]["updated_at"] = datetime.now(UTC).isoformat()
 
         with open(ui_overrides_path, "w") as f:
             json.dump(overrides, f, indent=2)
