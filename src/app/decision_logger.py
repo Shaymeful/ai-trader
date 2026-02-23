@@ -203,8 +203,16 @@ class DecisionLogger:
         summary = "\n".join(summary_lines)
         self.logger.info(summary)
 
-        # Also print to stdout for visibility
-        print(summary)
+        # Also print to stdout for visibility (with error handling for Windows encoding issues)
+        try:
+            print(summary)
+        except (OSError, UnicodeEncodeError) as e:
+            # Fallback: print with errors replaced if stdout can't handle the characters
+            try:
+                print(summary.encode('utf-8', errors='replace').decode('utf-8', errors='replace'))
+            except Exception:
+                # If that fails too, just log it
+                self.logger.warning(f"Could not print decision summary to stdout: {e}")
 
     def _confidence_label(self, confidence: float) -> str:
         """Convert confidence score to human-readable label."""
