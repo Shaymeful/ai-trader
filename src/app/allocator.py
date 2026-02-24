@@ -349,6 +349,81 @@ class Allocator:
         netted_results = allocation.net_intents_by_symbol(all_intents, market_data, strategy_map)
         self.logger.info(f"Netted {len(all_intents)} intents into {len(netted_results)} symbols")
 
+        # 5b. Apply target utilization scaling if enabled
+        enable_target_utilization = self.config.enable_target_utilization if hasattr(self.config, 'enable_target_utilization') else False
+        if enable_target_utilization:
+            self.logger.info("Target utilization enabled - scaling netted notionals toward target exposure")
+
+            # Load config params with defaults
+            min_order_notional = getattr(self.config, 'min_order_notional', 500)
+            allow_position_adds = getattr(self.config, 'allow_position_adds', False)
+            target_exposure_pct = getattr(self.config, 'max_portfolio_exposure_pct', 0.60)
+            max_positions = getattr(self.config, 'max_positions', 10)
+            per_position_max_pct = getattr(self.config, 'max_per_position_pct', 0.15)
+
+            # Compute current exposure (reuse from target utilization logging above)
+            current_exposure = Decimal("0")
+            current_positions_count = 0
+            try:
+                if self.broker and hasattr(self.broker, 'get_positions'):
+                    positions = self.broker.get_positions()
+                    for symbol, position in positions.items():
+                        if isinstance(position, dict):
+                            qty = position.get("qty", 0)
+                            current_price_val = current_prices.get(symbol, Decimal("0"))
+                        elif isinstance(position, tuple):
+                            qty, _ = position
+                            current_price_val = current_prices.get(symbol, Decimal("0"))
+                        else:
+                            qty = getattr(position, "qty", 0)
+                            current_price_val = current_prices.get(symbol, Decimal("0"))
+
+                        current_exposure += abs(int(qty)) * current_price_val
+
+                    current_positions_count = len([p for p in positions.values() if (isinstance(p, dict) and p.get("qty", 0) > 0) or (isinstance(p, tuple) and p[0] > 0) or (hasattr(p, "qty") and p.qty > 0)])
+            except Exception as e:
+                self.logger.warning(f"Failed to compute current exposure for scaling: {e}")
+                current_exposure = Decimal("0")
+                current_positions_count = 0
+
+            # If allow_position_adds is False, filter out symbols with existing positions
+            if not allow_position_adds:
+                existing_symbols = set()
+                try:
+                    if self.broker and hasattr(self.broker, 'get_positions'):
+                        positions = self.broker.get_positions()
+                        for symbol, position in positions.items():
+                            if isinstance(position, dict):
+                                qty = position.get("qty", 0)
+                            elif isinstance(position, tuple):
+                                qty, _ = position
+                            else:
+                                qty = getattr(position, "qty", 0)
+                            if qty > 0:
+                                existing_symbols.add(symbol)
+                except Exception as e:
+                    self.logger.warning(f"Failed to check existing positions: {e}")
+
+                if existing_symbols:
+                    filtered_netted = {s: data for s, data in netted_results.items() if s not in existing_symbols}
+                    filtered_count = len(netted_results) - len(filtered_netted)
+                    if filtered_count > 0:
+                        self.logger.info(f"Filtered out {filtered_count} symbols with existing positions (allow_position_adds=False)")
+                        netted_results = filtered_netted
+
+            # Scale notionals toward target utilization
+            netted_results = allocation.scale_notionals_for_target_utilization(
+                netted_results=netted_results,
+                equity=float(equity),
+                current_exposure=float(current_exposure),
+                target_exposure_pct=target_exposure_pct,
+                max_positions=max_positions,
+                current_positions=current_positions_count,
+                min_order_notional=min_order_notional,
+                per_position_max_pct=per_position_max_pct,
+            )
+            self.logger.info(f"After target utilization scaling: {len(netted_results)} symbols remain")
+
         # 6. Convert netted notionals to target quantities
         aggregated_targets: dict[str, int] = {}
         for symbol, net_data in netted_results.items():

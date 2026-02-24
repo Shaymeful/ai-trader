@@ -250,12 +250,25 @@ Allocation engine emits detailed events for audit trail:
 - `compute_target_notional(budget, conviction, risk_limits)` - Size intent using conviction
 - `compute_qty_from_notional(price, notional, allow_fractional)` - Convert notional to shares
 - `net_intents_by_symbol(intents, market_data, strategy_map)` - Net multi-strategy intents
+- `scale_notionals_for_target_utilization(netted_results, equity, current_exposure, target_exposure_pct, max_positions, current_positions, min_order_notional, per_position_max_pct)` - Scale buy notionals to fill available capital up to target exposure; sells pass through unchanged; orders below `min_order_notional` are filtered out
 
 **Integration**: `src/app/allocator.py`
 - `Allocator` class with dual-mode support (registry + legacy)
-- `_allocate_with_registry()` - New equity-based allocation
+- `_allocate_with_registry()` - New equity-based allocation; includes optional step 5b (target utilization scaling) when `enable_target_utilization=true` in mode config
 - `_allocate_legacy()` - Backward-compatible equal-weight allocation
 - Accepts optional `registry`, `broker`, `ledger` parameters
+
+**Target Utilization Scaling** (step 5b in `_allocate_with_registry`):
+When `enable_target_utilization: true` in mode config, after netting intents the allocator:
+1. Fetches current positions from broker to compute `current_exposure`
+2. Optionally filters out symbols with existing positions (`allow_position_adds: false`)
+3. Computes `remaining_budget = (max_portfolio_exposure_pct × equity) - current_exposure`
+4. Scales all buy notionals proportionally to fill remaining budget (scale factor capped at 1.0)
+5. Caps each position at `max_per_position_pct × equity`
+6. Filters orders below `min_order_notional`
+7. Blocks all orders if budget or position slots are exhausted
+
+Relevant config fields: `enable_target_utilization`, `min_order_notional`, `allow_position_adds`, `max_portfolio_exposure_pct`, `max_per_position_pct`, `max_positions`
 
 **Ledger Events**: `src/app/ledger.py`
 - `AllocationWeightsComputedEvent`

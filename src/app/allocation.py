@@ -372,3 +372,139 @@ def net_intents_by_symbol(
         }
 
     return netted_results
+
+
+def scale_notionals_for_target_utilization(
+    netted_results: dict,
+    equity: float,
+    current_exposure: float,
+    target_exposure_pct: float,
+    max_positions: int,
+    current_positions: int,
+    min_order_notional: float = 500,
+    per_position_max_pct: float = 0.15,
+) -> dict:
+    """
+    Scale netted notionals to move portfolio toward target utilization.
+
+    Strategy:
+    1. Compute remaining_budget = (target_exposure_pct × equity) - current_exposure
+    2. Compute sum of all buy notionals from netted results
+    3. Scale factor = remaining_budget / sum_buy_notionals (capped at 1.0 to prevent over-allocation)
+    4. Apply scale factor to all buy notionals
+    5. Cap each position at per_position_max_pct × equity
+    6. Filter out orders below min_order_notional
+
+    This ensures we size orders to fill available capital up to the target exposure cap.
+
+    Args:
+        netted_results: Dict from net_intents_by_symbol (symbol -> net_notional, etc.)
+        equity: Account equity
+        current_exposure: Current portfolio exposure (sum of position values)
+        target_exposure_pct: Target exposure as decimal (e.g., 0.60 for 60%)
+        max_positions: Maximum number of concurrent positions
+        current_positions: Number of open positions
+        min_order_notional: Minimum notional per order (skip smaller orders)
+        per_position_max_pct: Maximum per-position as decimal (e.g., 0.15 for 15%)
+
+    Returns:
+        Dict mapping symbol -> scaled net_notional (same structure as netted_results)
+    """
+    if not netted_results:
+        logger.info("No netted results to scale")
+        return netted_results
+
+    # Compute target metrics
+    target_exposure = equity * target_exposure_pct
+    remaining_budget = target_exposure - current_exposure
+    slots_available = max_positions - current_positions
+
+    logger.info(
+        f"Target Utilization Scaling: equity=${equity:.2f}, "
+        f"current_exposure=${current_exposure:.2f} ({current_exposure/equity*100:.1f}%), "
+        f"target_exposure=${target_exposure:.2f} ({target_exposure_pct*100:.1f}%), "
+        f"remaining_budget=${remaining_budget:.2f}, "
+        f"slots_available={slots_available}"
+    )
+
+    # If no budget or no slots, return empty (block all orders)
+    if remaining_budget <= 0:
+        logger.warning("Target exposure reached or exceeded - blocking all new orders")
+        return {}
+
+    if slots_available <= 0:
+        logger.warning("Max positions reached - blocking all new orders")
+        return {}
+
+    # Sum buy notionals (only scale buys, not sells)
+    buy_symbols = [s for s, data in netted_results.items() if data["net_notional"] > 0]
+    sum_buy_notionals = sum(netted_results[s]["net_notional"] for s in buy_symbols)
+
+    if sum_buy_notionals == 0:
+        logger.info("No buy intents to scale")
+        return netted_results  # Keep sells as-is
+
+    # Compute scale factor to fit remaining budget
+    scale_factor = remaining_budget / sum_buy_notionals
+    # Cap at 1.0 to prevent over-scaling (never size larger than strategy requested)
+    scale_factor = min(scale_factor, 1.0)
+
+    # Also limit by available slots - distribute budget evenly across slots
+    per_slot_notional = remaining_budget / slots_available
+    per_position_max_notional = equity * per_position_max_pct
+
+    logger.info(
+        f"Scaling strategy: sum_buy_notionals=${sum_buy_notionals:.2f}, "
+        f"scale_factor={scale_factor:.3f}, per_slot=${per_slot_notional:.2f}, "
+        f"per_position_max=${per_position_max_notional:.2f}"
+    )
+
+    # Scale and cap each symbol
+    scaled_results = {}
+    orders_filtered_count = 0
+
+    for symbol, data in netted_results.items():
+        original_notional = data["net_notional"]
+
+        # Only scale buys; keep sells as-is
+        if original_notional > 0:
+            scaled_notional = original_notional * scale_factor
+            # Cap at per-position max
+            scaled_notional = min(scaled_notional, per_position_max_notional)
+
+            # Filter out tiny orders
+            if scaled_notional < min_order_notional:
+                logger.info(
+                    f"{symbol}: Filtered out (scaled_notional=${scaled_notional:.2f} < min=${min_order_notional})"
+                )
+                orders_filtered_count += 1
+                continue
+
+            # Recompute net_quantity from scaled notional
+            price = data["price"]
+            scaled_quantity = scaled_notional / price if price > 0 else 0
+
+            # Create scaled result
+            scaled_results[symbol] = {
+                **data,
+                "net_notional": scaled_notional,
+                "net_quantity": scaled_quantity,
+                "original_notional": original_notional,
+                "scale_factor": scale_factor,
+            }
+
+            logger.info(
+                f"{symbol}: scaled from ${original_notional:.2f} to ${scaled_notional:.2f} "
+                f"(qty: {data['net_quantity']:.2f} → {scaled_quantity:.2f})"
+            )
+        else:
+            # Keep sells unchanged
+            scaled_results[symbol] = data
+
+    logger.info(
+        f"Scaled {len(buy_symbols)} buy intents, "
+        f"filtered {orders_filtered_count} below min_order_notional, "
+        f"final: {len([s for s in scaled_results if scaled_results[s]['net_notional'] > 0])} buys"
+    )
+
+    return scaled_results
