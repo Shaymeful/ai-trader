@@ -336,6 +336,50 @@ class RunResult:
     timestamp: str  # ISO format
 
 
+def create_fallback_candidates_from_universe(universe_symbols: list[str], sector_map: dict[str, str] | None = None) -> list:
+    """
+    Create synthetic WATCH candidates from universe symbols when RSS produces 0 candidates.
+
+    This ensures strategies always have a candidate pool to work with, even when RSS feeds
+    are dry or all candidates are filtered out.
+
+    Args:
+        universe_symbols: List of symbols from universe registry
+        sector_map: Optional mapping of symbol -> sector name
+
+    Returns:
+        List of Candidate objects with action="watch", confidence=0.6
+    """
+    from .candidates.schema import Candidate
+    from datetime import timedelta
+
+    candidates = []
+    eastern = ZoneInfo("America/New_York")
+    now = datetime.now(eastern)
+
+    for symbol in universe_symbols:
+        # Create synthetic WATCH candidate
+        # Use moderate confidence (0.6) so they're above min threshold but not high priority
+        sector = sector_map.get(symbol, "unknown") if sector_map else "unknown"
+
+        candidate = Candidate(
+            symbol=symbol,
+            action="watch",  # WATCH action - won't trigger immediate trades
+            confidence=0.6,
+            sector=sector,
+            reason=f"Fallback candidate from universe (no RSS candidates available)",
+            tags=["fallback", "universe"],
+            event_type="universe_fallback",
+            created_at=now,
+            expires_at=now + timedelta(hours=24),  # 24h TTL
+            avg_dollar_volume=None,  # Unknown - will pass liquidity filter
+            sentiment_factors=None,  # No sentiment data for fallback
+        )
+        candidates.append(candidate)
+
+    return candidates
+
+
 def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registry=None):
     """
     Run strategies in shadow mode (no actual orders).
@@ -425,6 +469,21 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
             )
             print(f"  Universe from config: {', '.join(universe)}")
+
+        # FALLBACK: Create synthetic candidates from universe when RSS produces 0
+        # This ensures strategies have a candidate pool to work with
+        if universe and not tradeable_candidates:
+            sector_map = {}
+            if universe_registry:
+                # Build sector map from registry
+                resolution = universe_registry.resolve()
+                for sector_name, symbols in resolution.sector_symbols.items():
+                    for symbol in symbols:
+                        sector_map[symbol] = sector_name
+
+            print(f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)")
+            tradeable_candidates = create_fallback_candidates_from_universe(universe, sector_map)
+
         candidate_map = {}
 
     # Filter excluded tickers (broker constraints, bad news, etc.)
@@ -801,6 +860,21 @@ def run_paper_mode(
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
             )
             print(f"  Universe from config: {', '.join(universe)}")
+
+        # FALLBACK: Create synthetic candidates from universe when RSS produces 0
+        # This ensures strategies have a candidate pool to work with
+        if universe and not tradeable_candidates:
+            sector_map = {}
+            if universe_registry:
+                # Build sector map from registry
+                resolution = universe_registry.resolve()
+                for sector_name, symbols in resolution.sector_symbols.items():
+                    for symbol in symbols:
+                        sector_map[symbol] = sector_name
+
+            print(f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)")
+            tradeable_candidates = create_fallback_candidates_from_universe(universe, sector_map)
+
         candidate_map = {}
 
     # Filter excluded tickers (broker constraints, bad news, etc.)
