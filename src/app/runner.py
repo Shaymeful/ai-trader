@@ -475,10 +475,9 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
         if universe and not tradeable_candidates:
             sector_map = {}
             if universe_registry:
-                # Build sector map from registry
-                resolution = universe_registry.resolve()
-                for sector_name, symbols in resolution.sector_symbols.items():
-                    for symbol in symbols:
+                # Build sector map directly from registry sectors
+                for sector_name, sector in universe_registry.sectors.items():
+                    for symbol in sector.symbols:
                         sector_map[symbol] = sector_name
 
             print(f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)")
@@ -866,10 +865,9 @@ def run_paper_mode(
         if universe and not tradeable_candidates:
             sector_map = {}
             if universe_registry:
-                # Build sector map from registry
-                resolution = universe_registry.resolve()
-                for sector_name, symbols in resolution.sector_symbols.items():
-                    for symbol in symbols:
+                # Build sector map directly from registry sectors
+                for sector_name, sector in universe_registry.sectors.items():
+                    for symbol in sector.symbols:
                         sector_map[symbol] = sector_name
 
             print(f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)")
