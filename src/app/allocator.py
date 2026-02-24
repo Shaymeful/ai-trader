@@ -290,6 +290,51 @@ class Allocator:
         # Convert current_prices to market_data format expected by netting function
         market_data = {symbol: {"price": float(price)} for symbol, price in current_prices.items()}
 
+        # TARGET UTILIZATION: Log current exposure and target metrics
+        # (Full integration of target utilization sizing is TODO)
+        try:
+            if self.broker and hasattr(self.broker, 'get_positions'):
+                positions = self.broker.get_positions()
+                current_exposure = Decimal("0")
+                for symbol, position in positions.items():
+                    if isinstance(position, dict):
+                        qty = position.get("qty", 0)
+                        current_price_val = current_prices.get(symbol, Decimal("0"))
+                    elif isinstance(position, tuple):
+                        qty, _ = position
+                        current_price_val = current_prices.get(symbol, Decimal("0"))
+                    else:
+                        qty = getattr(position, "qty", 0)
+                        current_price_val = current_prices.get(symbol, Decimal("0"))
+
+                    current_exposure += abs(int(qty)) * current_price_val
+
+                current_positions_count = len([p for p in positions.values() if (isinstance(p, dict) and p.get("qty", 0) > 0) or (isinstance(p, tuple) and p[0] > 0) or (hasattr(p, "qty") and p.qty > 0)])
+
+                # Log target utilization metrics (for instrumentation)
+                target_exposure_pct = 0.60  # TODO: Load from mode config
+                max_positions = 10  # TODO: Load from mode config
+                util_info = self._compute_target_utilization(
+                    equity=equity,
+                    current_exposure=current_exposure,
+                    target_exposure_pct=target_exposure_pct,
+                    max_positions=max_positions,
+                    current_positions=current_positions_count,
+                    min_order_notional=500,  # TODO: Load from mode config
+                    per_position_max_pct=0.15,  # TODO: Load from mode config
+                )
+                self.logger.info(
+                    f"Target Utilization: {util_info['current_exposure_pct']:.1%} current, "
+                    f"{util_info.get('target_exposure_pct', 0.6):.1%} target, "
+                    f"${util_info['remaining_budget']:.2f} remaining, "
+                    f"{util_info['slots']} slots available, "
+                    f"${util_info['per_slot_notional']:.2f} per slot"
+                )
+                if util_info['reason'] != 'ok':
+                    self.logger.warning(f"Target utilization issue: {util_info['reason']}")
+        except Exception as e:
+            self.logger.warning(f"Failed to compute target utilization metrics: {e}")
+
         # 5. Net intents by symbol
         if not all_intents:
             self.logger.info("No intents to allocate")
