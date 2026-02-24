@@ -204,5 +204,11 @@ profiles:
       max_per_position_pct: 0.15            # 15% max per position
       max_positions: 10                     # 5-10 concurrent positions target
 
+    # Target utilization allocator - size orders to reach exposure target
+    allocation:
+      enable_target_utilization: true       # Enable target-seeking allocation
+      min_order_notional: 500               # Minimum $ per order (avoid tiny orders)
+      allow_position_adds: false            # Top-up existing positions (false = new positions only)
+
 # Active profile (can be overridden at runtime)
 active_profile: "normal"

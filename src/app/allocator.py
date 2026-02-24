@@ -56,6 +56,83 @@ class Allocator:
         self.ledger = ledger
         self.logger = logging.getLogger("ai-trader")
 
+    def _compute_target_utilization(
+        self,
+        equity: Decimal,
+        current_exposure: Decimal,
+        target_exposure_pct: float,
+        max_positions: int,
+        current_positions: int,
+        min_order_notional: float,
+        per_position_max_pct: float,
+    ) -> dict:
+        """
+        Compute per-order notional to hit target portfolio exposure.
+
+        Uses remaining budget and available position slots to size orders that
+        move utilization toward the target exposure percentage.
+
+        Args:
+            equity: Account equity
+            current_exposure: Current portfolio exposure (sum of position values)
+            target_exposure_pct: Target exposure as decimal (e.g., 0.60 for 60%)
+            max_positions: Maximum number of concurrent positions
+            current_positions: Number of open positions
+            min_order_notional: Minimum notional per order
+            per_position_max_pct: Maximum per-position as decimal (e.g., 0.15 for 15%)
+
+        Returns:
+            dict with keys: per_slot_notional, slots, remaining_budget, current_exposure_pct, reason
+        """
+        target_exposure = equity * Decimal(str(target_exposure_pct))
+        remaining_budget = target_exposure - current_exposure
+        slots_available = max_positions - current_positions
+
+        current_exposure_pct = float(current_exposure / equity) if equity > 0 else 0.0
+
+        if slots_available <= 0:
+            return {
+                "per_slot_notional": 0,
+                "slots": 0,
+                "remaining_budget": 0,
+                "current_exposure_pct": current_exposure_pct,
+                "reason": "max_positions_reached"
+            }
+
+        if remaining_budget <= 0:
+            return {
+                "per_slot_notional": 0,
+                "slots": 0,
+                "remaining_budget": float(remaining_budget),
+                "current_exposure_pct": current_exposure_pct,
+                "reason": "target_exposure_reached"
+            }
+
+        # Compute per-slot allocation
+        per_slot = float(remaining_budget) / max(slots_available, 1)
+
+        # Cap at per-position max
+        per_position_max_notional = float(equity) * per_position_max_pct
+        per_slot = min(per_slot, per_position_max_notional)
+
+        if per_slot < min_order_notional:
+            return {
+                "per_slot_notional": 0,
+                "slots": 0,
+                "remaining_budget": float(remaining_budget),
+                "current_exposure_pct": current_exposure_pct,
+                "reason": "remaining_budget_too_small_for_min_order"
+            }
+
+        return {
+            "per_slot_notional": per_slot,
+            "slots": slots_available,
+            "remaining_budget": float(remaining_budget),
+            "current_exposure_pct": current_exposure_pct,
+            "target_exposure_pct": target_exposure_pct,
+            "reason": "ok"
+        }
+
     def allocate(
         self,
         strategy_intents: dict[str, list[PositionIntent]],
