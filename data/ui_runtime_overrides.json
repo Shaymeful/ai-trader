@@ -17,5 +17,9 @@
       "enabled": false
     },
     "enabled": true
+  },
+  "allocator": {
+    "bypass_capital_limit": true,
+    "updated_at": "2026-02-23T15:48:39.486266+00:00"
   }
 }

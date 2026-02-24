@@ -137,13 +137,14 @@ profiles:
         params:
           execution_enabled: true  # Enable execution (respects global guardrails + execution gate)
           # Specific position weights per symbol (within allocated 60%)
+          # NOTE: Using current universe symbols (see universe_overrides.json)
           per_sector_weights:
             automation:
-              ARRY: 0.10  # Array Technologies
-              FROG: 0.08  # JFrog
-              PATH: 0.08  # UiPath
+              TPL: 0.10   # Texas Pacific Land
+              ROK: 0.08   # Rockwell Automation
+              CRH: 0.08   # CRH plc
             energy:
-              FSLR: 0.12  # First Solar
+              FSLR: 0.12  # First Solar (now allowed, max_price raised to $250)
               ENPH: 0.10  # Enphase Energy
               RUN: 0.08   # Sunrun
 
@@ -182,7 +183,7 @@ profiles:
       min_market_cap_usd: 300000000         # $300M minimum (small cap floor)
       max_market_cap_usd: 20000000000       # $20B maximum (exclude large caps)
       min_price: 5.00                       # Avoid penny stocks
-      max_price: 150.00                     # Reasonable upper bound
+      max_price: 250.00                     # Raised to allow solar stocks (FSLR ~$240)
       min_avg_dollar_volume_20d: 5000000    # $5M min daily volume (liquidity floor)
       max_spread_bps: 100                   # 1.00% max spread (allow wider for small caps)
       require_fundamentals: false           # Don't block if data unavailable
