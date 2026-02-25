@@ -979,6 +979,20 @@ def run_paper_mode(
     # Extract prices for allocator
     current_prices = {symbol: Decimal(str(data["price"])) for symbol, data in market_data.items()}
 
+    # Fetch prices for any position symbols not in the current universe
+    # This ensures sell orders for out-of-universe positions can be executed
+    try:
+        existing_positions = broker.get_positions()
+        position_symbols_missing = [s for s in existing_positions if s not in market_data]
+        if position_symbols_missing:
+            print(f"  Fetching prices for {len(position_symbols_missing)} out-of-universe position(s): {', '.join(sorted(position_symbols_missing))}")
+            extra_data = provider.get_market_data(position_symbols_missing)
+            market_data.update(extra_data)
+            for sym, data in extra_data.items():
+                current_prices[sym] = Decimal(str(data["price"]))
+    except Exception as e:
+        print(f"WARNING: Failed to fetch prices for out-of-universe positions: {e}")
+
     # ============================================================================
     # AI-Driven Sell Scanning (GOAL B)
     # ============================================================================

@@ -84,6 +84,8 @@ class Allocator:
         Returns:
             dict with keys: per_slot_notional, slots, remaining_budget, current_exposure_pct, reason
         """
+        equity = Decimal(str(equity))
+        current_exposure = Decimal(str(current_exposure))
         target_exposure = equity * Decimal(str(target_exposure_pct))
         remaining_budget = target_exposure - current_exposure
         slots_available = max_positions - current_positions
