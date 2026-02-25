@@ -353,9 +353,12 @@ def create_fallback_candidates_from_universe(universe_symbols: list[str], sector
     from .candidates.schema import Candidate
     from datetime import timedelta
 
+    import uuid
+
     candidates = []
     eastern = ZoneInfo("America/New_York")
     now = datetime.now(eastern)
+    expires = now + timedelta(hours=24)
 
     for symbol in universe_symbols:
         # Create synthetic WATCH candidate
@@ -363,15 +366,17 @@ def create_fallback_candidates_from_universe(universe_symbols: list[str], sector
         sector = sector_map.get(symbol, "unknown") if sector_map else "unknown"
 
         candidate = Candidate(
+            candidate_id=f"fallback-{symbol}-{now.strftime('%Y%m%d')}",
             symbol=symbol,
             action="watch",  # WATCH action - won't trigger immediate trades
             confidence=0.6,
+            horizon="swing",
             sector=sector,
             reason=f"Fallback candidate from universe (no RSS candidates available)",
             tags=["fallback", "universe"],
             event_type="universe_fallback",
-            created_at=now,
-            expires_at=now + timedelta(hours=24),  # 24h TTL
+            created_at=now.isoformat(),
+            expires_at=expires.isoformat(),
             avg_dollar_volume=None,  # Unknown - will pass liquidity filter
             sentiment_factors=None,  # No sentiment data for fallback
         )
