@@ -396,7 +396,8 @@ class AlpacaExecutor:
                         continue
 
                 # Check execution gate (hard tradability filter)
-                if self.execution_gate:
+                # Risk-reducing sells always bypass the gate — we never block exits
+                if self.execution_gate and not slice_instruction.is_risk_reducing:
                     tradability_result = self.execution_gate.check_tradability(
                         slice_instruction.symbol,
                         slice_instruction.limit_price or price,
