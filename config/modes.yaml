@@ -208,7 +208,7 @@ profiles:
     allocation:
       enable_target_utilization: true       # Enable target-seeking allocation
       min_order_notional: 500               # Minimum $ per order (avoid tiny orders)
-      allow_position_adds: false            # Top-up existing positions (false = new positions only)
+      allow_position_adds: true             # Allow scaling up existing positions (required for Hit Heavier)
 
 # Active profile (can be overridden at runtime)
 active_profile: "normal"

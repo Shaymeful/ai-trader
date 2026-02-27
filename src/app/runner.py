@@ -412,6 +412,9 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
     # Initialize ledger for event tracking
     ledger = Ledger()
 
+    # Shadow mode has no real broker; set to None so universe augment skips gracefully
+    broker = None
+
     # Load candidates from snapshot (if available)
     print("Loading candidates...")
     raw_candidates = load_candidates()
@@ -458,17 +461,18 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
 
             # Augment universe with existing positions from disabled sectors (for exits)
             # This allows AI Copilot and other strategies to exit positions even from disabled sectors
-            try:
-                positions = broker.get_positions()
-                position_symbols = set(positions.keys())
-                enabled_universe_set = set(universe)
-                disabled_position_symbols = position_symbols - enabled_universe_set
+            if broker is not None:
+                try:
+                    positions = broker.get_positions()
+                    position_symbols = set(positions.keys())
+                    enabled_universe_set = set(universe)
+                    disabled_position_symbols = position_symbols - enabled_universe_set
 
-                if disabled_position_symbols:
-                    universe = list(enabled_universe_set | disabled_position_symbols)
-                    print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
-            except Exception as e:
-                print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
+                    if disabled_position_symbols:
+                        universe = list(enabled_universe_set | disabled_position_symbols)
+                        print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
+                except Exception as e:
+                    print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
         else:
             universe = (
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
@@ -833,6 +837,19 @@ def run_paper_mode(
             )
         )
 
+    # Create broker early (needed for universe augmentation below)
+    if dry_run or not config.alpaca_api_key:
+        print("Using MockBroker (dry-run or no credentials)")
+        broker = MockBroker()
+    else:
+        print(f"Using AlpacaBroker (paper trading at {config.alpaca_trading_base_url})")
+        broker = AlpacaBroker(
+            api_key=config.alpaca_api_key,
+            secret_key=config.alpaca_secret_key,
+            trading_base_url=config.alpaca_trading_base_url,
+        )
+    print()
+
     # Build universe from candidates (if available), otherwise use registry/config
     if tradeable_candidates:
         # Use candidate symbols as universe
@@ -848,17 +865,18 @@ def run_paper_mode(
 
             # Augment universe with existing positions from disabled sectors (for exits)
             # This allows AI Copilot and other strategies to exit positions even from disabled sectors
-            try:
-                positions = broker.get_positions()
-                position_symbols = set(positions.keys())
-                enabled_universe_set = set(universe)
-                disabled_position_symbols = position_symbols - enabled_universe_set
+            if broker is not None:
+                try:
+                    positions = broker.get_positions()
+                    position_symbols = set(positions.keys())
+                    enabled_universe_set = set(universe)
+                    disabled_position_symbols = position_symbols - enabled_universe_set
 
-                if disabled_position_symbols:
-                    universe = list(enabled_universe_set | disabled_position_symbols)
-                    print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
-            except Exception as e:
-                print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
+                    if disabled_position_symbols:
+                        universe = list(enabled_universe_set | disabled_position_symbols)
+                        print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
+                except Exception as e:
+                    print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
         else:
             universe = (
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
@@ -913,19 +931,6 @@ def run_paper_mode(
             print("WARNING: No Alpaca credentials found. Using mock data provider.")
             print("Set ALPACA_PAPER_KEY_ID and ALPACA_PAPER_SECRET_KEY to use real data.")
             provider = MockMarketDataProvider()
-    print()
-
-    # Create broker
-    if dry_run or not config.alpaca_api_key:
-        print("Using MockBroker (dry-run or no credentials)")
-        broker = MockBroker()
-    else:
-        print(f"Using AlpacaBroker (paper trading at {config.alpaca_trading_base_url})")
-        broker = AlpacaBroker(
-            api_key=config.alpaca_api_key,
-            secret_key=config.alpaca_secret_key,
-            trading_base_url=config.alpaca_trading_base_url,
-        )
     print()
 
     # Cancel open orders if requested

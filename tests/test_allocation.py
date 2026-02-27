@@ -542,6 +542,43 @@ class TestIntegrationScenarios:
         )
         assert scaled == {}  # Blocked — max positions reached
 
+    def test_scale_notionals_pending_exits_free_up_slots(self):
+        """Neutral-direction symbols (pending exits) are deducted from current_positions
+        so their in-flight closure doesn't block scaling of remaining buy positions."""
+        netted = {
+            # 3 active buys
+            "FSLR": {"net_notional": 150.0, "net_quantity": 1.0, "final_direction": "buy", "price": 150.0},
+            "ENPH": {"net_notional": 100.0, "net_quantity": 1.0, "final_direction": "buy", "price": 100.0},
+            "RUN": {"net_notional": 18.0, "net_quantity": 1.0, "final_direction": "buy", "price": 18.0},
+            # 8 pending exits (target_quantity=0 → net_notional=0 → neutral)
+            "SEDG": {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 15.0},
+            "CHPT": {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 2.0},
+            "BE":   {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 5.0},
+            "PLUG": {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 3.0},
+            "DAVA": {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 50.0},
+            "HRI":  {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 130.0},
+            "PNR":  {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 70.0},
+            "ROK":  {"net_notional": 0.0, "net_quantity": 0.0, "final_direction": "neutral", "price": 300.0},
+        }
+        # current_positions=11 (3 buys + 8 exits), max=10 → without the fix: slots=-1, blocked
+        # with the fix: pending_exits=8 deducted → net_positions=3, slots=7, scaling proceeds
+        scaled = allocation.scale_notionals_for_target_utilization(
+            netted_results=netted,
+            equity=79_000.0,
+            current_exposure=500.0,  # Tiny (positions at qty=1)
+            target_exposure_pct=0.60,
+            max_positions=10,
+            current_positions=11,  # Would block without pending-exit deduction
+            min_order_notional=500.0,
+            per_position_max_pct=0.15,
+        )
+        # Scaling should proceed; FSLR and ENPH should be present and scaled up
+        assert "FSLR" in scaled, "FSLR should be scaled up despite current_positions > max"
+        assert scaled["FSLR"]["net_notional"] > 150.0, "FSLR should be scaled above its original notional"
+        # Neutral exits pass through with zero notional (step 6 in allocator drops qty=0 from targets)
+        assert "SEDG" in scaled
+        assert scaled["SEDG"]["net_notional"] == 0.0
+
     def test_allocation_with_disabled_strategy(self):
         """Test that disabled strategies don't affect normalization."""
         from src.app.strategy_registry import StrategyConfig

@@ -261,14 +261,24 @@ Allocation engine emits detailed events for audit trail:
 **Target Utilization Scaling** (step 5b in `_allocate_with_registry`):
 When `enable_target_utilization: true` in mode config, after netting intents the allocator:
 1. Fetches current positions from broker to compute `current_exposure`
-2. Optionally filters out symbols with existing positions (`allow_position_adds: false`)
+2. Optionally filters out symbols with existing positions (`allow_position_adds: false` skips
+   symbols already held; set to `true` to allow scaling up existing positions — required when
+   the universe consists entirely of held symbols)
 3. Computes `remaining_budget = (max_portfolio_exposure_pct × equity) - current_exposure`
-4. Scales all buy notionals proportionally to fill remaining budget — **no upper cap on scale
+4. Computes `slots_available = max_positions - (current_positions - pending_exits)` where
+   `pending_exits` is the count of neutral-direction symbols (`target_quantity=0`) — these
+   are being closed this cycle and do not permanently occupy a slot
+5. Scales all buy notionals proportionally to fill remaining budget — **no upper cap on scale
    factor**: strategies produce tiny intent notionals (e.g. qty=1 × $150 = $150) but the
-   remaining budget may be large ($20 k+); the scale-up is intentional and bounded only by step 5
-5. Caps each position at `max_per_position_pct × equity` (the effective ceiling per symbol)
-6. Filters orders below `min_order_notional`
-7. Blocks all orders if budget or position slots are exhausted
+   remaining budget may be large ($20 k+); the scale-up is intentional and bounded only by step 6
+6. Caps each position at `max_per_position_pct × equity` (the effective ceiling per symbol)
+7. Filters orders below `min_order_notional`
+8. Blocks all orders if budget or position slots are exhausted
+
+**Exit intents**: AI Copilot generates `target_quantity=0, conviction=0` for positions from
+disabled sectors. Zero quantity produces `net_notional=0` → `final_direction=neutral` in
+`net_intents_by_symbol`, excluding them from buy scaling and deducting them from the
+slot count so they don't block sizing of remaining positions.
 
 Relevant config fields: `enable_target_utilization`, `min_order_notional`, `allow_position_adds`, `max_portfolio_exposure_pct`, `max_per_position_pct`, `max_positions`
 
@@ -291,7 +301,7 @@ The active profile is resolved via `get_active_mode_profile()` which checks
 - `WarningEquityUnavailableEvent`
 
 **Tests**: `tests/test_allocation.py`
-- 33 unit tests covering:
+- 34 unit tests covering:
   - Equity extraction
   - Weight normalization (including edge cases)
   - Budget computation

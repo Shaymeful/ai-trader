@@ -418,13 +418,19 @@ def scale_notionals_for_target_utilization(
     # Compute target metrics
     target_exposure = equity * target_exposure_pct
     remaining_budget = target_exposure - current_exposure
-    slots_available = max_positions - current_positions
+
+    # Pending exits are neutral-direction symbols (target_quantity=0 → net_notional=0).
+    # They are being closed this cycle so they don't permanently occupy a position slot.
+    pending_exits = sum(1 for data in netted_results.values() if data["final_direction"] == "neutral")
+    net_positions = max(0, current_positions - pending_exits)
+    slots_available = max_positions - net_positions
 
     logger.info(
         f"Target Utilization Scaling: equity=${equity:.2f}, "
         f"current_exposure=${current_exposure:.2f} ({current_exposure/equity*100:.1f}%), "
         f"target_exposure=${target_exposure:.2f} ({target_exposure_pct*100:.1f}%), "
         f"remaining_budget=${remaining_budget:.2f}, "
+        f"pending_exits={pending_exits}, net_positions={net_positions}, "
         f"slots_available={slots_available}"
     )
 

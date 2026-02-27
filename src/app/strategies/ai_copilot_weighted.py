@@ -154,12 +154,14 @@ class AICopilotWeightedStrategy(Strategy):
             if not price or price <= 0:
                 continue
 
-            # Create exit intent (conviction=0 signals position reduction)
+            # Create exit intent: target_quantity=0 means close the position.
+            # Zero maps to net_notional=0 → final_direction="neutral" → excluded from
+            # buy scaling and subtracted from slot count in scale_notionals_for_target_utilization.
             intents.append(
                 PositionIntent(
                     symbol=symbol,
-                    target_quantity=1,  # Fixed (allocator scales by conviction)
-                    conviction=0.0,  # Zero weight = exit signal
+                    target_quantity=0,  # 0 = close position (exit signal)
+                    conviction=0.0,
                     reason="AI Co-Pilot: Exit position from disabled sector",
                     candidate_id=None,
                 )
