@@ -250,7 +250,7 @@ Allocation engine emits detailed events for audit trail:
 - `compute_target_notional(budget, conviction, risk_limits)` - Size intent using conviction
 - `compute_qty_from_notional(price, notional, allow_fractional)` - Convert notional to shares
 - `net_intents_by_symbol(intents, market_data, strategy_map)` - Net multi-strategy intents
-- `scale_notionals_for_target_utilization(netted_results, equity, current_exposure, target_exposure_pct, max_positions, current_positions, min_order_notional, per_position_max_pct)` - Scale buy notionals to fill available capital up to target exposure; sells pass through unchanged; orders below `min_order_notional` are filtered out
+- `scale_notionals_for_target_utilization(netted_results, equity, current_exposure, target_exposure_pct, max_positions, current_positions, min_order_notional, per_position_max_pct)` - Scale buy notionals to fill available capital up to target exposure; scale factor has no upper cap (scale-up from tiny intents is intentional; per_position_max_pct is the real ceiling); sells pass through unchanged; orders below `min_order_notional` are filtered out
 
 **Integration**: `src/app/allocator.py`
 - `Allocator` class with dual-mode support (registry + legacy)
@@ -263,12 +263,25 @@ When `enable_target_utilization: true` in mode config, after netting intents the
 1. Fetches current positions from broker to compute `current_exposure`
 2. Optionally filters out symbols with existing positions (`allow_position_adds: false`)
 3. Computes `remaining_budget = (max_portfolio_exposure_pct × equity) - current_exposure`
-4. Scales all buy notionals proportionally to fill remaining budget (scale factor capped at 1.0)
-5. Caps each position at `max_per_position_pct × equity`
+4. Scales all buy notionals proportionally to fill remaining budget — **no upper cap on scale
+   factor**: strategies produce tiny intent notionals (e.g. qty=1 × $150 = $150) but the
+   remaining budget may be large ($20 k+); the scale-up is intentional and bounded only by step 5
+5. Caps each position at `max_per_position_pct × equity` (the effective ceiling per symbol)
 6. Filters orders below `min_order_notional`
 7. Blocks all orders if budget or position slots are exhausted
 
 Relevant config fields: `enable_target_utilization`, `min_order_notional`, `allow_position_adds`, `max_portfolio_exposure_pct`, `max_per_position_pct`, `max_positions`
+
+**Config loading — mode profile auto-apply**:
+`load_config_with_yaml()` now automatically applies the active mode profile's `allocation` and
+`risk_limits` blocks after loading `config.yaml`.  Precedence (low → high):
+1. Field defaults
+2. Environment variables
+3. `config/config.yaml` values
+4. Active mode profile `allocation` / `risk_limits` (highest priority for these blocks)
+
+The active profile is resolved via `get_active_mode_profile()` which checks
+`data/mode_override.json` first, then falls back to `active_profile` in `modes.yaml`.
 
 **Ledger Events**: `src/app/ledger.py`
 - `AllocationWeightsComputedEvent`
@@ -278,7 +291,7 @@ Relevant config fields: `enable_target_utilization`, `min_order_notional`, `allo
 - `WarningEquityUnavailableEvent`
 
 **Tests**: `tests/test_allocation.py`
-- 28 unit tests covering:
+- 33 unit tests covering:
   - Equity extraction
   - Weight normalization (including edge cases)
   - Budget computation
@@ -286,6 +299,8 @@ Relevant config fields: `enable_target_utilization`, `min_order_notional`, `allo
   - Quantity rounding (fractional vs whole shares)
   - Multi-strategy netting
   - Attribution tracking
+  - Target utilization scaling: scale-up from tiny intents, min_order_notional filtering,
+    sell pass-through, block-on-target-reached, block-on-max-positions
 
 ---
 

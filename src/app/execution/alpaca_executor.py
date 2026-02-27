@@ -233,12 +233,24 @@ class AlpacaExecutor:
 
         # If order fits within cap, no slicing needed
         if order_notional <= max_notional:
+            self.logger.debug(
+                f"{instruction.symbol}: qty={instruction.quantity} notional=${float(order_notional):.2f} "
+                f"<= cap=${float(max_notional):.2f} — no slicing"
+            )
             return [OrderSlice(instruction=instruction, slice_index=1, total_slices=1)]
 
         # Calculate number of slices needed
         # Use limit price if available, else use current price
         effective_price = instruction.limit_price or price
         max_qty_per_slice = int(max_notional / effective_price)
+
+        self.logger.info(
+            f"{instruction.symbol}: SLICING — qty={instruction.quantity} "
+            f"notional=${float(order_notional):.2f} "
+            f"cap=${float(max_notional):.2f} "
+            f"price=${float(effective_price):.2f} "
+            f"max_qty_per_slice={max_qty_per_slice}"
+        )
 
         if max_qty_per_slice == 0:
             # Price is too high for even 1 share to fit within cap
@@ -279,6 +291,11 @@ class AlpacaExecutor:
         # Calculate total slices needed
         total_qty = instruction.quantity
         total_slices = (total_qty + max_qty_per_slice - 1) // max_qty_per_slice  # Ceiling division
+
+        self.logger.info(
+            f"{instruction.symbol}: {total_slices} slice(s) × {max_qty_per_slice} shares each "
+            f"(${float(max_qty_per_slice * effective_price):.2f}/slice)"
+        )
 
         # Create slices
         slices = []

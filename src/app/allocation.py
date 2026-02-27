@@ -390,9 +390,10 @@ def scale_notionals_for_target_utilization(
     Strategy:
     1. Compute remaining_budget = (target_exposure_pct × equity) - current_exposure
     2. Compute sum of all buy notionals from netted results
-    3. Scale factor = remaining_budget / sum_buy_notionals (capped at 1.0 to prevent over-allocation)
+    3. Scale factor = remaining_budget / sum_buy_notionals (no upper cap — allows scale-up
+       from tiny strategy intents like qty=1 to fill available budget)
     4. Apply scale factor to all buy notionals
-    5. Cap each position at per_position_max_pct × equity
+    5. Cap each position at per_position_max_pct × equity  (this is the effective upper bound)
     6. Filter out orders below min_order_notional
 
     This ensures we size orders to fill available capital up to the target exposure cap.
@@ -444,10 +445,11 @@ def scale_notionals_for_target_utilization(
         logger.info("No buy intents to scale")
         return netted_results  # Keep sells as-is
 
-    # Compute scale factor to fit remaining budget
+    # Compute scale factor to fill remaining budget.
+    # No upper cap: when strategy intents carry tiny nominal notionals (e.g. qty=1 × $150 = $150)
+    # but remaining_budget is large ($20 k+), the scale_factor will be >1 and that is correct —
+    # the per_position_max_notional cap below is the actual ceiling on each position.
     scale_factor = remaining_budget / sum_buy_notionals
-    # Cap at 1.0 to prevent over-scaling (never size larger than strategy requested)
-    scale_factor = min(scale_factor, 1.0)
 
     # Also limit by available slots - distribute budget evenly across slots
     per_slot_notional = remaining_budget / slots_available

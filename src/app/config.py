@@ -110,6 +110,28 @@ class Config(BaseModel):
         default=False, description="Allow fractional share orders (paper mode only)"
     )
 
+    # Allocation / position sizing
+    sizing_mode: str = Field(
+        default="equity_based",
+        description="Position sizing mode: 'equity_based' (default), 'buying_power_based', or 'target_utilization'",
+    )
+    enable_target_utilization: bool = Field(
+        default=False,
+        description="Scale buy notionals to fill remaining budget up to target exposure",
+    )
+    min_order_notional: float = Field(
+        default=500.0, description="Minimum order size in dollars (skip smaller orders)"
+    )
+    allow_position_adds: bool = Field(
+        default=False, description="Allow adding to existing positions (True) or new positions only (False)"
+    )
+    max_portfolio_exposure_pct: float = Field(
+        default=0.60, description="Target max portfolio exposure as fraction of base capital (e.g. 0.60 = 60%)"
+    )
+    max_per_position_pct: float = Field(
+        default=0.15, description="Max notional per position as fraction of base capital (e.g. 0.15 = 15%)"
+    )
+
     # Performance tracking (Shadow PnL)
     performance_min_samples: int = Field(
         default=20, description="Minimum samples before strategy weight updates"
@@ -575,6 +597,28 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
             if "ticker_blacklist" in llm:
                 config.llm_ticker_blacklist = list(llm["ticker_blacklist"])
 
+        # Apply allocation / position sizing parameters from YAML
+        if "allocation" in yaml_config:
+            alloc = yaml_config["allocation"]
+            if "sizing_mode" in alloc:
+                config.sizing_mode = str(alloc["sizing_mode"])
+            if "enable_target_utilization" in alloc:
+                config.enable_target_utilization = bool(alloc["enable_target_utilization"])
+            if "min_order_notional" in alloc:
+                config.min_order_notional = float(alloc["min_order_notional"])
+            if "allow_position_adds" in alloc:
+                config.allow_position_adds = bool(alloc["allow_position_adds"])
+
+        # Apply risk_limits from YAML (exposure / per-position caps)
+        if "risk_limits" in yaml_config:
+            rl = yaml_config["risk_limits"]
+            if "max_portfolio_exposure_pct" in rl:
+                config.max_portfolio_exposure_pct = float(rl["max_portfolio_exposure_pct"])
+            if "max_per_position_pct" in rl:
+                config.max_per_position_pct = float(rl["max_per_position_pct"])
+            if "max_positions" in rl:
+                config.max_positions = int(rl["max_positions"])
+
         # Apply AI Co-Pilot parameters from YAML
         # PRECEDENCE: trading_disabled > env > UI overrides > YAML > defaults
         if "ai_copilot" in yaml_config:
@@ -733,6 +777,37 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                     config.ai_copilot_sector_recommendations_enabled = bool(ui_feature["enabled"])
                 if "max_output_tokens" in ui_feature:
                     config.ai_copilot_sector_recommendations_max_tokens = int(ui_feature["max_output_tokens"])
+
+    # Apply active mode profile allocation / risk_limits settings.
+    # Mode profile takes precedence over config.yaml for these blocks so that
+    # switching profiles (e.g. aggressive_small_mid_sentiment) immediately
+    # activates the coordinated sizing and exposure settings.
+    try:
+        _, mode_profile = get_active_mode_profile()
+        if mode_profile:
+            if "allocation" in mode_profile:
+                alloc = mode_profile["allocation"]
+                if "sizing_mode" in alloc:
+                    config.sizing_mode = str(alloc["sizing_mode"])
+                if "enable_target_utilization" in alloc:
+                    config.enable_target_utilization = bool(alloc["enable_target_utilization"])
+                if "min_order_notional" in alloc:
+                    config.min_order_notional = float(alloc["min_order_notional"])
+                if "allow_position_adds" in alloc:
+                    config.allow_position_adds = bool(alloc["allow_position_adds"])
+            if "risk_limits" in mode_profile:
+                rl = mode_profile["risk_limits"]
+                if "max_portfolio_exposure_pct" in rl:
+                    config.max_portfolio_exposure_pct = float(rl["max_portfolio_exposure_pct"])
+                if "max_per_position_pct" in rl:
+                    config.max_per_position_pct = float(rl["max_per_position_pct"])
+                if "max_positions" in rl:
+                    config.max_positions = int(rl["max_positions"])
+    except Exception as _mode_err:
+        import logging as _logging
+        _logging.getLogger("ai-trader").warning(
+            f"Failed to apply mode profile allocation/risk_limits to config: {_mode_err}"
+        )
 
     return config
 

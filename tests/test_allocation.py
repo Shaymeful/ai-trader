@@ -424,6 +424,124 @@ class TestIntegrationScenarios:
         assert trend_qty == 33  # Floor(5000/150)
         assert mr_qty == 20  # Floor(3000/150)
 
+    def test_scale_notionals_scale_up_from_tiny_intents(self):
+        """
+        Core regression: AI Copilot produces qty=1 intents (~$150-200 notional).
+        With $20k remaining budget and scale_factor allowed >1, each buy should
+        scale up to the per-position cap rather than staying at $150.
+        """
+        # Simulate 3 symbols each with $150 notional (qty=1 @ $150 price)
+        netted = {
+            "FSLR": {"net_notional": 150.0, "net_quantity": 1.0, "final_direction": "buy", "price": 150.0},
+            "ENPH": {"net_notional": 120.0, "net_quantity": 1.0, "final_direction": "buy", "price": 120.0},
+            "RUN":  {"net_notional": 18.0,  "net_quantity": 1.0, "final_direction": "buy", "price": 18.0},
+        }
+        equity = 80_000.0
+        current_exposure = 0.0       # No existing positions
+        target_exposure_pct = 0.60   # 60% target → $48k target, $48k remaining
+        max_positions = 10
+        current_positions = 0
+        min_order_notional = 500.0
+        per_position_max_pct = 0.15  # 15% × $80k = $12k cap per position
+
+        scaled = allocation.scale_notionals_for_target_utilization(
+            netted_results=netted,
+            equity=equity,
+            current_exposure=current_exposure,
+            target_exposure_pct=target_exposure_pct,
+            max_positions=max_positions,
+            current_positions=current_positions,
+            min_order_notional=min_order_notional,
+            per_position_max_pct=per_position_max_pct,
+        )
+
+        # All three symbols should survive (notionals >> min_order_notional after scaling)
+        assert set(scaled.keys()) == {"FSLR", "ENPH", "RUN"}
+
+        per_position_max = equity * per_position_max_pct  # $12,000
+
+        # FSLR and ENPH should be capped at per-position max
+        assert scaled["FSLR"]["net_notional"] == per_position_max
+        assert scaled["ENPH"]["net_notional"] == per_position_max
+
+        # RUN: $18 × scale_factor; scale_factor = 48000/288 ≈ 166.7 → $3000 notional
+        # That's < cap so it won't be capped (but well above min_order_notional)
+        assert scaled["RUN"]["net_notional"] > min_order_notional
+        assert scaled["RUN"]["net_notional"] <= per_position_max
+
+    def test_scale_notionals_filters_below_min_notional(self):
+        """Orders that remain below min_order_notional after scaling are dropped."""
+        netted = {
+            "CHEAP": {"net_notional": 0.50, "net_quantity": 1.0, "final_direction": "buy", "price": 0.50},
+            "FSLR":  {"net_notional": 150.0, "net_quantity": 1.0, "final_direction": "buy", "price": 150.0},
+        }
+        scaled = allocation.scale_notionals_for_target_utilization(
+            netted_results=netted,
+            equity=10_000.0,
+            current_exposure=0.0,
+            target_exposure_pct=0.60,
+            max_positions=5,
+            current_positions=0,
+            min_order_notional=500.0,
+            per_position_max_pct=0.20,
+        )
+        # CHEAP is $0.50 × scale_factor = $0.50 × (6000/150.5) ≈ $19.9 < $500 → filtered
+        assert "CHEAP" not in scaled
+        assert "FSLR" in scaled
+
+    def test_scale_notionals_preserves_sells(self):
+        """SELL intents are always passed through unchanged."""
+        netted = {
+            "AAPL": {"net_notional": -1500.0, "net_quantity": -10.0, "final_direction": "sell", "price": 150.0},
+            "FSLR": {"net_notional": 150.0, "net_quantity": 1.0, "final_direction": "buy", "price": 150.0},
+        }
+        scaled = allocation.scale_notionals_for_target_utilization(
+            netted_results=netted,
+            equity=50_000.0,
+            current_exposure=5_000.0,
+            target_exposure_pct=0.60,
+            max_positions=10,
+            current_positions=1,
+            min_order_notional=200.0,
+            per_position_max_pct=0.20,
+        )
+        assert "AAPL" in scaled
+        assert scaled["AAPL"]["net_notional"] == -1500.0  # Sell unchanged
+
+    def test_scale_notionals_blocks_when_target_reached(self):
+        """If current_exposure >= target, all buys are blocked."""
+        netted = {
+            "FSLR": {"net_notional": 150.0, "net_quantity": 1.0, "final_direction": "buy", "price": 150.0},
+        }
+        scaled = allocation.scale_notionals_for_target_utilization(
+            netted_results=netted,
+            equity=10_000.0,
+            current_exposure=7_000.0,  # Already at 70% > 60% target
+            target_exposure_pct=0.60,
+            max_positions=5,
+            current_positions=0,
+            min_order_notional=200.0,
+            per_position_max_pct=0.20,
+        )
+        assert scaled == {}  # Blocked — target reached
+
+    def test_scale_notionals_blocks_when_max_positions_reached(self):
+        """If current_positions >= max_positions, all buys are blocked."""
+        netted = {
+            "FSLR": {"net_notional": 150.0, "net_quantity": 1.0, "final_direction": "buy", "price": 150.0},
+        }
+        scaled = allocation.scale_notionals_for_target_utilization(
+            netted_results=netted,
+            equity=50_000.0,
+            current_exposure=5_000.0,
+            target_exposure_pct=0.60,
+            max_positions=5,
+            current_positions=5,  # Full
+            min_order_notional=200.0,
+            per_position_max_pct=0.20,
+        )
+        assert scaled == {}  # Blocked — max positions reached
+
     def test_allocation_with_disabled_strategy(self):
         """Test that disabled strategies don't affect normalization."""
         from src.app.strategy_registry import StrategyConfig

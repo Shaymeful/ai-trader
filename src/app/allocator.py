@@ -314,16 +314,14 @@ class Allocator:
                 current_positions_count = len([p for p in positions.values() if (isinstance(p, dict) and p.get("qty", 0) > 0) or (isinstance(p, tuple) and p[0] > 0) or (hasattr(p, "qty") and p.qty > 0)])
 
                 # Log target utilization metrics (for instrumentation)
-                target_exposure_pct = 0.60  # TODO: Load from mode config
-                max_positions = 10  # TODO: Load from mode config
                 util_info = self._compute_target_utilization(
                     equity=equity,
                     current_exposure=current_exposure,
-                    target_exposure_pct=target_exposure_pct,
-                    max_positions=max_positions,
+                    target_exposure_pct=self.config.max_portfolio_exposure_pct,
+                    max_positions=self.config.max_positions,
                     current_positions=current_positions_count,
-                    min_order_notional=500,  # TODO: Load from mode config
-                    per_position_max_pct=0.15,  # TODO: Load from mode config
+                    min_order_notional=self.config.min_order_notional,
+                    per_position_max_pct=self.config.max_per_position_pct,
                 )
                 self.logger.info(
                     f"Target Utilization: {util_info['current_exposure_pct']:.1%} current, "
