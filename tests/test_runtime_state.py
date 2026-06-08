@@ -134,9 +134,7 @@ def test_save_runtime_state_atomic():
     with TemporaryDirectory() as tmpdir:
         state_dir = Path(tmpdir)
 
-        state = RuntimeState(
-            loop_interval_seconds=3600, updated_at=datetime.now(UTC).isoformat()
-        )
+        state = RuntimeState(loop_interval_seconds=3600, updated_at=datetime.now(UTC).isoformat())
 
         # Save state
         save_runtime_state(state, str(state_dir))

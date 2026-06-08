@@ -221,7 +221,10 @@ def test_trade_rationale_generation(mock_config, sample_candidate):
         responses={
             "thesis": "Strong technical momentum with earnings catalyst makes this actionable now",
             "counterarguments": ["Market volatility could derail momentum", "Sector rotation risk"],
-            "invalidation_conditions": ["Price drops below $150 support", "Earnings guidance revised down"],
+            "invalidation_conditions": [
+                "Price drops below $150 support",
+                "Earnings guidance revised down",
+            ],
         }
     )
 
@@ -274,7 +277,9 @@ def test_enrich_candidates_budget_aware(mock_config):
     )
 
     with patch.object(client, "_get_provider", return_value=mock_provider):
-        results = enrich_candidates_with_rationale(candidates, client, mock_config, max_candidates=10)
+        results = enrich_candidates_with_rationale(
+            candidates, client, mock_config, max_candidates=10
+        )
 
         # Should only enrich up to budget limit
         assert len(results) <= mock_config.ai_copilot_max_calls_per_run
@@ -451,7 +456,7 @@ def test_load_recent_critiques(tmp_path, monkeypatch):
     with open(memory_path, "w") as f:
         for i in range(10):
             entry = {
-                "date": f"2024-01-{i+1:02d}",
+                "date": f"2024-01-{i + 1:02d}",
                 "critique": f"Critique {i}",
                 "confidence": 70 + i,
             }

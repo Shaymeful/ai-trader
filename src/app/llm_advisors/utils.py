@@ -172,7 +172,10 @@ def validate_ui_overrides(overrides: dict[str, Any]) -> tuple[bool, list[str]]:
         errors.append("ai_copilot.dry_run must be boolean")
 
     if "max_calls_per_run" in ai_copilot:
-        if not isinstance(ai_copilot["max_calls_per_run"], int) or ai_copilot["max_calls_per_run"] < 0:
+        if (
+            not isinstance(ai_copilot["max_calls_per_run"], int)
+            or ai_copilot["max_calls_per_run"] < 0
+        ):
             errors.append("ai_copilot.max_calls_per_run must be positive integer")
 
     # Validate budgets section
@@ -191,7 +194,13 @@ def validate_ui_overrides(overrides: dict[str, Any]) -> tuple[bool, list[str]]:
                     errors.append("global_max_output_tokens must be positive integer")
 
     # Validate feature sections
-    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique", "universe_ticker_manager", "sector_recommendations"]:
+    for feature_name in [
+        "trade_rationale",
+        "daily_journal",
+        "strategy_critique",
+        "universe_ticker_manager",
+        "sector_recommendations",
+    ]:
         if feature_name in ai_copilot:
             feature = ai_copilot[feature_name]
             if not isinstance(feature, dict):

@@ -152,9 +152,9 @@ class UniverseTickerManager:
         prompt = f"""You are an AI trading advisor focused on tech, battery, and energy sectors.
 
 **CURRENT STATE:**
-- Universe: {len(universe_symbols)} symbols - {', '.join(universe_symbols[:15])}{'...' if len(universe_symbols) > 15 else ''}
-- Positions: {len(position_symbols)} symbols - {', '.join(position_symbols) if position_symbols else 'None'}
-- Top Candidates: {', '.join(candidate_info[:10]) if candidate_info else 'None'}
+- Universe: {len(universe_symbols)} symbols - {", ".join(universe_symbols[:15])}{"..." if len(universe_symbols) > 15 else ""}
+- Positions: {len(position_symbols)} symbols - {", ".join(position_symbols) if position_symbols else "None"}
+- Top Candidates: {", ".join(candidate_info[:10]) if candidate_info else "None"}
 
 **TASK:**
 Recommend ticker changes with focus on tech/battery/energy opportunities.

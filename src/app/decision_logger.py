@@ -165,33 +165,39 @@ class DecisionLogger:
         if decision.strategy:
             summary_lines.append(f"Strategy:    {decision.strategy}")
 
-        summary_lines.extend([
-            f"",
-            f"PRIMARY REASON:",
-            f"  {decision.primary_reason}",
-            f"",
-            f"DETAILED REASONING:",
-        ])
+        summary_lines.extend(
+            [
+                f"",
+                f"PRIMARY REASON:",
+                f"  {decision.primary_reason}",
+                f"",
+                f"DETAILED REASONING:",
+            ]
+        )
 
         for i, reason in enumerate(decision.detailed_reasoning, 1):
             summary_lines.append(f"  {i}. {reason}")
 
         if decision.supporting_data:
-            summary_lines.extend([
-                f"",
-                f"SUPPORTING DATA:",
-            ])
+            summary_lines.extend(
+                [
+                    f"",
+                    f"SUPPORTING DATA:",
+                ]
+            )
             for key, value in list(decision.supporting_data.items())[:5]:  # Show top 5
                 if isinstance(value, (int, float)):
                     summary_lines.append(f"  {key}: {value:.2f}")
                 else:
                     summary_lines.append(f"  {key}: {value}")
 
-        summary_lines.extend([
-            f"",
-            f"INVALIDATION CRITERIA:",
-            f"  {decision.invalidation_criteria}",
-        ])
+        summary_lines.extend(
+            [
+                f"",
+                f"INVALIDATION CRITERIA:",
+                f"  {decision.invalidation_criteria}",
+            ]
+        )
 
         if decision.execution_result:
             summary_lines.append(f"")
@@ -209,7 +215,7 @@ class DecisionLogger:
         except (OSError, UnicodeEncodeError) as e:
             # Fallback: print with errors replaced if stdout can't handle the characters
             try:
-                print(summary.encode('utf-8', errors='replace').decode('utf-8', errors='replace'))
+                print(summary.encode("utf-8", errors="replace").decode("utf-8", errors="replace"))
             except Exception:
                 # If that fails too, just log it
                 self.logger.warning(f"Could not print decision summary to stdout: {e}")
@@ -227,7 +233,9 @@ class DecisionLogger:
         else:
             return "VERY LOW"
 
-    def generate_summary_report(self, start_date: str | None = None, end_date: str | None = None) -> dict:
+    def generate_summary_report(
+        self, start_date: str | None = None, end_date: str | None = None
+    ) -> dict:
         """
         Generate summary report of all decisions in a date range.
 
@@ -255,14 +263,14 @@ class DecisionLogger:
 
         # Calculate statistics
         buy_decisions = [d for d in decisions if d["action"] == "BUY"]
-        sell_decisions = [d for d in decisions if d["action"] in ["SELL", "SELL_HALF", "SELL_ALL", "TRIM"]]
+        sell_decisions = [
+            d for d in decisions if d["action"] in ["SELL", "SELL_HALF", "SELL_ALL", "TRIM"]
+        ]
         hold_decisions = [d for d in decisions if d["action"] == "HOLD"]
 
         avg_confidence = sum(d["confidence"] for d in decisions) / len(decisions)
         avg_buy_confidence = (
-            sum(d["confidence"] for d in buy_decisions) / len(buy_decisions)
-            if buy_decisions
-            else 0
+            sum(d["confidence"] for d in buy_decisions) / len(buy_decisions) if buy_decisions else 0
         )
         avg_sell_confidence = (
             sum(d["confidence"] for d in sell_decisions) / len(sell_decisions)
@@ -301,7 +309,9 @@ class DecisionLogger:
 
         return decisions
 
-    def export_to_csv(self, output_file: Path, start_date: str | None = None, end_date: str | None = None):
+    def export_to_csv(
+        self, output_file: Path, start_date: str | None = None, end_date: str | None = None
+    ):
         """
         Export decisions to CSV for analysis in Excel/Python.
 
@@ -313,8 +323,7 @@ class DecisionLogger:
         import csv
 
         decisions = self._load_decisions_in_range(
-            start_date or "2000-01-01",
-            end_date or "2099-12-31"
+            start_date or "2000-01-01", end_date or "2099-12-31"
         )
 
         if not decisions:
@@ -323,9 +332,16 @@ class DecisionLogger:
 
         # Write CSV
         fieldnames = [
-            "timestamp", "symbol", "action", "quantity", "price",
-            "confidence", "risk_regime", "strategy", "primary_reason",
-            "execution_result"
+            "timestamp",
+            "symbol",
+            "action",
+            "quantity",
+            "price",
+            "confidence",
+            "risk_regime",
+            "strategy",
+            "primary_reason",
+            "execution_result",
         ]
 
         with open(output_file, "w", newline="", encoding="utf-8") as f:
@@ -333,18 +349,20 @@ class DecisionLogger:
             writer.writeheader()
 
             for decision in decisions:
-                writer.writerow({
-                    "timestamp": decision["timestamp"],
-                    "symbol": decision["symbol"],
-                    "action": decision["action"],
-                    "quantity": decision["quantity"],
-                    "price": decision["price"],
-                    "confidence": decision["confidence"],
-                    "risk_regime": decision["risk_regime"],
-                    "strategy": decision.get("strategy", "N/A"),
-                    "primary_reason": decision["primary_reason"],
-                    "execution_result": decision.get("execution_result", "N/A"),
-                })
+                writer.writerow(
+                    {
+                        "timestamp": decision["timestamp"],
+                        "symbol": decision["symbol"],
+                        "action": decision["action"],
+                        "quantity": decision["quantity"],
+                        "price": decision["price"],
+                        "confidence": decision["confidence"],
+                        "risk_regime": decision["risk_regime"],
+                        "strategy": decision.get("strategy", "N/A"),
+                        "primary_reason": decision["primary_reason"],
+                        "execution_result": decision.get("execution_result", "N/A"),
+                    }
+                )
 
         self.logger.info(f"Exported {len(decisions)} decisions to {output_file}")
 

@@ -1,17 +1,19 @@
 #!/usr/bin/env python
 """Force activation of pending universe changes."""
+
 from pathlib import Path
 from src.app.universe_registry import UniverseRegistry
 
 # Load registry (will reload from file)
 registry = UniverseRegistry(
-    base_config_path=Path("config/config.yaml"),
-    overrides_path=Path("out/universe_overrides.json")
+    base_config_path=Path("config/config.yaml"), overrides_path=Path("out/universe_overrides.json")
 )
 
 print("Current sector states:")
 for sector_name, override in registry.overrides.items():
-    print(f"  {sector_name}: enabled={override.enabled}, active={override.active_version}, pending={override.pending_version}")
+    print(
+        f"  {sector_name}: enabled={override.enabled}, active={override.active_version}, pending={override.pending_version}"
+    )
 
 # Activate pending changes
 print("\nActivating pending changes...")
@@ -31,4 +33,6 @@ else:
 
 print("\nUpdated sector states:")
 for sector_name, override in registry.overrides.items():
-    print(f"  {sector_name}: enabled={override.enabled}, active={override.active_version}, pending={override.pending_version}")
+    print(
+        f"  {sector_name}: enabled={override.enabled}, active={override.active_version}, pending={override.pending_version}"
+    )

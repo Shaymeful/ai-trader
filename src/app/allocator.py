@@ -140,7 +140,7 @@ class Allocator:
                 "slots": 0,
                 "remaining_budget": 0,
                 "current_exposure_pct": current_exposure_pct,
-                "reason": "max_positions_reached"
+                "reason": "max_positions_reached",
             }
 
         if remaining_budget <= 0:
@@ -149,7 +149,7 @@ class Allocator:
                 "slots": 0,
                 "remaining_budget": float(remaining_budget),
                 "current_exposure_pct": current_exposure_pct,
-                "reason": "target_exposure_reached"
+                "reason": "target_exposure_reached",
             }
 
         # Compute per-slot allocation
@@ -165,7 +165,7 @@ class Allocator:
                 "slots": 0,
                 "remaining_budget": float(remaining_budget),
                 "current_exposure_pct": current_exposure_pct,
-                "reason": "remaining_budget_too_small_for_min_order"
+                "reason": "remaining_budget_too_small_for_min_order",
             }
 
         return {
@@ -174,7 +174,7 @@ class Allocator:
             "remaining_budget": float(remaining_budget),
             "current_exposure_pct": current_exposure_pct,
             "target_exposure_pct": target_exposure_pct,
-            "reason": "ok"
+            "reason": "ok",
         }
 
     def allocate(
@@ -236,7 +236,7 @@ class Allocator:
         # 1. Get account equity
         try:
             # Check if broker has client attribute (AlpacaBroker) vs MockBroker
-            if hasattr(self.broker, 'client'):
+            if hasattr(self.broker, "client"):
                 account_state = self.broker.client.get_account()
                 account_dict = {"equity": str(account_state.equity)}
                 equity = allocation.get_total_equity(account_dict)
@@ -351,7 +351,7 @@ class Allocator:
         # TARGET UTILIZATION: Log current exposure and target metrics
         # (Full integration of target utilization sizing is TODO)
         try:
-            if self.broker and hasattr(self.broker, 'get_positions'):
+            if self.broker and hasattr(self.broker, "get_positions"):
                 positions = self.broker.get_positions()
                 current_exposure = Decimal("0")
                 for symbol, position in positions.items():
@@ -367,7 +367,15 @@ class Allocator:
 
                     current_exposure += abs(int(qty)) * current_price_val
 
-                current_positions_count = len([p for p in positions.values() if (isinstance(p, dict) and p.get("qty", 0) > 0) or (isinstance(p, tuple) and p[0] > 0) or (hasattr(p, "qty") and p.qty > 0)])
+                current_positions_count = len(
+                    [
+                        p
+                        for p in positions.values()
+                        if (isinstance(p, dict) and p.get("qty", 0) > 0)
+                        or (isinstance(p, tuple) and p[0] > 0)
+                        or (hasattr(p, "qty") and p.qty > 0)
+                    ]
+                )
 
                 # Log target utilization metrics (for instrumentation)
                 util_info = self._compute_target_utilization(
@@ -386,7 +394,7 @@ class Allocator:
                     f"{util_info['slots']} slots available, "
                     f"${util_info['per_slot_notional']:.2f} per slot"
                 )
-                if util_info['reason'] != 'ok':
+                if util_info["reason"] != "ok":
                     self.logger.warning(f"Target utilization issue: {util_info['reason']}")
         except Exception as e:
             self.logger.warning(f"Failed to compute target utilization metrics: {e}")
@@ -408,12 +416,15 @@ class Allocator:
         # 5b. Apply target utilization scaling if enabled
         # Resolve effective risk settings: profile < capital_override < market_regime
         from src.app.runtime_overrides import resolve_effective_risk_settings
+
         effective = resolve_effective_risk_settings(
-            profile_exposure_pct=getattr(self.config, 'max_portfolio_exposure_pct', 0.60),
-            profile_max_per_position_pct=getattr(self.config, 'max_per_position_pct', 0.15),
-            profile_max_positions=getattr(self.config, 'max_positions', 10),
-            profile_allow_position_adds=getattr(self.config, 'allow_position_adds', False),
-            profile_enable_target_utilization=getattr(self.config, 'enable_target_utilization', False),
+            profile_exposure_pct=getattr(self.config, "max_portfolio_exposure_pct", 0.60),
+            profile_max_per_position_pct=getattr(self.config, "max_per_position_pct", 0.15),
+            profile_max_positions=getattr(self.config, "max_positions", 10),
+            profile_allow_position_adds=getattr(self.config, "allow_position_adds", False),
+            profile_enable_target_utilization=getattr(
+                self.config, "enable_target_utilization", False
+            ),
         )
         self.logger.info(
             f"Effective risk settings: exposure={effective.max_portfolio_exposure_pct:.0%} "
@@ -430,17 +441,18 @@ class Allocator:
             )
             # Filter out buy-direction intents from netted_results
             netted_results = {
-                s: data for s, data in netted_results.items()
-                if data["final_direction"] != "buy"
+                s: data for s, data in netted_results.items() if data["final_direction"] != "buy"
             }
             self.logger.info(f"After new-longs suppression: {len(netted_results)} symbols remain")
 
         enable_target_utilization = effective.enable_target_utilization
         if enable_target_utilization:
-            self.logger.info("Target utilization enabled - scaling netted notionals toward target exposure")
+            self.logger.info(
+                "Target utilization enabled - scaling netted notionals toward target exposure"
+            )
 
             # Load config params with defaults
-            min_order_notional = getattr(self.config, 'min_order_notional', 500)
+            min_order_notional = getattr(self.config, "min_order_notional", 500)
             allow_position_adds = effective.allow_position_adds
             target_exposure_pct = effective.max_portfolio_exposure_pct
             max_positions = effective.max_positions
@@ -451,7 +463,7 @@ class Allocator:
             current_exposure = Decimal("0")
             current_positions_count = 0
             try:
-                if self.broker and hasattr(self.broker, 'get_positions'):
+                if self.broker and hasattr(self.broker, "get_positions"):
                     positions = self.broker.get_positions()
                     for symbol, position in positions.items():
                         if isinstance(position, dict):
@@ -466,7 +478,15 @@ class Allocator:
 
                         current_exposure += abs(int(qty)) * current_price_val
 
-                    current_positions_count = len([p for p in positions.values() if (isinstance(p, dict) and p.get("qty", 0) > 0) or (isinstance(p, tuple) and p[0] > 0) or (hasattr(p, "qty") and p.qty > 0)])
+                    current_positions_count = len(
+                        [
+                            p
+                            for p in positions.values()
+                            if (isinstance(p, dict) and p.get("qty", 0) > 0)
+                            or (isinstance(p, tuple) and p[0] > 0)
+                            or (hasattr(p, "qty") and p.qty > 0)
+                        ]
+                    )
             except Exception as e:
                 self.logger.warning(f"Failed to compute current exposure for scaling: {e}")
                 current_exposure = Decimal("0")
@@ -476,7 +496,7 @@ class Allocator:
             if not allow_position_adds:
                 existing_symbols = set()
                 try:
-                    if self.broker and hasattr(self.broker, 'get_positions'):
+                    if self.broker and hasattr(self.broker, "get_positions"):
                         positions = self.broker.get_positions()
                         for symbol, position in positions.items():
                             if isinstance(position, dict):
@@ -491,10 +511,14 @@ class Allocator:
                     self.logger.warning(f"Failed to check existing positions: {e}")
 
                 if existing_symbols:
-                    filtered_netted = {s: data for s, data in netted_results.items() if s not in existing_symbols}
+                    filtered_netted = {
+                        s: data for s, data in netted_results.items() if s not in existing_symbols
+                    }
                     filtered_count = len(netted_results) - len(filtered_netted)
                     if filtered_count > 0:
-                        self.logger.info(f"Filtered out {filtered_count} symbols with existing positions (allow_position_adds=False)")
+                        self.logger.info(
+                            f"Filtered out {filtered_count} symbols with existing positions (allow_position_adds=False)"
+                        )
                         netted_results = filtered_netted
 
             # Scale notionals toward target utilization
@@ -508,7 +532,9 @@ class Allocator:
                 min_order_notional=min_order_notional,
                 per_position_max_pct=per_position_max_pct,
             )
-            self.logger.info(f"After target utilization scaling: {len(netted_results)} symbols remain")
+            self.logger.info(
+                f"After target utilization scaling: {len(netted_results)} symbols remain"
+            )
 
             # Convert incremental quantities to absolute targets.
             #
@@ -684,6 +710,7 @@ class Allocator:
         """
         # Check if capital limit bypass is enabled (legacy cap bypass)
         from src.app.runtime_overrides import load_capital_override
+
         try:
             bypass_capital_limit = load_capital_override().bypass_capital_limit
         except Exception as e:

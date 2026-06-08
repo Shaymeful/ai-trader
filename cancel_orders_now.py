@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.app.config import load_config
 from src.broker.base import AlpacaBroker
 
+
 def main():
     print("Loading configuration...")
     config = load_config()
@@ -39,7 +40,9 @@ def main():
 
     print(f"\nFound {len(open_orders)} open orders:")
     for order in open_orders[:10]:  # Show first 10
-        print(f"  {order['symbol']} {order['side']} {order['qty']} @ ${order.get('limit_price', 'market')}")
+        print(
+            f"  {order['symbol']} {order['side']} {order['qty']} @ ${order.get('limit_price', 'market')}"
+        )
     if len(open_orders) > 10:
         print(f"  ... and {len(open_orders) - 10} more")
 
@@ -61,6 +64,7 @@ def main():
     print(f"\n[OK] Canceled {canceled} orders")
     if failed > 0:
         print(f"[WARN] Failed to cancel {failed} orders")
+
 
 if __name__ == "__main__":
     main()

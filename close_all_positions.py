@@ -11,6 +11,7 @@ from src.broker.base import AlpacaBroker
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
 
+
 def main():
     config = load_config()
 
@@ -33,7 +34,9 @@ def main():
 
         print(f"\nFound {len(positions)} positions to close:")
         for pos in positions:
-            print(f"  {pos.symbol}: {float(pos.qty)} shares @ ${float(pos.current_price):.2f} = ${float(pos.market_value):.2f}")
+            print(
+                f"  {pos.symbol}: {float(pos.qty)} shares @ ${float(pos.current_price):.2f} = ${float(pos.market_value):.2f}"
+            )
 
         print("\nClosing all positions...")
 
@@ -72,7 +75,9 @@ def main():
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()

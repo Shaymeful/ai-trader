@@ -240,8 +240,6 @@ def enrich_candidates_with_rationale(
         result = generate_trade_rationale(candidate, client, config)
         results[candidate.candidate_id] = result
 
-    logger.info(
-        f"Generated {sum(1 for r in results.values() if r.success)} successful rationales"
-    )
+    logger.info(f"Generated {sum(1 for r in results.values() if r.success)} successful rationales")
 
     return results

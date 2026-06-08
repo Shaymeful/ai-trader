@@ -296,9 +296,7 @@ class ExitAdvisor:
 
         # If we have hard exits, log them
         if hard_exit_candidates:
-            context.add_rationale(
-                f"Generated {len(hard_exit_candidates)} hard threshold exits"
-            )
+            context.add_rationale(f"Generated {len(hard_exit_candidates)} hard threshold exits")
 
         # Filter remaining positions by cooldown
         positions_to_scan = {}

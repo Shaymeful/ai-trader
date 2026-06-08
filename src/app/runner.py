@@ -47,7 +47,12 @@ from .decision_logger import DecisionLogger, TradingDecision, create_decision_fr
 from .execution import AlpacaExecutor
 from .execution.tradability_filter import ExecutionGateConfig
 from .exit_advisor import ExitAdvisor
-from .ledger import AICopilotTickSummaryEvent, CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
+from .ledger import (
+    AICopilotTickSummaryEvent,
+    CandidateLoadedEvent,
+    Ledger,
+    StrategyIntentCreatedEvent,
+)
 from .loss_limits import fetch_account_equity, get_default_guard
 from .sell_scanner import SellScanner, SellSignal
 from .strategies import AICopilotWeightedStrategy, MeanReversionStrategy, TrendStrategy
@@ -337,7 +342,9 @@ class RunResult:
     timestamp: str  # ISO format
 
 
-def create_fallback_candidates_from_universe(universe_symbols: list[str], sector_map: dict[str, str] | None = None) -> list:
+def create_fallback_candidates_from_universe(
+    universe_symbols: list[str], sector_map: dict[str, str] | None = None
+) -> list:
     """
     Create synthetic WATCH candidates from universe symbols when RSS produces 0 candidates.
 
@@ -471,9 +478,13 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
 
                     if disabled_position_symbols:
                         universe = list(enabled_universe_set | disabled_position_symbols)
-                        print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
+                        print(
+                            f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}"
+                        )
                 except Exception as e:
-                    print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
+                    print(
+                        f"WARNING: Failed to augment universe with disabled sector positions: {e}"
+                    )
         else:
             universe = (
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
@@ -490,7 +501,9 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
                     for symbol in sector.symbols:
                         sector_map[symbol] = sector_name
 
-            print(f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)")
+            print(
+                f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)"
+            )
             tradeable_candidates = create_fallback_candidates_from_universe(universe, sector_map)
 
         candidate_map = {}
@@ -498,11 +511,14 @@ def run_shadow_mode(provider: MarketDataProvider | None = None, universe_registr
     # Filter excluded tickers (broker constraints, bad news, etc.)
     try:
         from src.app.ticker_exclusions import TickerExclusionManager
+
         exclusion_mgr = TickerExclusionManager()
         excluded_symbols = [s for s in universe if exclusion_mgr.is_excluded(s)]
         if excluded_symbols:
             universe = [s for s in universe if not exclusion_mgr.is_excluded(s)]
-            print(f"  - Excluded {len(excluded_symbols)} symbol(s): {', '.join(sorted(excluded_symbols))}")
+            print(
+                f"  - Excluded {len(excluded_symbols)} symbol(s): {', '.join(sorted(excluded_symbols))}"
+            )
     except Exception as e:
         print(f"WARNING: Failed to apply ticker exclusions: {e}")
 
@@ -895,9 +911,13 @@ def run_paper_mode(
 
                     if disabled_position_symbols:
                         universe = list(enabled_universe_set | disabled_position_symbols)
-                        print(f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}")
+                        print(
+                            f"  + Added {len(disabled_position_symbols)} position(s) from disabled sectors for exit: {', '.join(sorted(disabled_position_symbols))}"
+                        )
                 except Exception as e:
-                    print(f"WARNING: Failed to augment universe with disabled sector positions: {e}")
+                    print(
+                        f"WARNING: Failed to augment universe with disabled sector positions: {e}"
+                    )
         else:
             universe = (
                 config.universe_symbols if config.universe_symbols else config.allowed_symbols
@@ -914,7 +934,9 @@ def run_paper_mode(
                     for symbol in sector.symbols:
                         sector_map[symbol] = sector_name
 
-            print(f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)")
+            print(
+                f"  Fallback: Creating {len(universe)} synthetic candidates from universe (RSS had 0 tradeable)"
+            )
             tradeable_candidates = create_fallback_candidates_from_universe(universe, sector_map)
 
         candidate_map = {}
@@ -922,11 +944,14 @@ def run_paper_mode(
     # Filter excluded tickers (broker constraints, bad news, etc.)
     try:
         from src.app.ticker_exclusions import TickerExclusionManager
+
         exclusion_mgr = TickerExclusionManager()
         excluded_symbols = [s for s in universe if exclusion_mgr.is_excluded(s)]
         if excluded_symbols:
             universe = [s for s in universe if not exclusion_mgr.is_excluded(s)]
-            print(f"  - Excluded {len(excluded_symbols)} symbol(s): {', '.join(sorted(excluded_symbols))}")
+            print(
+                f"  - Excluded {len(excluded_symbols)} symbol(s): {', '.join(sorted(excluded_symbols))}"
+            )
     except Exception as e:
         print(f"WARNING: Failed to apply ticker exclusions: {e}")
 
@@ -1011,7 +1036,9 @@ def run_paper_mode(
         existing_positions = broker.get_positions()
         position_symbols_missing = [s for s in existing_positions if s not in market_data]
         if position_symbols_missing:
-            print(f"  Fetching prices for {len(position_symbols_missing)} out-of-universe position(s): {', '.join(sorted(position_symbols_missing))}")
+            print(
+                f"  Fetching prices for {len(position_symbols_missing)} out-of-universe position(s): {', '.join(sorted(position_symbols_missing))}"
+            )
             extra_data = provider.get_market_data(position_symbols_missing)
             market_data.update(extra_data)
             for sym, data in extra_data.items():
@@ -1142,26 +1169,32 @@ def run_paper_mode(
         # Load strategies from registry (enabled strategies only)
         for strategy_config in registry.get_enabled_strategies():
             if strategy_config.strategy_id == "Trend_MA20":
-                strategies.append(TrendStrategy(
-                    ma_period=strategy_config.params.get("sma_slow_period", 20)
-                ))
+                strategies.append(
+                    TrendStrategy(ma_period=strategy_config.params.get("sma_slow_period", 20))
+                )
             elif strategy_config.strategy_id == "MeanRev_Z1.0":
-                strategies.append(MeanReversionStrategy(
-                    zscore_threshold=strategy_config.params.get("zscore_threshold", 1.0)
-                ))
+                strategies.append(
+                    MeanReversionStrategy(
+                        zscore_threshold=strategy_config.params.get("zscore_threshold", 1.0)
+                    )
+                )
             elif strategy_config.strategy_id == "Momentum_MACD":
                 # Momentum strategy uses TrendStrategy with different MA periods
-                strategies.append(TrendStrategy(
-                    ma_period=strategy_config.params.get("sma_slow_period", 26)
-                ))
+                strategies.append(
+                    TrendStrategy(ma_period=strategy_config.params.get("sma_slow_period", 26))
+                )
             elif strategy_config.strategy_id == "AI_COPILOT_WEIGHTED":
-                strategies.append(AICopilotWeightedStrategy(
-                    per_sector_weights=strategy_config.params.get("per_sector_weights", {}),
-                    execution_enabled=strategy_config.params.get("execution_enabled", False),
-                    rebalance_threshold_pct=strategy_config.params.get("rebalance_threshold_pct", 0.02),
-                    allow_shorts=strategy_config.params.get("allow_shorts", False),
-                    sentiment_adjustment_enabled=sentiment_adjustment_enabled,
-                ))
+                strategies.append(
+                    AICopilotWeightedStrategy(
+                        per_sector_weights=strategy_config.params.get("per_sector_weights", {}),
+                        execution_enabled=strategy_config.params.get("execution_enabled", False),
+                        rebalance_threshold_pct=strategy_config.params.get(
+                            "rebalance_threshold_pct", 0.02
+                        ),
+                        allow_shorts=strategy_config.params.get("allow_shorts", False),
+                        sentiment_adjustment_enabled=sentiment_adjustment_enabled,
+                    )
+                )
     else:
         # Fallback to hardcoded strategies if no registry
         strategies = [
@@ -1352,9 +1385,7 @@ def run_paper_mode(
         )
         if loss_state.equity_available:
             session_limit = (
-                f"${config.max_session_loss:.2f}"
-                if config.max_session_loss is not None
-                else "off"
+                f"${config.max_session_loss:.2f}" if config.max_session_loss is not None else "off"
             )
             print(
                 f"Loss kill switch: equity ${loss_state.current_equity:.2f} | "
@@ -1379,14 +1410,18 @@ def run_paper_mode(
         active_profile_name, active_profile = get_active_mode_profile(modes_config)
 
         # Check if sentiment adjustment should be enabled (for aggressive_small_mid_sentiment mode)
-        sentiment_adjustment_enabled = (active_profile_name == "aggressive_small_mid_sentiment")
+        sentiment_adjustment_enabled = active_profile_name == "aggressive_small_mid_sentiment"
 
         if "execution_gate" in active_profile:
             execution_gate_config = ExecutionGateConfig.from_dict(active_profile["execution_gate"])
             fundamentals_cache = FundamentalsCache()
             print(f"\nExecution gate ENABLED (mode: {active_profile_name})")
-            print(f"  Market cap range: ${execution_gate_config.min_market_cap_usd:,.0f} - ${execution_gate_config.max_market_cap_usd:,.0f}")
-            print(f"  Price range: ${execution_gate_config.min_price:.2f} - ${execution_gate_config.max_price:.2f}")
+            print(
+                f"  Market cap range: ${execution_gate_config.min_market_cap_usd:,.0f} - ${execution_gate_config.max_market_cap_usd:,.0f}"
+            )
+            print(
+                f"  Price range: ${execution_gate_config.min_price:.2f} - ${execution_gate_config.max_price:.2f}"
+            )
             print(f"  Min liquidity: ${execution_gate_config.min_avg_dollar_volume_20d:,.0f}/day")
             print()
         else:
@@ -1403,7 +1438,9 @@ def run_paper_mode(
             # Update exit advisor with thresholds from active profile
             exit_advisor.stop_loss_pct = exit_thresholds.get("stop_loss_pct")
             exit_advisor.take_profit_pct = exit_thresholds.get("take_profit_pct")
-            exit_advisor.trailing_stop_trigger_pct = exit_thresholds.get("trailing_stop_trigger_pct")
+            exit_advisor.trailing_stop_trigger_pct = exit_thresholds.get(
+                "trailing_stop_trigger_pct"
+            )
             exit_advisor.trailing_stop_pct = exit_thresholds.get("trailing_stop_pct")
 
             print(f"Exit thresholds enabled (mode: {active_profile_name}):")

@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
+
     project_root = Path(__file__).parent.parent
     env_file = project_root / ".env"
     if env_file.exists():
@@ -42,9 +43,7 @@ from src.broker.base import AlpacaBroker
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Cancel all open orders on Alpaca paper account"
-    )
+    parser = argparse.ArgumentParser(description="Cancel all open orders on Alpaca paper account")
     parser.add_argument(
         "--confirm",
         action="store_true",
@@ -64,7 +63,9 @@ def main():
     api_secret = os.getenv("ALPACA_PAPER_SECRET_KEY")
 
     if not api_key or not api_secret:
-        logger.error("Missing environment variables: ALPACA_PAPER_KEY_ID and ALPACA_PAPER_SECRET_KEY")
+        logger.error(
+            "Missing environment variables: ALPACA_PAPER_KEY_ID and ALPACA_PAPER_SECRET_KEY"
+        )
         logger.error("Please set these variables before running this script")
         sys.exit(1)
 

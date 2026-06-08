@@ -83,7 +83,9 @@ class HourlyMarketDataProvider(MarketDataProvider):
                     bars_response = future.result(timeout=30)  # 30 second timeout
                 except FuturesTimeoutError:
                     self.logger.error(f"Timeout fetching bars from Alpaca (30s limit exceeded)")
-                    self.logger.warning(f"Symbols requested: {', '.join(symbols[:10])}{'...' if len(symbols) > 10 else ''}")
+                    self.logger.warning(
+                        f"Symbols requested: {', '.join(symbols[:10])}{'...' if len(symbols) > 10 else ''}"
+                    )
                     return {}
         except Exception as e:
             self.logger.error(f"Failed to fetch bars from Alpaca: {e}")

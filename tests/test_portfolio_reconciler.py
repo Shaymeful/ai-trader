@@ -48,7 +48,7 @@ def test_reconcile_no_violations(config):
 
     positions = {
         "AAPL": (10, Decimal("150.00")),  # $1,500
-        "MSFT": (5, Decimal("300.00")),   # $1,500
+        "MSFT": (5, Decimal("300.00")),  # $1,500
         # Total: $3,000 (within $10k cap)
     }
 
@@ -71,8 +71,8 @@ def test_reconcile_cap_exceeded(config):
 
     # Portfolio over $10k cap
     positions = {
-        "AAPL": (50, Decimal("150.00")),   # $7,500
-        "MSFT": (20, Decimal("300.00")),   # $6,000
+        "AAPL": (50, Decimal("150.00")),  # $7,500
+        "MSFT": (20, Decimal("300.00")),  # $6,000
         "GOOGL": (10, Decimal("200.00")),  # $2,000
         # Total: $15,500 (over $10k cap by $5,500)
     }
@@ -95,13 +95,14 @@ def test_reconcile_cap_exceeded(config):
     assert len(result.sell_intents) > 0
 
     # All sell intents should have CAP_EXCEEDED reason
-    cap_sells = [intent for intent in result.sell_intents if intent.reason == SellReason.CAP_EXCEEDED]
+    cap_sells = [
+        intent for intent in result.sell_intents if intent.reason == SellReason.CAP_EXCEEDED
+    ]
     assert len(cap_sells) > 0
 
     # Calculate total sell notional
     total_sell_notional = sum(
-        Decimal(intent.quantity) * current_prices[intent.symbol]
-        for intent in result.sell_intents
+        Decimal(intent.quantity) * current_prices[intent.symbol] for intent in result.sell_intents
     )
 
     # Should sell enough to get under cap (or close to it)
@@ -119,7 +120,7 @@ def test_reconcile_disabled_sector(config, mock_universe_registry):
     # Portfolio with position in disabled energy sector
     positions = {
         "AAPL": (10, Decimal("150.00")),  # $1,500 (enabled tech sector)
-        "XLE": (20, Decimal("80.00")),    # $1,600 (DISABLED energy sector)
+        "XLE": (20, Decimal("80.00")),  # $1,600 (DISABLED energy sector)
     }
 
     current_prices = {
@@ -134,7 +135,9 @@ def test_reconcile_disabled_sector(config, mock_universe_registry):
     assert any("disabled sector" in v.lower() for v in result.violations)
 
     # Should generate sell intent for XLE (disabled sector)
-    sector_sells = [intent for intent in result.sell_intents if intent.reason == SellReason.SECTOR_DISABLED]
+    sector_sells = [
+        intent for intent in result.sell_intents if intent.reason == SellReason.SECTOR_DISABLED
+    ]
     assert len(sector_sells) == 1
     assert sector_sells[0].symbol == "XLE"
     assert sector_sells[0].quantity == 20  # Full position
@@ -158,7 +161,7 @@ def test_reconcile_excluded_ticker(config):
 
     positions = {
         "AAPL": (10, Decimal("150.00")),  # $1,500 (not excluded)
-        "TSLA": (5, Decimal("200.00")),   # $1,000 (EXCLUDED)
+        "TSLA": (5, Decimal("200.00")),  # $1,000 (EXCLUDED)
     }
 
     current_prices = {
@@ -173,7 +176,9 @@ def test_reconcile_excluded_ticker(config):
     assert any("excluded ticker" in v.lower() for v in result.violations)
 
     # Should generate sell intent for TSLA (excluded)
-    exclusion_sells = [intent for intent in result.sell_intents if intent.reason == SellReason.TICKER_EXCLUDED_NEWS]
+    exclusion_sells = [
+        intent for intent in result.sell_intents if intent.reason == SellReason.TICKER_EXCLUDED_NEWS
+    ]
     assert len(exclusion_sells) == 1
     assert exclusion_sells[0].symbol == "TSLA"
     assert exclusion_sells[0].quantity == 5  # Full position
@@ -198,9 +203,9 @@ def test_reconcile_priority_ordering(config):
 
     # Portfolio with exclusion + over cap
     positions = {
-        "AAPL": (50, Decimal("150.00")),   # $7,500
-        "MSFT": (20, Decimal("300.00")),   # $6,000
-        "TSLA": (10, Decimal("200.00")),   # $2,000 (excluded)
+        "AAPL": (50, Decimal("150.00")),  # $7,500
+        "MSFT": (20, Decimal("300.00")),  # $6,000
+        "TSLA": (10, Decimal("200.00")),  # $2,000 (excluded)
         # Total: $15,500 (over $10k cap + TSLA excluded)
     }
 
@@ -213,8 +218,12 @@ def test_reconcile_priority_ordering(config):
     result = reconciler.reconcile(positions, current_prices)
 
     # Should have both types of sells
-    exclusion_sells = [intent for intent in result.sell_intents if intent.reason == SellReason.TICKER_EXCLUDED_NEWS]
-    cap_sells = [intent for intent in result.sell_intents if intent.reason == SellReason.CAP_EXCEEDED]
+    exclusion_sells = [
+        intent for intent in result.sell_intents if intent.reason == SellReason.TICKER_EXCLUDED_NEWS
+    ]
+    cap_sells = [
+        intent for intent in result.sell_intents if intent.reason == SellReason.CAP_EXCEEDED
+    ]
 
     assert len(exclusion_sells) > 0
     assert len(cap_sells) > 0
@@ -234,15 +243,15 @@ def test_reconcile_liquidation_policy_worst_performers(config):
     # Portfolio with clear winner and loser
     positions = {
         "WINNER": (50, Decimal("100.00")),  # $5,000 entry, now $7,500 (+$2,500)
-        "LOSER": (50, Decimal("100.00")),   # $5,000 entry, now $2,500 (-$2,500)
-        "NEUTRAL": (50, Decimal("100.00")), # $5,000 entry, still $5,000 ($0)
+        "LOSER": (50, Decimal("100.00")),  # $5,000 entry, now $2,500 (-$2,500)
+        "NEUTRAL": (50, Decimal("100.00")),  # $5,000 entry, still $5,000 ($0)
         # Total: $15,000 (over $10k cap by $5,000)
     }
 
     current_prices = {
         "WINNER": Decimal("150.00"),  # +50% gain
-        "LOSER": Decimal("50.00"),    # -50% loss
-        "NEUTRAL": Decimal("100.00"), # flat
+        "LOSER": Decimal("50.00"),  # -50% loss
+        "NEUTRAL": Decimal("100.00"),  # flat
     }
 
     result = reconciler.reconcile(positions, current_prices)
@@ -264,7 +273,7 @@ def test_reconcile_no_universe_registry(config):
 
     positions = {
         "AAPL": (10, Decimal("150.00")),  # $1,500
-        "XLE": (10, Decimal("80.00")),    # $800 (would be disabled if registry existed)
+        "XLE": (10, Decimal("80.00")),  # $800 (would be disabled if registry existed)
     }
 
     current_prices = {
@@ -279,5 +288,7 @@ def test_reconcile_no_universe_registry(config):
     assert len(sector_violations) == 0
 
     # Should not generate sector-based sells
-    sector_sells = [intent for intent in result.sell_intents if intent.reason == SellReason.SECTOR_DISABLED]
+    sector_sells = [
+        intent for intent in result.sell_intents if intent.reason == SellReason.SECTOR_DISABLED
+    ]
     assert len(sector_sells) == 0

@@ -1,14 +1,16 @@
 """Verify reconciliation is active in the codebase."""
+
 import os
 import sys
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("RECONCILIATION VERIFICATION")
-print("="*80 + "\n")
+print("=" * 80 + "\n")
 
 # Check 1: Verify we're on the right branch
 print("[*] Checking git branch...")
 import subprocess
+
 branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
 print(f"  Current branch: {branch}")
 
@@ -47,17 +49,22 @@ if has_import and has_code and has_exclusions:
     print("  [OK] Runner has reconciliation code block")
     print("  [OK] Runner has ticker exclusion manager")
 else:
-    print(f"  [WARN] Missing integration: import={has_import}, code={has_code}, exclusions={has_exclusions}")
+    print(
+        f"  [WARN] Missing integration: import={has_import}, code={has_code}, exclusions={has_exclusions}"
+    )
 
 # Check 4: Verify loop is running
 print("\n[*] Checking if loop is running...")
 try:
     result = subprocess.run(
-        ["powershell", "-Command",
-         "Get-Process python | Where-Object { (Get-WmiObject Win32_Process -Filter \"ProcessId = $($_.Id)\").CommandLine -like '*runner*' } | Measure-Object | Select-Object -ExpandProperty Count"],
+        [
+            "powershell",
+            "-Command",
+            "Get-Process python | Where-Object { (Get-WmiObject Win32_Process -Filter \"ProcessId = $($_.Id)\").CommandLine -like '*runner*' } | Measure-Object | Select-Object -ExpandProperty Count",
+        ],
         capture_output=True,
         text=True,
-        timeout=5
+        timeout=5,
     )
     count = int(result.stdout.strip() or "0")
     if count > 0:
@@ -99,11 +106,11 @@ try:
     total_exposure = Decimal("0")
     for symbol, pos_data in positions.items():
         if isinstance(pos_data, dict):
-            qty = pos_data.get('qty', 0)
-            avg_price = Decimal(str(pos_data.get('avg_entry_price', 0)))
+            qty = pos_data.get("qty", 0)
+            avg_price = Decimal(str(pos_data.get("avg_entry_price", 0)))
         else:
-            qty = getattr(pos_data, 'qty', 0)
-            avg_price = Decimal(str(getattr(pos_data, 'avg_entry_price', 0)))
+            qty = getattr(pos_data, "qty", 0)
+            avg_price = Decimal(str(getattr(pos_data, "avg_entry_price", 0)))
         total_exposure += Decimal(qty) * avg_price
 
     cap = config.max_positions_notional
@@ -114,16 +121,18 @@ try:
     print(f"  Utilization: {utilization:.1f}%")
 
     if total_exposure > cap:
-        print(f"  [WARN] OVER CAP by ${total_exposure - cap:,.2f} - reconciliation will trigger sells!")
+        print(
+            f"  [WARN] OVER CAP by ${total_exposure - cap:,.2f} - reconciliation will trigger sells!"
+        )
     else:
         print(f"  [OK] Within cap (${cap - total_exposure:,.2f} headroom)")
 
 except Exception as e:
     print(f"  [WARN] Could not check exposure: {e}")
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("SUMMARY")
-print("="*80)
+print("=" * 80)
 print("\n[OK] Reconciliation code: INSTALLED")
 print("[OK] Runner integration: ACTIVE")
 print("[OK] Loop: RUNNING")
@@ -131,4 +140,4 @@ print("\nReconciliation will trigger sells when:")
 print("   1. Portfolio exceeds $50,000 cap")
 print("   2. Sector is disabled in UI")
 print("   3. Ticker is excluded due to bad news")
-print("\n" + "="*80 + "\n")
+print("\n" + "=" * 80 + "\n")

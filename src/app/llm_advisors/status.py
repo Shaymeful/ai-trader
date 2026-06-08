@@ -109,23 +109,29 @@ class StatusSnapshot:
                 "trade_rationale": {
                     "enabled": self.config.ai_copilot_trade_rationale_enabled,
                     "ran": self.trade_rationale_calls > 0,
-                    "skipped_reason": None if self.trade_rationale_calls > 0 else (
-                        "trading_disabled" if trading_disabled else "budget_exhausted" if self.client.get_remaining_budget() == 0 else None
+                    "skipped_reason": None
+                    if self.trade_rationale_calls > 0
+                    else (
+                        "trading_disabled"
+                        if trading_disabled
+                        else "budget_exhausted"
+                        if self.client.get_remaining_budget() == 0
+                        else None
                     ),
                 },
                 "daily_journal": {
                     "enabled": self.config.ai_copilot_daily_journal_enabled,
                     "ran": self.daily_journal_generated,
-                    "skipped_reason": None if self.daily_journal_generated else (
-                        "trading_disabled" if trading_disabled else None
-                    ),
+                    "skipped_reason": None
+                    if self.daily_journal_generated
+                    else ("trading_disabled" if trading_disabled else None),
                 },
                 "strategy_critique": {
                     "enabled": self.config.ai_copilot_strategy_critique_enabled,
                     "ran": self.strategy_critique_generated,
-                    "skipped_reason": None if self.strategy_critique_generated else (
-                        "trading_disabled" if trading_disabled else None
-                    ),
+                    "skipped_reason": None
+                    if self.strategy_critique_generated
+                    else ("trading_disabled" if trading_disabled else None),
                 },
             },
             "artifacts": {
@@ -172,7 +178,9 @@ class StatusSnapshot:
             return False
 
 
-def load_latest_status(path: str | Path = "logs/ai_copilot/latest_status.json") -> dict[str, Any] | None:
+def load_latest_status(
+    path: str | Path = "logs/ai_copilot/latest_status.json",
+) -> dict[str, Any] | None:
     """
     Load latest status snapshot from disk.
 

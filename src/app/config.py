@@ -123,13 +123,16 @@ class Config(BaseModel):
         default=500.0, description="Minimum order size in dollars (skip smaller orders)"
     )
     allow_position_adds: bool = Field(
-        default=False, description="Allow adding to existing positions (True) or new positions only (False)"
+        default=False,
+        description="Allow adding to existing positions (True) or new positions only (False)",
     )
     max_portfolio_exposure_pct: float = Field(
-        default=0.60, description="Target max portfolio exposure as fraction of base capital (e.g. 0.60 = 60%)"
+        default=0.60,
+        description="Target max portfolio exposure as fraction of base capital (e.g. 0.60 = 60%)",
     )
     max_per_position_pct: float = Field(
-        default=0.15, description="Max notional per position as fraction of base capital (e.g. 0.15 = 15%)"
+        default=0.15,
+        description="Max notional per position as fraction of base capital (e.g. 0.15 = 15%)",
     )
 
     # Performance tracking (Shadow PnL)
@@ -192,25 +195,17 @@ class Config(BaseModel):
 
     # AI Co-Pilot Configuration (Advisory Layer)
     # SAFETY: Default OFF, never blocks loop, advisory-only outputs
-    ai_copilot_enabled: bool = Field(
-        default=False, description="Enable AI Co-Pilot advisory layer"
-    )
+    ai_copilot_enabled: bool = Field(default=False, description="Enable AI Co-Pilot advisory layer")
     ai_copilot_influence_decisions: bool = Field(
         default=False,
         description="Allow AI Co-Pilot to influence trading decisions (CRITICAL SAFETY FLAG)",
     )
-    ai_copilot_model: str = Field(
-        default="gpt-4o-mini", description="LLM model for AI Co-Pilot"
-    )
+    ai_copilot_model: str = Field(default="gpt-4o-mini", description="LLM model for AI Co-Pilot")
     ai_copilot_max_calls_per_run: int = Field(
         default=4, description="Maximum LLM calls per run (budget gate)"
     )
-    ai_copilot_timeout_s: int = Field(
-        default=20, description="Request timeout in seconds"
-    )
-    ai_copilot_dry_run: bool = Field(
-        default=False, description="Dry-run mode (no file writes)"
-    )
+    ai_copilot_timeout_s: int = Field(default=20, description="Request timeout in seconds")
+    ai_copilot_dry_run: bool = Field(default=False, description="Dry-run mode (no file writes)")
 
     # Global budget constraints
     ai_copilot_global_max_output_tokens: int = Field(
@@ -240,7 +235,8 @@ class Config(BaseModel):
     )
 
     ai_copilot_universe_ticker_manager_enabled: bool = Field(
-        default=False, description="Enable universe ticker manager (dynamic add/remove recommendations)"
+        default=False,
+        description="Enable universe ticker manager (dynamic add/remove recommendations)",
     )
     ai_copilot_universe_ticker_manager_max_tokens: int = Field(
         default=800, description="Max output tokens for universe ticker manager"
@@ -690,7 +686,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
             if "budgets" in ai_copilot:
                 budgets = ai_copilot["budgets"]
                 if "global_max_output_tokens" in budgets:
-                    config.ai_copilot_global_max_output_tokens = int(budgets["global_max_output_tokens"])
+                    config.ai_copilot_global_max_output_tokens = int(
+                        budgets["global_max_output_tokens"]
+                    )
 
             # UI can override global token budget
             if "budgets" in ui_copilot and "global_max_output_tokens" in ui_copilot["budgets"]:
@@ -712,7 +710,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in ui_feature:
                     config.ai_copilot_trade_rationale_enabled = bool(ui_feature["enabled"])
                 if "max_output_tokens" in ui_feature:
-                    config.ai_copilot_trade_rationale_max_tokens = int(ui_feature["max_output_tokens"])
+                    config.ai_copilot_trade_rationale_max_tokens = int(
+                        ui_feature["max_output_tokens"]
+                    )
 
             # Daily journal feature
             if "daily_journal" in ai_copilot:
@@ -728,7 +728,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in ui_feature:
                     config.ai_copilot_daily_journal_enabled = bool(ui_feature["enabled"])
                 if "max_output_tokens" in ui_feature:
-                    config.ai_copilot_daily_journal_max_tokens = int(ui_feature["max_output_tokens"])
+                    config.ai_copilot_daily_journal_max_tokens = int(
+                        ui_feature["max_output_tokens"]
+                    )
 
             # Strategy critique feature
             if "strategy_critique" in ai_copilot:
@@ -736,7 +738,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in feature:
                     config.ai_copilot_strategy_critique_enabled = bool(feature["enabled"])
                 if "max_output_tokens" in feature:
-                    config.ai_copilot_strategy_critique_max_tokens = int(feature["max_output_tokens"])
+                    config.ai_copilot_strategy_critique_max_tokens = int(
+                        feature["max_output_tokens"]
+                    )
 
             # UI can override strategy critique
             if "strategy_critique" in ui_copilot:
@@ -744,7 +748,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in ui_feature:
                     config.ai_copilot_strategy_critique_enabled = bool(ui_feature["enabled"])
                 if "max_output_tokens" in ui_feature:
-                    config.ai_copilot_strategy_critique_max_tokens = int(ui_feature["max_output_tokens"])
+                    config.ai_copilot_strategy_critique_max_tokens = int(
+                        ui_feature["max_output_tokens"]
+                    )
 
             # Universe ticker manager feature
             if "universe_ticker_manager" in ai_copilot:
@@ -752,7 +758,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in feature:
                     config.ai_copilot_universe_ticker_manager_enabled = bool(feature["enabled"])
                 if "max_output_tokens" in feature:
-                    config.ai_copilot_universe_ticker_manager_max_tokens = int(feature["max_output_tokens"])
+                    config.ai_copilot_universe_ticker_manager_max_tokens = int(
+                        feature["max_output_tokens"]
+                    )
 
             # UI can override universe ticker manager
             if "universe_ticker_manager" in ui_copilot:
@@ -760,7 +768,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in ui_feature:
                     config.ai_copilot_universe_ticker_manager_enabled = bool(ui_feature["enabled"])
                 if "max_output_tokens" in ui_feature:
-                    config.ai_copilot_universe_ticker_manager_max_tokens = int(ui_feature["max_output_tokens"])
+                    config.ai_copilot_universe_ticker_manager_max_tokens = int(
+                        ui_feature["max_output_tokens"]
+                    )
 
             # Sector recommendations feature
             if "sector_recommendations" in ai_copilot:
@@ -768,7 +778,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in feature:
                     config.ai_copilot_sector_recommendations_enabled = bool(feature["enabled"])
                 if "max_output_tokens" in feature:
-                    config.ai_copilot_sector_recommendations_max_tokens = int(feature["max_output_tokens"])
+                    config.ai_copilot_sector_recommendations_max_tokens = int(
+                        feature["max_output_tokens"]
+                    )
 
             # UI can override sector recommendations
             if "sector_recommendations" in ui_copilot:
@@ -776,7 +788,9 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                 if "enabled" in ui_feature:
                     config.ai_copilot_sector_recommendations_enabled = bool(ui_feature["enabled"])
                 if "max_output_tokens" in ui_feature:
-                    config.ai_copilot_sector_recommendations_max_tokens = int(ui_feature["max_output_tokens"])
+                    config.ai_copilot_sector_recommendations_max_tokens = int(
+                        ui_feature["max_output_tokens"]
+                    )
 
     # Apply active mode profile allocation / risk_limits settings.
     # Mode profile takes precedence over config.yaml for these blocks so that
@@ -805,6 +819,7 @@ def load_config_with_yaml(yaml_path: Path | None = None) -> Config:
                     config.max_positions = int(rl["max_positions"])
     except Exception as _mode_err:
         import logging as _logging
+
         _logging.getLogger("ai-trader").warning(
             f"Failed to apply mode profile allocation/risk_limits to config: {_mode_err}"
         )
@@ -845,7 +860,9 @@ def load_mode_profiles(modes_path: Path | None = None) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def get_active_mode_profile(modes_config: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+def get_active_mode_profile(
+    modes_config: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """
     Get the active mode profile from configuration.
 

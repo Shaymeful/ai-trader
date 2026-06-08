@@ -20,12 +20,13 @@ load_dotenv()
 from src.broker import AlpacaBroker
 from src.app.config import get_alpaca_credentials
 
+
 def main():
     mode = "paper"  # Change to "live" if needed (BE CAREFUL!)
 
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"CANCEL ALL OPEN ORDERS - {mode.upper()} MODE")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     # Get credentials
     api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials(mode)
@@ -54,17 +55,20 @@ def main():
 
         # Group by symbol
         from collections import defaultdict
+
         by_symbol = defaultdict(list)
         total_reserved = 0
 
         for order in open_orders:
-            by_symbol[order['symbol']].append(order)
-            qty = order['qty']
-            limit_price = order['limit_price']
+            by_symbol[order["symbol"]].append(order)
+            qty = order["qty"]
+            limit_price = order["limit_price"]
             notional = float(qty) * float(limit_price) if limit_price else 0
             total_reserved += notional
 
-            print(f"{order['symbol']:<8} {order['side']:<6} {qty:<10.2f} ${float(limit_price) if limit_price else 0:<11.2f} {order['order_id']}")
+            print(
+                f"{order['symbol']:<8} {order['side']:<6} {qty:<10.2f} ${float(limit_price) if limit_price else 0:<11.2f} {order['order_id']}"
+            )
 
         print(f"\nTotal reserved notional: ${total_reserved:,.2f}")
 
@@ -76,7 +80,7 @@ def main():
                 print(f"  {symbol}: {len(orders)} open {orders[0]['side']} orders")
 
         # Confirm cancellation
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         response = input(f"Cancel all {len(open_orders)} orders? (yes/no): ").strip().lower()
 
         if response != "yes":
@@ -89,8 +93,8 @@ def main():
         failed = 0
 
         for order in open_orders:
-            order_id = order['order_id']
-            symbol = order['symbol']
+            order_id = order["order_id"]
+            symbol = order["symbol"]
             try:
                 broker.client.cancel_order_by_id(order_id)
                 print(f"  ✅ Canceled {symbol} {order['side']} order {order_id}")
@@ -99,12 +103,14 @@ def main():
                 print(f"  ❌ Failed to cancel {symbol} order {order_id}: {e}")
                 failed += 1
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"SUMMARY: Canceled {canceled} orders, {failed} failed")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
 
         if canceled > 0:
-            print("\n✅ Cleanup complete! Your account should now have full buying power available.")
+            print(
+                "\n✅ Cleanup complete! Your account should now have full buying power available."
+            )
             print("Run the loop again to see normal operation without duplicate orders.")
 
         return 0
@@ -112,6 +118,7 @@ def main():
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

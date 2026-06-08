@@ -447,7 +447,9 @@ class AlpacaExecutor:
                         )
                         self.logger.warning(f"{slice_instruction.symbol}: {reason}")
                         orders_skipped.append((slice_instruction.symbol, reason))
-                        print(f"  {slice_instruction.symbol}: BLOCKED - {tradability_result.message}")
+                        print(
+                            f"  {slice_instruction.symbol}: BLOCKED - {tradability_result.message}"
+                        )
                         continue
 
                 # Place order (or dry-run)

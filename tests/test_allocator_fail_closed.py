@@ -61,9 +61,7 @@ def test_equity_fetch_failure_fails_closed_no_orders():
 
 
 def test_zero_equity_fails_closed_no_orders():
-    allocator = Allocator(
-        _live_config(), registry=_REGISTRY_SENTINEL, broker=_equity_broker("0")
-    )
+    allocator = Allocator(_live_config(), registry=_REGISTRY_SENTINEL, broker=_equity_broker("0"))
 
     result = allocator.allocate({}, {})
 
@@ -87,9 +85,7 @@ def test_dry_run_keeps_legacy_fallback_on_equity_failure():
     config = Config(max_positions_notional=Decimal("10000"))
     config.dry_run = True
 
-    allocator = Allocator(
-        config, registry=_REGISTRY_SENTINEL, broker=_RaisingClientBroker()
-    )
+    allocator = Allocator(config, registry=_REGISTRY_SENTINEL, broker=_RaisingClientBroker())
 
     result = allocator.allocate({}, {})
 

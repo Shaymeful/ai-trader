@@ -1,4 +1,5 @@
 """Check current positions."""
+
 import sys
 from pathlib import Path
 
@@ -29,6 +30,7 @@ print()
 # Check what energy sector tickers are
 try:
     from src.app.universe_registry import UniverseRegistry
+
     registry = UniverseRegistry()
 
     if "energy" in registry.sectors:

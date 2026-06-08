@@ -3,6 +3,7 @@
 This script temporarily sets a low cap ($1000) to force reconciliation
 to trigger sells, allowing us to verify the entire execution chain.
 """
+
 import os
 import sys
 from pathlib import Path
@@ -13,9 +14,9 @@ if not venv_python.exists():
     print("ERROR: Virtual environment not found at .venv/Scripts/python.exe")
     sys.exit(1)
 
-print("="*80)
+print("=" * 80)
 print("RECONCILIATION EXECUTION TEST")
-print("="*80)
+print("=" * 80)
 print(f"Using Python: {venv_python.absolute()}")
 print()
 
@@ -33,13 +34,15 @@ positions = broker.get_positions()
 total_exposure = Decimal("0")
 for symbol, pos_data in positions.items():
     if isinstance(pos_data, dict):
-        qty = pos_data.get('qty', 0)
-        avg_price = Decimal(str(pos_data.get('avg_entry_price', 0)))
+        qty = pos_data.get("qty", 0)
+        avg_price = Decimal(str(pos_data.get("avg_entry_price", 0)))
     else:
-        qty = getattr(pos_data, 'qty', 0)
-        avg_price = Decimal(str(getattr(pos_data, 'avg_entry_price', 0)))
+        qty = getattr(pos_data, "qty", 0)
+        avg_price = Decimal(str(getattr(pos_data, "avg_entry_price", 0)))
     total_exposure += Decimal(qty) * avg_price
-    print(f"  {symbol}: qty={qty}, avg_price=${avg_price:.2f}, notional=${Decimal(qty) * avg_price:,.2f}")
+    print(
+        f"  {symbol}: qty={qty}, avg_price=${avg_price:.2f}, notional=${Decimal(qty) * avg_price:,.2f}"
+    )
 
 print(f"\nCurrent exposure: ${total_exposure:,.2f}")
 current_cap = config.max_positions_notional
@@ -76,13 +79,13 @@ reconcile_positions = {}
 current_prices = {}
 for symbol, pos_data in positions.items():
     if isinstance(pos_data, dict):
-        qty = pos_data.get('qty', 0)
-        avg_price = Decimal(str(pos_data.get('avg_entry_price', 0)))
-        current_price = Decimal(str(pos_data.get('current_price', avg_price)))
+        qty = pos_data.get("qty", 0)
+        avg_price = Decimal(str(pos_data.get("avg_entry_price", 0)))
+        current_price = Decimal(str(pos_data.get("current_price", avg_price)))
     else:
-        qty = getattr(pos_data, 'qty', 0)
-        avg_price = Decimal(str(getattr(pos_data, 'avg_entry_price', 0)))
-        current_price = Decimal(str(getattr(pos_data, 'current_price', avg_price)))
+        qty = getattr(pos_data, "qty", 0)
+        avg_price = Decimal(str(getattr(pos_data, "avg_entry_price", 0)))
+        current_price = Decimal(str(getattr(pos_data, "current_price", avg_price)))
 
     if qty > 0:
         reconcile_positions[symbol] = (int(qty), avg_price)
@@ -109,9 +112,9 @@ print("\n[Step 5] Restoring original cap...")
 config.max_positions_notional = original_cap
 print(f"  Cap restored to: ${original_cap:,.2f}")
 
-print("\n"+"="*80)
+print("\n" + "=" * 80)
 print("TEST COMPLETE - Reconciliation logic verified")
-print("="*80)
+print("=" * 80)
 print("\nNext: Run full loop iteration to verify sell orders are executed:")
 print("  .venv\\Scripts\\python.exe -m src.app.runner --mode paper --once")
 print()

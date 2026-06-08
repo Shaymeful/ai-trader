@@ -53,6 +53,7 @@ class CoPilotClient:
 
         # Check trading disabled status
         from src.app.llm_advisors.utils import is_trading_disabled
+
         self.trading_disabled = is_trading_disabled()
 
         # Create LLM provider (lazy - only if enabled)
@@ -78,7 +79,9 @@ class CoPilotClient:
     def reset_budget(self):
         """Reset call counter (called at start of each run)."""
         self.call_count = 0
-        logger.debug(f"Budget reset. Max calls this run: {self.config.ai_copilot_max_calls_per_run}")
+        logger.debug(
+            f"Budget reset. Max calls this run: {self.config.ai_copilot_max_calls_per_run}"
+        )
 
     def get_remaining_budget(self) -> int:
         """Get remaining LLM calls for this run."""
@@ -225,7 +228,8 @@ class CoPilotClient:
 
         return {
             "trading_disabled_effective": self.trading_disabled,
-            "ai_copilot_enabled_effective": self.config.ai_copilot_enabled and not self.trading_disabled,
+            "ai_copilot_enabled_effective": self.config.ai_copilot_enabled
+            and not self.trading_disabled,
             "forced_reason": forced_reason,
             "enabled": self.config.ai_copilot_enabled,
             "dry_run": self.dry_run,

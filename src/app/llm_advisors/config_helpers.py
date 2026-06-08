@@ -11,7 +11,9 @@ from src.app.config import Config
 from src.app.llm_advisors.utils import is_trading_disabled, load_ui_runtime_overrides
 
 
-def get_effective_config_with_sources(config: Config, yaml_config: dict[str, Any] | None = None) -> dict[str, Any]:
+def get_effective_config_with_sources(
+    config: Config, yaml_config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """
     Get effective AI Co-Pilot configuration with source tracking.
 

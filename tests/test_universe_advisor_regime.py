@@ -32,9 +32,7 @@ def test_detect_regime_bull_low_vol():
         {
             "price": 450.0,
             "ma": 440.0,  # Price > MA = bull
-            "closes": [
-                440.0 + i * 0.5 for i in range(50)
-            ],  # Smooth uptrend = low vol
+            "closes": [440.0 + i * 0.5 for i in range(50)],  # Smooth uptrend = low vol
         }
     )
 
@@ -137,14 +135,10 @@ def test_detect_regime_no_spy_data():
 def test_regime_confidence_increases_with_data():
     """Test that confidence increases with more data points."""
     # Provider with 25 closes
-    provider_25 = MockMarketDataProvider(
-        {"price": 450.0, "ma": 440.0, "closes": [450.0] * 25}
-    )
+    provider_25 = MockMarketDataProvider({"price": 450.0, "ma": 440.0, "closes": [450.0] * 25})
 
     # Provider with 50 closes
-    provider_50 = MockMarketDataProvider(
-        {"price": 450.0, "ma": 440.0, "closes": [450.0] * 50}
-    )
+    provider_50 = MockMarketDataProvider({"price": 450.0, "ma": 440.0, "closes": [450.0] * 50})
 
     regime_25 = detect_market_regime(provider_25)
     regime_50 = detect_market_regime(provider_50)
@@ -154,9 +148,7 @@ def test_regime_confidence_increases_with_data():
 
 def test_regime_timestamp_is_recent():
     """Test that regime timestamp is current."""
-    provider = MockMarketDataProvider(
-        {"price": 450.0, "ma": 440.0, "closes": [450.0] * 50}
-    )
+    provider = MockMarketDataProvider({"price": 450.0, "ma": 440.0, "closes": [450.0] * 50})
 
     regime = detect_market_regime(provider)
 

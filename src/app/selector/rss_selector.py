@@ -81,6 +81,15 @@ class RSSSelector:
         # Symbol extraction pattern: (SYMBOL) or SYMBOL: or $SYMBOL
         self.symbol_pattern = re.compile(r"\(([A-Z]{1,5})\)|([A-Z]{1,5}):|\$([A-Z]{1,5})\b")
 
+        # Company-name → ticker aliases loaded from config.
+        # Fallback when regex finds no explicit ticker in the headline.
+        # Maps ticker -> [list of lowercase name fragments]
+        raw_aliases: dict[str, list[str]] = self.config_dict.get("company_aliases", {})
+        self._company_aliases: list[tuple[str, list[str]]] = [
+            (ticker.upper(), [name.lower() for name in names])
+            for ticker, names in raw_aliases.items()
+        ]
+
         # Duplicate suppression tracking: (symbol, action) -> timestamp
         self.recent_candidates: dict[tuple[str, str], datetime] = {}
 
@@ -174,6 +183,10 @@ class RSSSelector:
         """
         Extract stock symbol from text conservatively.
 
+        First tries explicit ticker patterns ((SYMBOL), SYMBOL:, $SYMBOL).
+        If none found, falls back to company-name alias matching against the
+        known universe from config.company_aliases.
+
         Returns:
             (symbol, is_certain) tuple
             - symbol: Extracted symbol or None
@@ -181,21 +194,24 @@ class RSSSelector:
         """
         matches = list(self.symbol_pattern.finditer(text))
 
-        if not matches:
-            return None, False
+        if matches:
+            # Extract first match (prefer explicit patterns)
+            for match in matches:
+                symbol = match.group(1) or match.group(2) or match.group(3)
+                # Validate symbol (1-5 uppercase letters)
+                if symbol and len(symbol) <= 5 and symbol.isupper():
+                    return symbol, True
 
-        # Extract first match (prefer explicit patterns)
-        for match in matches:
-            symbol = match.group(1) or match.group(2) or match.group(3)
-            # Validate symbol (1-5 uppercase letters)
-            if symbol and len(symbol) <= 5 and symbol.isupper():
-                return symbol, True
+        # Fallback: check company-name aliases (universe-restricted, deterministic)
+        text_lower = text.lower()
+        for ticker, name_fragments in self._company_aliases:
+            for fragment in name_fragments:
+                if fragment in text_lower:
+                    return ticker, True  # Explicit alias match → certain
 
         return None, False
 
-    def map_action(
-        self, text: str, sentiment_score: float | None = None
-    ) -> str:
+    def map_action(self, text: str, sentiment_score: float | None = None) -> str:
         """Map headline text to action (buy/sell/watch).
 
         If sentiment_score provided, uses sentiment thresholds for action mapping.

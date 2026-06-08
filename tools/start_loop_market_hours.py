@@ -66,7 +66,7 @@ def is_loop_running() -> bool:
 
     # Try to read PID from lock file
     try:
-        with open(lock_file, 'r') as f:
+        with open(lock_file, "r") as f:
             content = f.read().strip()
             if not content:
                 return False
@@ -107,25 +107,28 @@ def start_loop() -> bool:
     # Start loop process with proper environment
     cmd = [
         sys.executable,  # Use same Python interpreter
-        "-m", "src.app.runner",
-        "--mode", "paper",
+        "-m",
+        "src.app.runner",
+        "--mode",
+        "paper",
         "--loop",
-        "--sleep-seconds", "600"
+        "--sleep-seconds",
+        "600",
     ]
 
     # Set up environment
     env = os.environ.copy()
-    env['PYTHONPATH'] = str(project_root)
+    env["PYTHONPATH"] = str(project_root)
 
     try:
         # Start process in background
         process = subprocess.Popen(
             cmd,
-            stdout=open(log_file, 'a'),
+            stdout=open(log_file, "a"),
             stderr=subprocess.STDOUT,
             cwd=project_root,
             env=env,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
         )
 
         print(f"Started trading loop with PID: {process.pid}")
@@ -148,7 +151,7 @@ def main():
 
     # Check weekday
     if not is_weekday():
-        day_name = et_now.strftime('%A')
+        day_name = et_now.strftime("%A")
         print(f"[X] Not a weekday (today is {day_name})")
         print("Loop will not start on weekends")
         return

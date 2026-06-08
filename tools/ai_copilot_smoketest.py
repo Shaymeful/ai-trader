@@ -29,9 +29,9 @@ from src.app.llm_advisors.utils import is_trading_disabled, load_ui_runtime_over
 
 def print_header(title: str):
     """Print section header."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {title}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 def print_status(key: str, value: str, color: str = ""):
@@ -53,7 +53,7 @@ def print_status(key: str, value: str, color: str = ""):
 def main():
     """Run smoketest."""
     print("\nAI Co-Pilot Smoketest")
-    print("="*60)
+    print("=" * 60)
 
     # 1. Trading Disabled Status
     print_header("Trading Status")
@@ -105,15 +105,24 @@ def main():
         print_status("  Forced Reason", effective_data["forced_reason"], "yellow")
 
     # Other settings
-    print_status("Influence Decisions", f"{effective['influence_decisions']} (source: {sources['influence_decisions']})")
+    print_status(
+        "Influence Decisions",
+        f"{effective['influence_decisions']} (source: {sources['influence_decisions']})",
+    )
     print_status("Model", f"{effective['model']}")
     print_status("Dry Run", f"{effective['dry_run']} (source: {sources['dry_run']})")
 
     # 4. Budget Limits
     print_header("Budget Limits")
 
-    print_status("Max Calls Per Run", f"{effective['max_calls_per_run']} (source: {sources['max_calls_per_run']})")
-    print_status("Global Max Output Tokens", f"{effective['budgets']['global_max_output_tokens']} (source: {sources['budgets']['global_max_output_tokens']})")
+    print_status(
+        "Max Calls Per Run",
+        f"{effective['max_calls_per_run']} (source: {sources['max_calls_per_run']})",
+    )
+    print_status(
+        "Global Max Output Tokens",
+        f"{effective['budgets']['global_max_output_tokens']} (source: {sources['budgets']['global_max_output_tokens']})",
+    )
     print_status("Timeout", f"{effective['timeout_s']}s")
 
     # 5. Features
@@ -129,11 +138,11 @@ def main():
         print_status(
             f"{feature_name.replace('_', ' ').title()}",
             f"{enabled_str} (source: {feature_sources['enabled']})",
-            color
+            color,
         )
         print_status(
             f"  Max Tokens",
-            f"{feature['max_output_tokens']} (source: {feature_sources['max_output_tokens']})"
+            f"{feature['max_output_tokens']} (source: {feature_sources['max_output_tokens']})",
         )
 
     # 6. UI Runtime Overrides
@@ -220,7 +229,7 @@ def main():
         print_status("Status", "[WARNING] AI Co-Pilot is DISABLED (but can be enabled)", "yellow")
 
     print("\n[OK] Smoketest Complete")
-    print("="*60)
+    print("=" * 60)
     print()
 
     return 0

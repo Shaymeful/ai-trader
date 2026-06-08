@@ -27,9 +27,7 @@ try:
 
     # Minimal test call (uses ~10 tokens)
     response = client.chat.completions.create(
-        model=config.llm_openai_model,
-        messages=[{"role": "user", "content": "Hi"}],
-        max_tokens=5
+        model=config.llm_openai_model, messages=[{"role": "user", "content": "Hi"}], max_tokens=5
     )
 
     print("\n[OK] OpenAI API is accessible!")
@@ -42,6 +40,7 @@ try:
     print("  - Current UTC time:", end=" ")
 
     from datetime import datetime, UTC
+
     print(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"))
 
     print("\n[OK] Ready to run loop!")

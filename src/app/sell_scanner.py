@@ -80,8 +80,10 @@ class SellScanner:
         self.logger = logging.getLogger("ai-trader.sell_scanner")
 
         # Load LLM configuration
-        self.llm_model = config.llm_openai_model if hasattr(config, 'llm_openai_model') else "gpt-4o-mini"
-        self.llm_timeout = config.llm_timeout if hasattr(config, 'llm_timeout') else 30
+        self.llm_model = (
+            config.llm_openai_model if hasattr(config, "llm_openai_model") else "gpt-4o-mini"
+        )
+        self.llm_timeout = config.llm_timeout if hasattr(config, "llm_timeout") else 30
 
     def scan_positions(
         self,
@@ -106,7 +108,9 @@ class SellScanner:
         start_time = datetime.now(UTC)
         scan_id = str(uuid.uuid4())[:8]
 
-        self.logger.info(f"[SELL SCAN {scan_id}] Starting scan of {len(current_positions)} positions")
+        self.logger.info(
+            f"[SELL SCAN {scan_id}] Starting scan of {len(current_positions)} positions"
+        )
 
         # Determine current market regime
         market_regime = self._detect_market_regime(market_data)
@@ -118,7 +122,9 @@ class SellScanner:
             if quantity == 0:
                 continue  # Skip flat positions
 
-            self.logger.info(f"[SELL SCAN {scan_id}] Analyzing {symbol}: {quantity} shares @ ${avg_price:.2f}")
+            self.logger.info(
+                f"[SELL SCAN {scan_id}] Analyzing {symbol}: {quantity} shares @ ${avg_price:.2f}"
+            )
 
             # Generate sell signal for this position
             signal = self._analyze_position(
@@ -230,10 +236,16 @@ class SellScanner:
     ) -> str:
         """Build prompt for LLM sell analysis."""
         # Format news headlines
-        news_summary = "\n".join([
-            f"- {event.get('headline', 'N/A')}"
-            for event in news_events[:5]  # Top 5 most recent
-        ]) if news_events else "No recent news available"
+        news_summary = (
+            "\n".join(
+                [
+                    f"- {event.get('headline', 'N/A')}"
+                    for event in news_events[:5]  # Top 5 most recent
+                ]
+            )
+            if news_events
+            else "No recent news available"
+        )
 
         # Format market data
         ma = market_data.get("ma", current_price)
@@ -380,8 +392,7 @@ Be conservative: Only recommend SELL if confidence >= 0.70 for SELL_ALL, >= 0.60
         return [
             event
             for event in news_events
-            if event.get("symbol") == symbol
-            or symbol in (event.get("headline") or "").upper()
+            if event.get("symbol") == symbol or symbol in (event.get("headline") or "").upper()
         ][:10]  # Max 10 most recent
 
     def _detect_market_regime(self, market_data: dict) -> str:

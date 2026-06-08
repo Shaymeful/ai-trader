@@ -1,6 +1,8 @@
 """Start dashboard on port 8001 with trigger endpoint."""
+
 import sys
-sys.path.insert(0, '.')
+
+sys.path.insert(0, ".")
 
 from src.ui_api.app import app
 import uvicorn

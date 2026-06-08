@@ -1,13 +1,14 @@
 """Restart dashboard with fresh code load."""
+
 import os
 import sys
 
 # Ensure we're in the right directory
-os.chdir(r'C:\dev\ai-trader')
+os.chdir(r"C:\dev\ai-trader")
 sys.path.insert(0, os.getcwd())
 
 # Clear any cached modules
-modules_to_clear = [m for m in sys.modules.keys() if m.startswith('src.ui_api')]
+modules_to_clear = [m for m in sys.modules.keys() if m.startswith("src.ui_api")]
 for mod in modules_to_clear:
     del sys.modules[mod]
 
@@ -16,8 +17,8 @@ from src.ui_api.app import app
 import uvicorn
 
 # Verify trigger endpoint exists
-routes = [r.path for r in app.routes if hasattr(r, 'path')]
-if '/runtime/trigger_loop' in routes:
+routes = [r.path for r in app.routes if hasattr(r, "path")]
+if "/runtime/trigger_loop" in routes:
     print("[OK] Trigger endpoint found in routes")
 else:
     print("[WARNING] Trigger endpoint NOT found!")

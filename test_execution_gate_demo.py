@@ -34,7 +34,9 @@ gate = TradabilityGate(gate_config, fundamentals_cache)
 
 print()
 print("Execution Gate Configuration:")
-print(f"  Market cap range: ${gate_config.min_market_cap_usd:,.0f} - ${gate_config.max_market_cap_usd:,.0f}")
+print(
+    f"  Market cap range: ${gate_config.min_market_cap_usd:,.0f} - ${gate_config.max_market_cap_usd:,.0f}"
+)
 print(f"  Price range: ${gate_config.min_price:.2f} - ${gate_config.max_price:.2f}")
 print(f"  Min liquidity: ${gate_config.min_avg_dollar_volume_20d:,.0f}/day")
 print(f"  Max spread: {gate_config.max_spread_bps:.0f} bps")

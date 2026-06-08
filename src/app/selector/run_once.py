@@ -35,6 +35,7 @@ def main() -> int:
         if api_key and secret_key:
             try:
                 from alpaca.data.historical import StockHistoricalDataClient
+
                 alpaca_client = StockHistoricalDataClient(api_key, secret_key)
                 print("[OK] Alpaca client initialized for sentiment scoring")
             except Exception as e:

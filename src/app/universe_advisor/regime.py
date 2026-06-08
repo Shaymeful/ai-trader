@@ -43,7 +43,9 @@ def detect_market_regime(provider: MarketDataProvider) -> RegimeData:
     # Calculate volatility (20-day rolling std-dev of returns)
     closes = spy_data.get("closes", [])
     if len(closes) >= 20:
-        returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, min(21, len(closes)))]
+        returns = [
+            (closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, min(21, len(closes)))
+        ]
         std_dev = statistics.stdev(returns)
         # Annualize: multiply by sqrt(252 trading days)
         annualized_vol = std_dev * (252**0.5)

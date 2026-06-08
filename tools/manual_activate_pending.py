@@ -46,8 +46,7 @@ def main():
         # Check for pending versions
         print("Checking for pending versions...")
         pending_count = sum(
-            1 for override in registry.overrides.values()
-            if override.pending_version is not None
+            1 for override in registry.overrides.values() if override.pending_version is not None
         )
 
         if pending_count == 0:
@@ -62,7 +61,7 @@ def main():
         # Confirm activation
         print()
         response = input("Activate these pending versions? [y/N]: ").strip().lower()
-        if response not in ['y', 'yes']:
+        if response not in ["y", "yes"]:
             print("Activation cancelled.")
             return
 
@@ -96,6 +95,7 @@ def main():
     except Exception as e:
         print(f"ERROR: Activation failed: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

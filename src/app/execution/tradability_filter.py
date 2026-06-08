@@ -126,21 +126,15 @@ class TradabilityGate:
         constraints = []
 
         if self.config.min_market_cap_usd:
-            constraints.append(
-                f"min_market_cap: ${self.config.min_market_cap_usd:,.0f}"
-            )
+            constraints.append(f"min_market_cap: ${self.config.min_market_cap_usd:,.0f}")
         if self.config.max_market_cap_usd:
-            constraints.append(
-                f"max_market_cap: ${self.config.max_market_cap_usd:,.0f}"
-            )
+            constraints.append(f"max_market_cap: ${self.config.max_market_cap_usd:,.0f}")
         if self.config.min_price:
             constraints.append(f"min_price: ${self.config.min_price:.2f}")
         if self.config.max_price:
             constraints.append(f"max_price: ${self.config.max_price:.2f}")
         if self.config.min_avg_dollar_volume_20d:
-            constraints.append(
-                f"min_avg_volume: ${self.config.min_avg_dollar_volume_20d:,.0f}"
-            )
+            constraints.append(f"min_avg_volume: ${self.config.min_avg_dollar_volume_20d:,.0f}")
         if self.config.max_spread_bps:
             constraints.append(f"max_spread: {self.config.max_spread_bps:.0f} bps")
         if self.config.exclude_symbols:
@@ -207,10 +201,7 @@ class TradabilityGate:
             market_cap = fundamentals.market_cap_usd
 
             # Min market cap check
-            if (
-                self.config.min_market_cap_usd
-                and market_cap < self.config.min_market_cap_usd
-            ):
+            if self.config.min_market_cap_usd and market_cap < self.config.min_market_cap_usd:
                 msg = (
                     f"Market cap ${market_cap:,.0f} below minimum "
                     f"${self.config.min_market_cap_usd:,.0f}"
@@ -224,10 +215,7 @@ class TradabilityGate:
                 )
 
             # Max market cap check
-            if (
-                self.config.max_market_cap_usd
-                and market_cap > self.config.max_market_cap_usd
-            ):
+            if self.config.max_market_cap_usd and market_cap > self.config.max_market_cap_usd:
                 msg = (
                     f"Market cap ${market_cap:,.0f} above maximum "
                     f"${self.config.max_market_cap_usd:,.0f}"
@@ -283,11 +271,7 @@ class TradabilityGate:
                 )
 
         # 8. Spread check (if available)
-        if (
-            fundamentals
-            and fundamentals.spread_bps
-            and self.config.max_spread_bps
-        ):
+        if fundamentals and fundamentals.spread_bps and self.config.max_spread_bps:
             spread = fundamentals.spread_bps
             if spread > self.config.max_spread_bps:
                 msg = (

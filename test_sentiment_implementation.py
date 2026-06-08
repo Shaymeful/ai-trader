@@ -14,7 +14,9 @@ def test_sentiment_scorer_instantiation():
 
     # Test without alpaca_client (should work)
     scorer = SentimentScorer(alpaca_client=None)
-    print(f"  [OK] SentimentScorer created with weights: RSS={scorer.rss_weight}, Momentum={scorer.momentum_weight}, Volume={scorer.volume_weight}")
+    print(
+        f"  [OK] SentimentScorer created with weights: RSS={scorer.rss_weight}, Momentum={scorer.momentum_weight}, Volume={scorer.volume_weight}"
+    )
 
     # Test sentiment scoring without market data
     symbol = "AAPL"
@@ -78,7 +80,9 @@ def test_ai_copilot_sentiment_adjustment():
         sentiment_adjustment_enabled=True,
     )
 
-    print(f"  [OK] Strategy created with sentiment_adjustment_enabled={strategy.sentiment_adjustment_enabled}")
+    print(
+        f"  [OK] Strategy created with sentiment_adjustment_enabled={strategy.sentiment_adjustment_enabled}"
+    )
 
     # Test sentiment cache update
     sentiment_cache = {
@@ -159,7 +163,9 @@ def test_mode_profile_loading():
     from src.app.config import load_mode_profiles
 
     modes = load_mode_profiles()
-    assert "aggressive_small_mid_sentiment" in modes["profiles"], "New mode profile should be present"
+    assert "aggressive_small_mid_sentiment" in modes["profiles"], (
+        "New mode profile should be present"
+    )
     print("  [OK] Mode profile 'aggressive_small_mid_sentiment' loaded successfully")
 
     profile = modes["profiles"]["aggressive_small_mid_sentiment"]

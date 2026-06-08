@@ -197,7 +197,7 @@ class UniverseRegistry:
         sector_name: str,
         action: str,
         tickers: list[str],
-        rationales: dict[str, str] | None = None
+        rationales: dict[str, str] | None = None,
     ) -> int:
         """Stage a constituent add/remove change.
 

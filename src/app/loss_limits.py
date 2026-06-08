@@ -95,8 +95,7 @@ class LossLimitGuard:
             return LossLimitState(
                 tripped=True,
                 reasons=[
-                    "Account equity unavailable — failing closed on new "
-                    "risk-increasing orders"
+                    "Account equity unavailable — failing closed on new risk-increasing orders"
                 ],
                 equity_available=False,
             )

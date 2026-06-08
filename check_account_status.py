@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.app.config import load_config
 from src.broker.base import AlpacaBroker
 
+
 def main():
     config = load_config()
 
@@ -55,9 +56,13 @@ def main():
                     current_price = float(pos.current_price)
                     market_value = float(pos.market_value)
                     unrealized_pl = float(pos.unrealized_pl)
-                    print(f"{symbol:<8} {qty:>10} ${float(avg_price):>11.2f} ${current_price:>11.2f} ${unrealized_pl:>11.2f}")
+                    print(
+                        f"{symbol:<8} {qty:>10} ${float(avg_price):>11.2f} ${current_price:>11.2f} ${unrealized_pl:>11.2f}"
+                    )
                 except:
-                    print(f"{symbol:<8} {qty:>10} ${float(avg_price):>11.2f} {'N/A':>12} {'N/A':>12}")
+                    print(
+                        f"{symbol:<8} {qty:>10} ${float(avg_price):>11.2f} {'N/A':>12} {'N/A':>12}"
+                    )
     except Exception as e:
         print(f"ERROR: Failed to get positions: {e}")
 
@@ -73,11 +78,14 @@ def main():
         else:
             print(f"\nFound {len(orders)} open orders:")
             for order in orders[:20]:
-                print(f"  {order['symbol']} {order['side']} {order['qty']} @ ${order.get('limit_price', 'market')}")
+                print(
+                    f"  {order['symbol']} {order['side']} {order['qty']} @ ${order.get('limit_price', 'market')}"
+                )
     except Exception as e:
         print(f"ERROR: Failed to get orders: {e}")
 
     print("\n" + "=" * 80)
+
 
 if __name__ == "__main__":
     main()

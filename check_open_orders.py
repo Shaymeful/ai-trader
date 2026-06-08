@@ -23,19 +23,22 @@ try:
 
         # Group by symbol
         from collections import defaultdict
+
         by_symbol = defaultdict(list)
         for order in open_orders:
-            by_symbol[order['symbol']].append(order)
+            by_symbol[order["symbol"]].append(order)
 
         total_reserved = 0
         for symbol, orders in sorted(by_symbol.items()):
             for order in orders:
-                qty = order['qty']
-                limit_price = order['limit_price']
+                qty = order["qty"]
+                limit_price = order["limit_price"]
                 notional = float(qty) * float(limit_price) if limit_price else 0
                 total_reserved += notional
 
-                print(f"{symbol:<8} {order['side']:<6} {qty:<10.2f} ${float(limit_price):<11.2f} {order['order_id']}")
+                print(
+                    f"{symbol:<8} {order['side']:<6} {qty:<10.2f} ${float(limit_price):<11.2f} {order['order_id']}"
+                )
 
             if len(orders) > 1:
                 print(f"  ⚠️  WARNING: {len(orders)} duplicate orders for {symbol}!")
@@ -44,7 +47,7 @@ try:
         print(f"\nTotal reserved notional (BUY orders): ${total_reserved:,.2f}")
 
         # Summary
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("DUPLICATES DETECTED:")
         for symbol, orders in sorted(by_symbol.items()):
             if len(orders) > 1:
@@ -53,4 +56,5 @@ try:
 except Exception as e:
     print(f"Error: {e}")
     import traceback
+
     traceback.print_exc()

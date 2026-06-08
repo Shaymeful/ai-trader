@@ -389,7 +389,9 @@ class UpdateTickersRequest(BaseModel):
 
     add: list[str] = Field(default_factory=list, description="Tickers to add")
     remove: list[str] = Field(default_factory=list, description="Tickers to remove")
-    rationales: dict[str, str] = Field(default_factory=dict, description="Ticker rationales/descriptions")
+    rationales: dict[str, str] = Field(
+        default_factory=dict, description="Ticker rationales/descriptions"
+    )
 
 
 class CreateSectorRequest(BaseModel):
@@ -1137,7 +1139,11 @@ async def exit_sector_positions(sector_name: str):
 
         # Get open positions
         positions = broker.get_positions()
-        sector_positions = {symbol: (qty, price) for symbol, (qty, price) in positions.items() if symbol in sector_symbols}
+        sector_positions = {
+            symbol: (qty, price)
+            for symbol, (qty, price) in positions.items()
+            if symbol in sector_symbols
+        }
 
         if not sector_positions:
             return ChangeResponse(
@@ -1167,7 +1173,9 @@ async def exit_sector_positions(sector_name: str):
                     failed_count += 1
 
         if failed_count > 0:
-            message = f"Exited {exited_count} positions for {sector_name} sector ({failed_count} failed)"
+            message = (
+                f"Exited {exited_count} positions for {sector_name} sector ({failed_count} failed)"
+            )
         else:
             message = f"Exited {exited_count} positions for {sector_name} sector"
 
@@ -1532,7 +1540,9 @@ async def generate_proposals_endpoint(request: GenerateRequest):
             import logging
 
             logger = logging.getLogger("ai-trader.ui-api")
-            logger.warning("Blocked sector proposal generation: sector_recommendations feature disabled")
+            logger.warning(
+                "Blocked sector proposal generation: sector_recommendations feature disabled"
+            )
             raise HTTPException(
                 status_code=409,
                 detail="Sector recommendations are currently disabled. Enable in AI Co-Pilot settings to generate proposals.",
@@ -2050,9 +2060,14 @@ async def update_sector_tickers(sector_name: str, request: UpdateTickersRequest)
 
         if add_tickers:
             # Filter rationales for only the tickers being added
-            add_rationales = {t: request.rationales.get(t, "") for t in add_tickers if request.rationales.get(t)}
+            add_rationales = {
+                t: request.rationales.get(t, "") for t in add_tickers if request.rationales.get(t)
+            }
             pending_version = universe_registry.stage_constituent_change(
-                sector_name, "add", add_tickers, rationales=add_rationales if add_rationales else None
+                sector_name,
+                "add",
+                add_tickers,
+                rationales=add_rationales if add_rationales else None,
             )
 
         if remove_tickers:
@@ -2207,6 +2222,7 @@ async def update_account_summary(request: AccountSummaryUpdateRequest):
 
 class BypassCapitalLimitRequest(BaseModel):
     """Request to set bypass capital limit setting."""
+
     bypass: bool
 
 
@@ -2250,6 +2266,129 @@ async def set_bypass_capital_limit(request: BypassCapitalLimitRequest):
         return {"success": True, "bypass": bypass}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save bypass setting: {e}") from e
+
+
+# ---------------------------------------------------------------------------
+# Effective risk settings + market regime endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/config/effective-risk-settings")
+async def get_effective_risk_settings():
+    """Return the resolved effective deployment controls for the current loop iteration.
+
+    Combines the active mode profile + capital_override + market_regime into a single
+    authoritative view of what the allocator will use.  Hard safety gates are not
+    represented here; they remain enforced by their own layers.
+    """
+    try:
+        from src.app.config import load_config_with_yaml
+        from src.app.runtime_overrides import (
+            load_capital_override,
+            load_market_regime,
+            resolve_effective_risk_settings,
+        )
+
+        config = load_config_with_yaml()
+        capital_override = load_capital_override()
+        regime = load_market_regime()
+        effective = resolve_effective_risk_settings(
+            profile_exposure_pct=config.max_portfolio_exposure_pct,
+            profile_max_per_position_pct=config.max_per_position_pct,
+            profile_max_positions=config.max_positions,
+            profile_allow_position_adds=config.allow_position_adds,
+            profile_enable_target_utilization=config.enable_target_utilization,
+            capital_override=capital_override,
+            market_regime=regime,
+        )
+        import dataclasses
+
+        return {
+            "effective": dataclasses.asdict(effective),
+            "regime": dataclasses.asdict(regime),
+            "bypass_active": effective.bypass_active,
+            "capital_override": dataclasses.asdict(capital_override),
+            "profile_baseline": {
+                "max_portfolio_exposure_pct": config.max_portfolio_exposure_pct,
+                "max_per_position_pct": config.max_per_position_pct,
+                "max_positions": config.max_positions,
+                "allow_position_adds": config.allow_position_adds,
+                "enable_target_utilization": config.enable_target_utilization,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to resolve effective risk settings: {e}"
+        ) from e
+
+
+class MarketRegimeRequest(BaseModel):
+    """Request body for updating market regime."""
+
+    market_regime: str  # bullish | neutral | risk_off
+    regime_confidence: float = 0.5
+    action_bias: str = "hold"
+    allow_new_longs: bool = True
+    allow_position_adds: bool = True
+    target_portfolio_exposure_pct: float = 0.0
+    max_per_position_pct: float = 0.0
+    max_positions: int = 0
+    exit_policy: dict = {}
+    sector_bias: dict = {}
+    symbols_to_reduce_first: list = []
+    symbols_to_exit_immediately: list = []
+
+
+@app.get("/config/market-regime")
+async def get_market_regime():
+    """Get the current market regime state."""
+    try:
+        from src.app.runtime_overrides import load_market_regime
+        import dataclasses
+
+        regime = load_market_regime()
+        return dataclasses.asdict(regime)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load market regime: {e}") from e
+
+
+@app.post("/config/market-regime")
+async def set_market_regime(request: MarketRegimeRequest):
+    """Update market regime state.
+
+    The regime influences the allocator's deployment aggressiveness, new-long
+    gating, and position-add rules.  It cannot expand the universe beyond
+    enabled sectors or bypass hard safety gates.
+    """
+    allowed_regimes = {"bullish", "neutral", "risk_off"}
+    if request.market_regime not in allowed_regimes:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid market_regime '{request.market_regime}'; must be one of {sorted(allowed_regimes)}",
+        )
+    try:
+        from src.app.runtime_overrides import MarketRegime, save_market_regime
+
+        regime = MarketRegime(
+            market_regime=request.market_regime,
+            regime_confidence=request.regime_confidence,
+            action_bias=request.action_bias,
+            allow_new_longs=request.allow_new_longs,
+            allow_position_adds=request.allow_position_adds,
+            target_portfolio_exposure_pct=request.target_portfolio_exposure_pct,
+            max_per_position_pct=request.max_per_position_pct,
+            max_positions=request.max_positions,
+            exit_policy=request.exit_policy,
+            sector_bias=request.sector_bias,
+            symbols_to_reduce_first=request.symbols_to_reduce_first,
+            symbols_to_exit_immediately=request.symbols_to_exit_immediately,
+        )
+        save_market_regime(regime)
+        import dataclasses
+
+        return {"success": True, "regime": dataclasses.asdict(regime)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save market regime: {e}") from e
 
 
 @app.get("/account/performance", response_model=AccountPerformanceResponse)
@@ -2404,7 +2543,9 @@ class AICopilotConfigUpdateRequest(BaseModel):
     trade_rationale: dict[str, Any] | None = Field(None, description="Trade rationale settings")
     daily_journal: dict[str, Any] | None = Field(None, description="Daily journal settings")
     strategy_critique: dict[str, Any] | None = Field(None, description="Strategy critique settings")
-    sector_recommendations: dict[str, Any] | None = Field(None, description="Sector recommendations settings")
+    sector_recommendations: dict[str, Any] | None = Field(
+        None, description="Sector recommendations settings"
+    )
 
 
 @app.get("/api/ai-copilot/config")
@@ -2474,7 +2615,12 @@ async def update_ai_copilot_config(
         overrides["ai_copilot"]["budgets"].update(request.budgets)
 
     # Update feature settings
-    for feature_name in ["trade_rationale", "daily_journal", "strategy_critique", "sector_recommendations"]:
+    for feature_name in [
+        "trade_rationale",
+        "daily_journal",
+        "strategy_critique",
+        "sector_recommendations",
+    ]:
         feature_data = getattr(request, feature_name, None)
         if feature_data is not None:
             if feature_name not in overrides["ai_copilot"]:
@@ -2550,7 +2696,12 @@ async def get_ai_copilot_status():
                 "timeout_s": 20,
             },
             features={
-                "trade_rationale": {"enabled": False, "calls": 0, "successes": 0, "success_rate": 0.0},
+                "trade_rationale": {
+                    "enabled": False,
+                    "calls": 0,
+                    "successes": 0,
+                    "success_rate": 0.0,
+                },
                 "daily_journal": {"enabled": False, "generated": False},
                 "strategy_critique": {"enabled": False, "generated": False},
             },
@@ -2852,7 +3003,8 @@ async def switch_mode(request: ModeRequest):
 
     if profile_name not in profiles:
         raise HTTPException(
-            status_code=400, detail=f"Unknown profile: {profile_name}. Available: {list(profiles.keys())}"
+            status_code=400,
+            detail=f"Unknown profile: {profile_name}. Available: {list(profiles.keys())}",
         )
 
     profile = profiles[profile_name]
@@ -2956,7 +3108,9 @@ async def switch_mode(request: ModeRequest):
                 overrides["ai_copilot"][feature_name] = {}
             overrides["ai_copilot"][feature_name]["enabled"] = enabled
 
-        overrides["ai_copilot"]["updated_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+        overrides["ai_copilot"]["updated_at"] = (
+            datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
+        )
 
         # Write overrides atomically
         temp_path = overrides_path.with_suffix(".tmp")

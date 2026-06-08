@@ -1,4 +1,5 @@
 """Exclude RYAAY from trading due to availability issues."""
+
 from src.app.ticker_exclusions import TickerExclusionManager
 
 manager = TickerExclusionManager()

@@ -1,14 +1,15 @@
 """Check open orders."""
+
 from src.app.config import load_config_with_yaml, get_alpaca_credentials
 from src.broker import AlpacaBroker
 
 config = load_config_with_yaml()
-api_key, secret_key, trading_base_url, _ = get_alpaca_credentials('paper')
+api_key, secret_key, trading_base_url, _ = get_alpaca_credentials("paper")
 broker = AlpacaBroker(api_key, secret_key, trading_base_url)
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("OPEN ORDERS")
-print("="*80)
+print("=" * 80)
 
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
@@ -26,5 +27,5 @@ for order in orders:
     print(f"  Status: {order.status}")
     print(f"  Submitted: {order.submitted_at}")
 
-print("="*80)
+print("=" * 80)
 print()

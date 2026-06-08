@@ -139,7 +139,7 @@ class AICopilotWeightedStrategy(Strategy):
                     symbol=symbol,
                     target_quantity=1,  # Fixed (allocator scales by conviction)
                     conviction=weight,  # Weight as fraction (allocator multiplies by budget)
-                    reason=f"AI Co-Pilot: {weight*100:.1f}% allocation",
+                    reason=f"AI Co-Pilot: {weight * 100:.1f}% allocation",
                     candidate_id=None,
                 )
             )
@@ -169,9 +169,7 @@ class AICopilotWeightedStrategy(Strategy):
 
         return intents
 
-    def _filter_to_active_universe(
-        self, active_symbols: set[str]
-    ) -> dict[str, dict[str, float]]:
+    def _filter_to_active_universe(self, active_symbols: set[str]) -> dict[str, dict[str, float]]:
         """
         Filter per_sector_weights to only symbols in active universe.
 
@@ -204,9 +202,7 @@ class AICopilotWeightedStrategy(Strategy):
         """
         self.sentiment_cache = sentiment_scores
 
-    def _normalize_weights(
-        self, filtered_weights: dict[str, dict[str, float]]
-    ) -> dict[str, float]:
+    def _normalize_weights(self, filtered_weights: dict[str, dict[str, float]]) -> dict[str, float]:
         """
         Flatten nested weights and normalize so sum = 1.0.
 
@@ -245,9 +241,7 @@ class AICopilotWeightedStrategy(Strategy):
         if total_weight == 0:
             return {}  # Avoid division by zero
 
-        return {
-            ticker: weight / total_weight for ticker, weight in flat_weights.items()
-        }
+        return {ticker: weight / total_weight for ticker, weight in flat_weights.items()}
 
     def __repr__(self) -> str:
         return (
