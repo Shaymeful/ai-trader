@@ -58,17 +58,59 @@ def test_paper_mode_falls_back_to_legacy_vars(clean_env, monkeypatch):
     assert data_base_url == "https://data.alpaca.markets"
 
 
-def test_live_mode_falls_back_to_legacy_vars(clean_env, monkeypatch):
-    """Test that live mode falls back to legacy ALPACA_API_KEY if mode-specific vars not set."""
+def test_live_mode_does_not_fall_back_to_legacy_vars(clean_env, monkeypatch):
+    """Live mode must NOT fall back to legacy creds (fail closed, real-money endpoint)."""
     monkeypatch.setenv("ALPACA_API_KEY", "LEGACY_KEY")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "LEGACY_SECRET")
 
     api_key, secret_key, trading_base_url, data_base_url = get_alpaca_credentials("live")
 
-    assert api_key == "LEGACY_KEY"
-    assert secret_key == "LEGACY_SECRET"
+    # Legacy keys are ignored for live; credentials resolve empty so callers fail closed.
+    assert api_key == ""
+    assert secret_key == ""
+    # Endpoint still resolves to live so detection/guards treat it as real money.
     assert trading_base_url == "https://api.alpaca.markets"
     assert data_base_url == "https://data.alpaca.markets"
+
+
+def test_live_validation_rejects_legacy_only_credentials(clean_env, monkeypatch):
+    """Live validation fails when only legacy ALPACA_API_KEY/SECRET are set."""
+    monkeypatch.setenv("ALPACA_API_KEY", "LEGACY_KEY")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "LEGACY_SECRET")
+
+    is_valid, error_msg = validate_alpaca_credentials("live", require_credentials=True)
+
+    assert is_valid is False
+    assert "ALPACA_LIVE_KEY_ID" in error_msg
+    assert "ALPACA_LIVE_SECRET_KEY" in error_msg
+    assert "REAL MONEY" in error_msg
+
+
+def test_live_does_not_use_paper_or_legacy_when_present(clean_env, monkeypatch):
+    """Even with paper + legacy creds present, live resolves ONLY live vars."""
+    monkeypatch.setenv("ALPACA_API_KEY", "LEGACY_KEY")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "LEGACY_SECRET")
+    monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "PK_PAPER")
+    monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "PAPER_SECRET")
+
+    api_key, secret_key, _, _ = get_alpaca_credentials("live")
+
+    assert api_key == ""
+    assert secret_key == ""
+
+
+def test_live_endpoint_via_url_override_rejects_legacy(clean_env, monkeypatch):
+    """A live endpoint reached via mode=alpaca + URL override also rejects legacy creds."""
+    monkeypatch.setenv("ALPACA_API_KEY", "LEGACY_KEY")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "LEGACY_SECRET")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
+
+    api_key, secret_key, trading_base_url, _ = get_alpaca_credentials("alpaca")
+
+    # Detected as live -> requires ALPACA_LIVE_* (unset) -> empty, no legacy fallback.
+    assert api_key == ""
+    assert secret_key == ""
+    assert trading_base_url == "https://api.alpaca.markets"
 
 
 def test_mode_specific_vars_take_precedence_over_legacy(clean_env, monkeypatch):

@@ -262,7 +262,10 @@ def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
     - Paper mode: ALPACA_PAPER_KEY_ID, ALPACA_PAPER_SECRET_KEY
     - Live mode: ALPACA_LIVE_KEY_ID, ALPACA_LIVE_SECRET_KEY
 
-    Falls back to legacy ALPACA_API_KEY and ALPACA_SECRET_KEY if mode-specific vars not found.
+    Paper mode falls back to legacy ALPACA_API_KEY / ALPACA_SECRET_KEY if the
+    mode-specific vars are not set. Live mode does NOT fall back: it fails closed
+    and requires dedicated ALPACA_LIVE_KEY_ID / ALPACA_LIVE_SECRET_KEY so a paper
+    or legacy key can never be used against the real-money endpoint.
 
     Base URLs:
     - Trading API: ALPACA_TRADING_BASE_URL (alpaca-py TradingClient will append /v2)
@@ -284,17 +287,14 @@ def get_alpaca_credentials(mode: str) -> tuple[str, str, str, str]:
     )
 
     if is_live:
-        # Live mode: use ALPACA_LIVE_KEY_ID and ALPACA_LIVE_SECRET_KEY
+        # Live mode: REQUIRE dedicated live credentials. We deliberately do NOT
+        # fall back to the legacy ALPACA_API_KEY / ALPACA_SECRET_KEY here, so a
+        # paper or legacy key can never be used against the real-money endpoint
+        # (fail closed). Missing live keys are surfaced by validate_alpaca_credentials.
         api_key = os.getenv("ALPACA_LIVE_KEY_ID", "")
         secret_key = os.getenv("ALPACA_LIVE_SECRET_KEY", "")
         trading_base_url = "https://api.alpaca.markets"
         data_base_url = "https://data.alpaca.markets"
-
-        # Fallback to legacy vars if new vars not set
-        if not api_key:
-            api_key = os.getenv("ALPACA_API_KEY", "")
-        if not secret_key:
-            secret_key = os.getenv("ALPACA_SECRET_KEY", "")
     else:
         # Paper mode: use ALPACA_PAPER_KEY_ID and ALPACA_PAPER_SECRET_KEY
         api_key = os.getenv("ALPACA_PAPER_KEY_ID", "")

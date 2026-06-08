@@ -836,15 +836,23 @@ The bot supports mode-specific Alpaca API credentials, allowing you to maintain 
 - `ALPACA_LIVE_KEY_ID` - Live trading API key (starts with "AK")
 - `ALPACA_LIVE_SECRET_KEY` - Live trading secret key
 
-**Legacy (Backward Compatibility):**
-- `ALPACA_API_KEY` - Falls back if mode-specific vars not set
-- `ALPACA_SECRET_KEY` - Falls back if mode-specific vars not set
+**Legacy (Backward Compatibility — PAPER ONLY):**
+- `ALPACA_API_KEY` - Falls back **only in paper mode** if `ALPACA_PAPER_KEY_ID` is not set
+- `ALPACA_SECRET_KEY` - Falls back **only in paper mode** if `ALPACA_PAPER_SECRET_KEY` is not set
+
+> **Live fails closed (no legacy fallback).** For `--mode live` or any resolved live
+> endpoint, credential resolution requires `ALPACA_LIVE_KEY_ID` and
+> `ALPACA_LIVE_SECRET_KEY`. It will **not** fall back to `ALPACA_API_KEY` /
+> `ALPACA_SECRET_KEY`, so a paper or legacy key can never be used against the
+> real-money endpoint. If the live vars are missing, `get_alpaca_credentials`
+> returns empty credentials and `validate_alpaca_credentials("live")` fails with a
+> clear error (implemented in `src/app/config.py`).
 
 ### Mode Selection
 
 The bot automatically selects the correct credential set based on the `--mode` flag:
-- `--mode paper` → Uses `ALPACA_PAPER_KEY_ID` and `ALPACA_PAPER_SECRET_KEY`
-- `--mode live` → Uses `ALPACA_LIVE_KEY_ID` and `ALPACA_LIVE_SECRET_KEY`
+- `--mode paper` → Uses `ALPACA_PAPER_KEY_ID` / `ALPACA_PAPER_SECRET_KEY`, falling back to legacy `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` if unset
+- `--mode live` → Requires `ALPACA_LIVE_KEY_ID` / `ALPACA_LIVE_SECRET_KEY`; **no legacy fallback** (fail closed)
 - `--mode dry-run` → No credentials required (mock mode)
 
 ### Setting Environment Variables
@@ -918,7 +926,7 @@ Credentials Status: ✓ Found
 
 ### Safety Features
 
-1. **Mode Isolation**: Paper credentials cannot accidentally be used in live mode and vice versa
+1. **Mode Isolation**: Paper credentials cannot accidentally be used in live mode and vice versa. Live resolution is fail-closed — it never falls back to legacy `ALPACA_API_KEY`/`ALPACA_SECRET_KEY`, so a paper/legacy key cannot reach the real-money endpoint.
 2. **Validation**: Bot validates required credentials at startup with clear error messages
 3. **No Secret Exposure**: `--check-env` only shows last 4 characters of API key, never shows secrets
 4. **Explicit Base URLs**: Each mode has a fixed base URL (paper: `https://paper-api.alpaca.markets`, live: `https://api.alpaca.markets`)
@@ -926,7 +934,7 @@ Credentials Status: ✓ Found
 ### Migration from Legacy Variables
 
 If you're currently using `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`:
-1. The bot will continue to work (backward compatible)
+1. The bot will continue to work for **paper** mode (backward compatible). **Live mode will not** use these vars — you must set `ALPACA_LIVE_KEY_ID` / `ALPACA_LIVE_SECRET_KEY`.
 2. To use both paper and live:
    - Rename paper credentials to `ALPACA_PAPER_KEY_ID` and `ALPACA_PAPER_SECRET_KEY`
    - Add live credentials as `ALPACA_LIVE_KEY_ID` and `ALPACA_LIVE_SECRET_KEY`
