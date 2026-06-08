@@ -1285,6 +1285,24 @@ def run_paper_mode(
             print(f"  - {warning}")
     print()
 
+    # Fail-closed: the allocator could not verify account equity while real orders
+    # could be placed. Place NO orders this tick (no buys, no exits/flatten) rather
+    # than guessing position sizes against an unverified account.
+    if allocation_result.fail_closed:
+        print("=" * 80)
+        print("ALLOCATION FAIL-CLOSED: account equity could not be verified.")
+        print("Placing NO orders this tick.")
+        print("=" * 80)
+        print()
+        return RunResult(
+            mode="paper",
+            dry_run=dry_run,
+            orders_placed=0,
+            orders_skipped=0,
+            strategy_weights={},
+            timestamp=datetime.now(UTC).isoformat(),
+        )
+
     # Merge sell orders into target positions (sell orders take priority)
     merged_target_positions = dict(allocation_result.target_positions)
 

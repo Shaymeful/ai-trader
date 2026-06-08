@@ -172,6 +172,7 @@ The allocation engine distributes account capital across multiple strategies usi
 - **Deterministic netting**: Combines multi-strategy intents for same symbol using signed notionals
 - **Centralized sizing**: Position sizing logic centralized in allocation module (not in strategies)
 - **Backward compatibility**: Falls back to legacy equal-weight allocation if registry/broker unavailable
+- **Fail-closed on equity failure (real orders)**: If the account-equity fetch fails or equity is `<= 0` while real orders could be placed (real broker and not dry-run), the allocator does **not** fall back to legacy equal-weight. It returns a fail-closed result (`fail_closed=True`, no target positions); the runner then places **no orders** that tick — neither new buys nor exits. Dry-run/shadow (MockBroker or `config.dry_run`) retain the legacy fallback. See "Equity Failure Handling" below.
 - **Effective risk settings**: Registry mode reads deployment controls from `resolve_effective_risk_settings()` (runtime_overrides) instead of config directly
 
 ### Allocation Modes
@@ -224,6 +225,25 @@ for strategy, intents in strategy_intents.items():
     for intent in intents:
         aggregated_targets[symbol] += intent.target_quantity
 ```
+
+### Equity Failure Handling
+
+Registry-mode allocation begins by fetching account equity. The response depends on
+whether **real orders could be placed** (`Allocator._real_orders_possible()` — a real
+order-placing broker with a `client`, and `config.dry_run` is False):
+
+| Situation | Real orders possible (live/paper) | Dry-run / shadow |
+|-----------|-----------------------------------|------------------|
+| Equity fetch raises | **Fail closed** — `fail_closed=True`, no target positions; runner places no orders | Fall back to legacy equal-weight |
+| Equity is `None` or `<= 0` | **Fail closed** — no orders | Fall back to legacy equal-weight |
+| Equity valid (`> 0`) | Equity-based allocation | Equity-based allocation (mock equity in dry-run) |
+
+When fail-closed triggers, `run_paper_mode` detects `allocation_result.fail_closed`,
+prints an `ALLOCATION FAIL-CLOSED` notice, and returns immediately **without invoking
+the executor** — so no buys, exits, or flatten orders are submitted against an account
+whose equity could not be verified. A `WarningEquityUnavailableEvent` with
+`fallback_mode="fail_closed_no_orders"` is emitted to the ledger. This prevents sizing
+positions from a fabricated/fallback equity figure on the real-money path.
 
 ### Weight Normalization
 
@@ -335,7 +355,7 @@ Allocation engine emits detailed events for audit trail:
 
 **WarningEquityUnavailableEvent**:
 - Reason equity was unavailable
-- Fallback mode used
+- Fallback mode used: `legacy_equal_weight` (dry-run/shadow) or `fail_closed_no_orders` (real-order path — no orders placed)
 
 ### Implementation Files
 

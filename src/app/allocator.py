@@ -18,6 +18,9 @@ class AllocationResult:
     warnings: list[str]  # Any warnings during allocation
     weight_summary: dict | None = None  # Weight normalization summary (if using registry)
     equity_used: float | None = None  # Account equity used for allocation (if available)
+    # Fail-closed: account equity could not be verified while real orders could be
+    # placed. Callers MUST place no orders this tick (no buys, no exits/flatten).
+    fail_closed: bool = False
 
 
 class Allocator:
@@ -55,6 +58,45 @@ class Allocator:
         self.broker = broker
         self.ledger = ledger
         self.logger = logging.getLogger("ai-trader")
+
+    def _real_orders_possible(self) -> bool:
+        """True when this allocation could lead to real broker orders (live/paper).
+
+        A MockBroker (dry-run / shadow) never submits to a real account, and an
+        explicit ``config.dry_run`` never reaches the broker — those may keep the
+        legacy equal-weight fallback when equity is unavailable. Any real
+        order-placing broker (AlpacaBroker, identified by its ``client`` attribute)
+        must instead fail closed so unverified equity never produces real orders.
+        """
+        if getattr(self.config, "dry_run", False):
+            return False
+        return hasattr(self.broker, "client")
+
+    def _fail_closed_no_orders(self, reason: str) -> AllocationResult:
+        """Return an empty, fail-closed allocation that places NO orders.
+
+        Used when real orders could be placed but account equity could not be
+        verified (fetch failed, or equity <= 0). Downstream (run_paper_mode) honors
+        ``fail_closed`` by skipping execution entirely, so neither new buys nor
+        flatten/exit orders are submitted against an unverified account.
+        """
+        self.logger.error(f"ALLOCATION FAIL-CLOSED (no orders): {reason}")
+        if self.ledger:
+            from src.app.ledger import WarningEquityUnavailableEvent
+
+            self.ledger.append(
+                WarningEquityUnavailableEvent(
+                    reason=reason,
+                    fallback_mode="fail_closed_no_orders",
+                )
+            )
+        return AllocationResult(
+            target_positions={},
+            strategy_budgets={},
+            warnings=[reason],
+            equity_used=None,
+            fail_closed=True,
+        )
 
     def _compute_target_utilization(
         self,
@@ -204,10 +246,24 @@ class Allocator:
                 equity = Decimal("100000.00")  # Mock $100k equity for dry-run
         except Exception as e:
             self.logger.error(f"Failed to fetch account equity: {e}")
+            # Fail closed when real orders could be placed: never size positions
+            # against unverified equity. Dry-run/shadow may keep the legacy fallback.
+            if self._real_orders_possible():
+                return self._fail_closed_no_orders(
+                    f"Account equity fetch failed ({e}); refusing to allocate "
+                    "without verified equity (fail-closed, no orders)."
+                )
             warnings.append(f"Failed to fetch equity: {e} - falling back to legacy mode")
             return self._allocate_legacy(strategy_intents, current_prices)
 
         if equity is None or equity <= 0:
+            # Fail closed when real orders could be placed.
+            if self._real_orders_possible():
+                return self._fail_closed_no_orders(
+                    f"Account equity unavailable or <= 0 (got {equity}); refusing to "
+                    "allocate (fail-closed, no orders)."
+                )
+
             self.logger.warning("Account equity unavailable or zero - falling back to legacy mode")
             warnings.append("Equity unavailable - using legacy allocation")
 
@@ -350,18 +406,48 @@ class Allocator:
         self.logger.info(f"Netted {len(all_intents)} intents into {len(netted_results)} symbols")
 
         # 5b. Apply target utilization scaling if enabled
-        enable_target_utilization = self.config.enable_target_utilization if hasattr(self.config, 'enable_target_utilization') else False
+        # Resolve effective risk settings: profile < capital_override < market_regime
+        from src.app.runtime_overrides import resolve_effective_risk_settings
+        effective = resolve_effective_risk_settings(
+            profile_exposure_pct=getattr(self.config, 'max_portfolio_exposure_pct', 0.60),
+            profile_max_per_position_pct=getattr(self.config, 'max_per_position_pct', 0.15),
+            profile_max_positions=getattr(self.config, 'max_positions', 10),
+            profile_allow_position_adds=getattr(self.config, 'allow_position_adds', False),
+            profile_enable_target_utilization=getattr(self.config, 'enable_target_utilization', False),
+        )
+        self.logger.info(
+            f"Effective risk settings: exposure={effective.max_portfolio_exposure_pct:.0%} "
+            f"per_pos={effective.max_per_position_pct:.0%} "
+            f"max_pos={effective.max_positions} "
+            f"adds={effective.allow_position_adds} "
+            f"tu={effective.enable_target_utilization} "
+            f"new_longs={effective.allow_new_longs} "
+            f"[source={effective.source} bypass={effective.bypass_active} regime={effective.regime}]"
+        )
+        if not effective.allow_new_longs:
+            self.logger.warning(
+                "⚠️  New longs DISABLED by market regime - buy intents will be suppressed"
+            )
+            # Filter out buy-direction intents from netted_results
+            netted_results = {
+                s: data for s, data in netted_results.items()
+                if data["final_direction"] != "buy"
+            }
+            self.logger.info(f"After new-longs suppression: {len(netted_results)} symbols remain")
+
+        enable_target_utilization = effective.enable_target_utilization
         if enable_target_utilization:
             self.logger.info("Target utilization enabled - scaling netted notionals toward target exposure")
 
             # Load config params with defaults
             min_order_notional = getattr(self.config, 'min_order_notional', 500)
-            allow_position_adds = getattr(self.config, 'allow_position_adds', False)
-            target_exposure_pct = getattr(self.config, 'max_portfolio_exposure_pct', 0.60)
-            max_positions = getattr(self.config, 'max_positions', 10)
-            per_position_max_pct = getattr(self.config, 'max_per_position_pct', 0.15)
+            allow_position_adds = effective.allow_position_adds
+            target_exposure_pct = effective.max_portfolio_exposure_pct
+            max_positions = effective.max_positions
+            per_position_max_pct = effective.max_per_position_pct
 
             # Compute current exposure (reuse from target utilization logging above)
+            positions: dict = {}  # will be populated below; kept in scope for absolute-target fix
             current_exposure = Decimal("0")
             current_positions_count = 0
             try:
@@ -423,6 +509,46 @@ class Allocator:
                 per_position_max_pct=per_position_max_pct,
             )
             self.logger.info(f"After target utilization scaling: {len(netted_results)} symbols remain")
+
+            # Convert incremental quantities to absolute targets.
+            #
+            # Root cause of tiny trades: the scaler sets net_quantity = scale_factor for
+            # every buy symbol regardless of price (scale_factor = remaining_budget /
+            # sum_notionals).  The executor treats these as absolute targets, so delta =
+            # scale_factor − current_holdings converges toward 0 as positions grow, producing
+            # 1-share ($12) adjustment orders at equilibrium (~23% deployment vs 60% target).
+            #
+            # Fix: absolute_target = incremental_qty + current_holdings, bounded by the
+            # per-position cap.  This ensures each buy symbol keeps a target equal to its full
+            # per-position-max until the cap is reached, driving the portfolio toward the 60%
+            # exposure goal on every iteration.
+            per_position_max_notional_f = float(equity) * per_position_max_pct
+            for symbol, data in netted_results.items():
+                if data["final_direction"] == "buy" and data["net_notional"] > 0:
+                    price = data["price"]
+                    if price <= 0:
+                        continue
+                    # Current holdings for this symbol (0 if unknown)
+                    current_symbol_qty = 0
+                    pos = positions.get(symbol)
+                    if pos is not None:
+                        if isinstance(pos, tuple):
+                            current_symbol_qty = int(pos[0])
+                        elif isinstance(pos, dict):
+                            current_symbol_qty = int(pos.get("qty", 0))
+                        else:
+                            current_symbol_qty = int(getattr(pos, "qty", 0))
+                    max_qty = int(per_position_max_notional_f / price)
+                    absolute_qty = int(data["net_quantity"]) + current_symbol_qty
+                    absolute_qty = min(absolute_qty, max_qty)
+                    if absolute_qty > 0:
+                        data["net_quantity"] = float(absolute_qty)
+                        data["net_notional"] = float(absolute_qty) * price
+                        self.logger.info(
+                            f"{symbol}: absolute target = {absolute_qty} shares "
+                            f"(incremental={int(data['net_quantity'] - current_symbol_qty)}, "
+                            f"current={current_symbol_qty}, cap={max_qty})"
+                        )
 
         # 6. Convert netted notionals to target quantities
         aggregated_targets: dict[str, int] = {}
@@ -540,7 +666,13 @@ class Allocator:
         Note: max_order_notional is enforced by the executor via order slicing.
         This method only enforces max_positions_notional (total portfolio cap).
 
-        Can be bypassed via UI toggle (data/ui_runtime_overrides.json).
+        In registry mode, the five primary deployment controls
+        (max_portfolio_exposure_pct, max_per_position_pct, max_positions,
+        allow_position_adds, enable_target_utilization) are resolved via
+        resolve_effective_risk_settings() before step 5b and applied during
+        target-utilization scaling.  This method handles the legacy
+        max_positions_notional cap, which can be bypassed via the UI toggle
+        (data/ui_runtime_overrides.json allocator.bypass_capital_limit).
 
         Args:
             targets: Dict of symbol -> target quantity
@@ -550,19 +682,13 @@ class Allocator:
         Returns:
             Capped target positions
         """
-        # Check if capital limit bypass is enabled
-        bypass_capital_limit = False
+        # Check if capital limit bypass is enabled (legacy cap bypass)
+        from src.app.runtime_overrides import load_capital_override
         try:
-            import json
-            from pathlib import Path
-
-            ui_overrides_path = Path("data/ui_runtime_overrides.json")
-            if ui_overrides_path.exists():
-                with open(ui_overrides_path, "r") as f:
-                    overrides = json.load(f)
-                    bypass_capital_limit = overrides.get("allocator", {}).get("bypass_capital_limit", False)
+            bypass_capital_limit = load_capital_override().bypass_capital_limit
         except Exception as e:
             self.logger.warning(f"Failed to load bypass setting, using default (False): {e}")
+            bypass_capital_limit = False
 
         if bypass_capital_limit:
             self.logger.warning("⚠️  CAPITAL LIMIT BYPASSED - max_positions_notional NOT enforced!")
