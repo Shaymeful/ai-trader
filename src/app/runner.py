@@ -1684,18 +1684,25 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         market_time = get_market_time_now()
         run_timestamp = market_time.isoformat()
 
-        # Check if market is open - skip iteration if closed
+        # Check if market is open - skip iteration if closed.
+        # Real orders are only possible in paper mode without dry-run; shadow and
+        # dry-run never submit, so they may tolerate the calendar fallback. The
+        # real-order path fails closed if the exchange calendar lookup errors.
         from .market_hours import is_market_hours, seconds_until_market_open
 
-        if not is_market_hours(market_time):
-            wait_seconds = seconds_until_market_open(market_time)
+        real_orders_possible = (mode == "paper") and not dry_run
+
+        if not is_market_hours(market_time, real_orders_possible=real_orders_possible):
+            wait_seconds = seconds_until_market_open(
+                market_time, real_orders_possible=real_orders_possible
+            )
             wait_hours = wait_seconds / 3600
             next_open_time = market_time + timedelta(seconds=wait_seconds)
 
             print(f"\n{'=' * 80}")
             print(f"MARKET CLOSED - {run_timestamp}")
             print(f"{'=' * 80}")
-            print(f"Market is currently closed (hours: Mon-Fri 9:30 AM - 4:00 PM ET)")
+            print("Market is currently closed (NYSE calendar: holidays & half-days aware)")
             print(f"Next market open: {next_open_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
             print(f"Sleeping for {wait_hours:.1f} hours ({wait_seconds} seconds)...")
             print(f"{'=' * 80}\n")

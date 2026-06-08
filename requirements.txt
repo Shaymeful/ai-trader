@@ -3,6 +3,9 @@ pydantic>=2.0.0
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
 
+# NYSE market calendar (holiday- and half-day-aware market hours)
+pandas-market-calendars>=4.0
+
 # API/Dashboard (optional, only needed for web UI)
 fastapi>=0.104.0
 uvicorn>=0.24.0

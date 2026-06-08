@@ -2386,20 +2386,34 @@ python -m src.app.runner --mode paper --loop
 
 **Execution Flow:**
 1. Print loop mode banner with configuration
-2. Check if market is open (Mon-Fri 9:30 AM - 4:00 PM ET)
-   - If market closed: Sleep until next market open, then continue to step 2
+2. Check if the NYSE is open (holiday- and half-day-aware, see below)
+   - If market closed: Sleep until the next session open, then continue to step 2
    - If market open: Continue to step 3
 3. Execute strategy runner (shadow or paper mode)
 4. Log result to `logs/loop_status.log`
 5. Sleep for --sleep-seconds
 6. Repeat from step 2
 
-**Market Hours Checking:**
-- Loop automatically checks if market is open before each iteration
-- During market closed periods (nights, weekends), loop sleeps until next market open
-- Market hours: Monday-Friday, 9:30 AM - 4:00 PM Eastern Time
+**Market Hours Checking (`src/app/market_hours.py`):**
+- Uses the NYSE exchange calendar (`pandas-market-calendars`, calendar `"NYSE"`) — **not**
+  a naive weekday/time window. This correctly handles:
+  - **Regular days**: 9:30 AM – 4:00 PM ET
+  - **Weekends & NYSE holidays**: closed (no session)
+  - **Early-close / half-days**: trading stops at the calendar's early close (e.g. 1:00 PM ET
+    the day after Thanksgiving and on certain holiday eves)
+- `seconds_until_market_open()` sleeps until the next *actual* session open, skipping weekends
+  and holidays (not just to the next weekday).
+- **Fail-closed**: if the exchange-calendar lookup errors while real orders could be placed
+  (paper mode, not dry-run), `is_market_hours()` returns `False` (treated as closed → no
+  trading) and the loop re-polls after a short interval. Only dry-run/shadow runs tolerate a
+  fallback to the simple weekday/regular-hours heuristic. The runner passes
+  `real_orders_possible = (mode == "paper") and not dry_run`.
 - Manual override: Create `state/trigger_loop.flag` to force immediate wake-up (useful for testing)
 - No strategy execution or market data fetching occurs when market is closed
+
+> Note: this applies to the active runner path (`src/app/runner.py`). The legacy
+> `src/app/__main__.py` SMA path uses a separate `src/signals/strategy.py::is_market_hours`
+> helper and is not affected by this change.
 
 **Exception Handling:**
 - All exceptions caught and logged to `logs/loop_errors.log`
