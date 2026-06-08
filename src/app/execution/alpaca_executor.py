@@ -65,6 +65,8 @@ class AlpacaExecutor:
         dry_run: bool = False,
         execution_gate_config: ExecutionGateConfig | None = None,
         fundamentals_cache: FundamentalsCache | None = None,
+        block_new_risk: bool = False,
+        block_new_risk_reason: str = "",
     ):
         """
         Initialize executor.
@@ -75,10 +77,16 @@ class AlpacaExecutor:
             dry_run: If True, only print orders without placing
             execution_gate_config: Optional execution gate configuration (from mode profile)
             fundamentals_cache: Optional fundamentals cache (created if not provided)
+            block_new_risk: If True, the daily/session loss kill switch has tripped;
+                block all risk-increasing orders while still allowing risk-reducing
+                (exit / flatten) orders.
+            block_new_risk_reason: Human-readable reason for blocking (for logs).
         """
         self.broker = broker
         self.config = config
         self.dry_run = dry_run
+        self.block_new_risk = block_new_risk
+        self.block_new_risk_reason = block_new_risk_reason
         self.logger = logging.getLogger("ai-trader")
 
         # Initialize execution gate if config provided
@@ -363,6 +371,19 @@ class AlpacaExecutor:
             if price == 0:
                 self.logger.warning(f"{instruction.symbol}: No price available, skipping")
                 orders_skipped.append((instruction.symbol, "No price available"))
+                continue
+
+            # Daily/session loss kill switch: block risk-increasing orders once the
+            # account-equity drawdown limit is breached. Risk-reducing (exit /
+            # flatten) orders always proceed so positions can still be closed.
+            if self.block_new_risk and not instruction.is_risk_reducing:
+                reason = (
+                    f"BLOCKED by loss kill switch ({instruction.side.name} is "
+                    f"risk-increasing): {self.block_new_risk_reason}"
+                )
+                self.logger.warning(f"{instruction.symbol}: {reason}")
+                orders_skipped.append((instruction.symbol, reason))
+                print(f"  {instruction.symbol}: BLOCKED - loss kill switch active")
                 continue
 
             order_notional = instruction.quantity * (instruction.limit_price or price)

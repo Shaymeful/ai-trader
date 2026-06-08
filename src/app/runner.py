@@ -48,6 +48,7 @@ from .execution import AlpacaExecutor
 from .execution.tradability_filter import ExecutionGateConfig
 from .exit_advisor import ExitAdvisor
 from .ledger import AICopilotTickSummaryEvent, CandidateLoadedEvent, Ledger, StrategyIntentCreatedEvent
+from .loss_limits import fetch_account_equity, get_default_guard
 from .sell_scanner import SellScanner, SellSignal
 from .strategies import AICopilotWeightedStrategy, MeanReversionStrategy, TrendStrategy
 from .strategy_registry import StrategyRegistry
@@ -766,6 +767,26 @@ def run_paper_mode(
     # Load configuration from YAML + env
     config = load_config_with_yaml()
 
+    # SAFETY GATE: the loop runner is paper-only by design (its CLI exposes only
+    # shadow/paper modes). If the resolved trading endpoint is the LIVE Alpaca API
+    # (e.g. via an ALPACA_TRADING_BASE_URL override), refuse to place real orders
+    # unless live trading has been explicitly armed. Prevents accidental live
+    # trading through this loop, which does NOT enforce the daily-loss kill switch.
+    if not dry_run and "paper" not in config.alpaca_trading_base_url.lower():
+        live_armed = getattr(config, "enable_live_trading", False) and getattr(
+            config, "i_understand_live_trading_risk", False
+        )
+        if not live_armed:
+            msg = (
+                "REFUSING TO RUN: trading endpoint resolves to the LIVE Alpaca API "
+                f"({config.alpaca_trading_base_url}) but live trading is not armed. "
+                "This loop does not enforce the daily-loss kill switch. Point "
+                "ALPACA_TRADING_BASE_URL at the paper endpoint, or set "
+                "ENABLE_LIVE_TRADING=true and I_UNDERSTAND_LIVE_TRADING_RISK=true to arm."
+            )
+            print(msg)
+            raise ValueError(msg)
+
     print("=" * 80)
     if not dry_run:
         print("WARNING: LIVE PAPER TRADING ENABLED")
@@ -1284,6 +1305,54 @@ def run_paper_mode(
     # Execute orders (both buy and sell)
     print("Executing orders...")
 
+    # GLOBAL PAUSE KILL SWITCH: the dashboard POST /pause_trading endpoint creates
+    # state/pause_trading.flag for emergency stops. When present we still run the
+    # full pipeline (signals, allocation, ledger) but route execution through
+    # dry-run so NO orders are submitted to the broker. This matches the documented
+    # behavior and is the operator's primary emergency-stop without killing the bot.
+    trading_paused = Path("state/pause_trading.flag").exists()
+    if trading_paused and not dry_run:
+        print(
+            "TRADING PAUSED: state/pause_trading.flag present — "
+            "orders will NOT be submitted this tick."
+        )
+        print()
+
+    # DAILY / SESSION LOSS KILL SWITCH (account-equity drawdown).
+    # Blocks new risk-increasing orders once MAX_DAILY_LOSS or MAX_SESSION_LOSS is
+    # breached; risk-reducing exits are always allowed. Evaluated only when real
+    # orders may be submitted (skipped in dry-run and while paused, neither of
+    # which reaches the broker). Fails closed if account equity cannot be read.
+    block_new_risk = False
+    block_new_risk_reason = ""
+    if not dry_run and not trading_paused:
+        current_equity = fetch_account_equity(broker)
+        loss_state = get_default_guard().evaluate(
+            current_equity=current_equity,
+            max_daily_loss=config.max_daily_loss,
+            max_session_loss=config.max_session_loss,
+        )
+        if loss_state.equity_available:
+            session_limit = (
+                f"${config.max_session_loss:.2f}"
+                if config.max_session_loss is not None
+                else "off"
+            )
+            print(
+                f"Loss kill switch: equity ${loss_state.current_equity:.2f} | "
+                f"daily drawdown ${loss_state.daily_drawdown:.2f}/"
+                f"${config.max_daily_loss:.2f} | "
+                f"session drawdown ${loss_state.session_drawdown:.2f}/{session_limit}"
+            )
+        if loss_state.tripped:
+            block_new_risk = True
+            block_new_risk_reason = "; ".join(loss_state.reasons)
+            print(
+                "  LOSS LIMIT TRIPPED — blocking new risk-increasing orders "
+                f"(exits still allowed): {block_new_risk_reason}"
+            )
+        print()
+
     # Load execution gate config from active mode profile
     execution_gate_config = None
     fundamentals_cache = None
@@ -1331,17 +1400,30 @@ def run_paper_mode(
             print()
 
     except Exception as e:
-        print(f"\nWarning: Failed to load execution gate config: {e}")
         sentiment_adjustment_enabled = False
-        print("Continuing without execution gate constraints.")
+        # Fail closed when placing real orders: silently dropping the execution
+        # gate would also drop the tradability/price/liquidity/spread filters it
+        # carries. Only tolerate a missing gate in dry-run or when paused (no
+        # orders are submitted in either case).
+        if not dry_run and not trading_paused:
+            msg = (
+                f"Failed to load execution gate config: {e}. Refusing to place "
+                "orders without tradability/spread filters (fail-closed)."
+            )
+            print(f"\nERROR: {msg}")
+            raise RuntimeError(msg) from e
+        print(f"\nWarning: Failed to load execution gate config: {e}")
+        print("Continuing without execution gate constraints (dry-run only).")
         print()
 
     executor = AlpacaExecutor(
         broker,
         config,
-        dry_run=dry_run,
+        dry_run=dry_run or trading_paused,
         execution_gate_config=execution_gate_config,
         fundamentals_cache=fundamentals_cache,
+        block_new_risk=block_new_risk,
+        block_new_risk_reason=block_new_risk_reason,
     )
     execution_result = executor.reconcile_and_execute(
         merged_target_positions,
@@ -1601,22 +1683,20 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
             print(f"{'=' * 80}\n")
 
             try:
-                # Use interruptible sleep that checks for trigger flag every 60 seconds
+                # Sleep until next market open, checking wall clock every 60s.
+                # Using a deadline instead of a countdown so machine suspend/resume
+                # doesn't cause the runner to over-sleep.
                 trigger_flag = Path("state/trigger_loop.flag")
-                sleep_remaining = wait_seconds
-                check_interval = 60  # Check every minute during market closed period
+                wake_at = get_market_time_now() + timedelta(seconds=wait_seconds)
 
-                while sleep_remaining > 0:
+                while get_market_time_now() < wake_at:
                     # Check if early wake-up requested (allows manual override)
                     if trigger_flag.exists():
                         print("\n*** Early wake-up triggered! Checking market hours... ***")
                         trigger_flag.unlink()  # Remove flag
                         break
 
-                    # Sleep for shorter interval or remaining time
-                    sleep_duration = min(check_interval, sleep_remaining)
-                    time.sleep(sleep_duration)
-                    sleep_remaining -= sleep_duration
+                    time.sleep(60)
 
             except KeyboardInterrupt:
                 print("\n\nKeyboard interrupt received. Shutting down loop mode...")
@@ -1928,22 +2008,19 @@ def run_loop(mode: str, dry_run: bool, sleep_seconds: int, cancel_open_orders: b
         print()
 
         try:
-            # Use interruptible sleep that checks for trigger flag every 5 seconds
+            # Use wall-clock deadline so machine suspend/resume doesn't cause
+            # the runner to skip or over-sleep the inter-iteration gap.
             trigger_flag = Path("state/trigger_loop.flag")
-            sleep_remaining = sleep_seconds
-            check_interval = 5  # Check every 5 seconds
+            wake_at = get_market_time_now() + timedelta(seconds=sleep_seconds)
 
-            while sleep_remaining > 0:
+            while get_market_time_now() < wake_at:
                 # Check if early wake-up requested
                 if trigger_flag.exists():
                     print("\n*** Early wake-up triggered! Starting next iteration immediately ***")
                     trigger_flag.unlink()  # Remove flag
                     break
 
-                # Sleep for shorter interval or remaining time
-                sleep_duration = min(check_interval, sleep_remaining)
-                time.sleep(sleep_duration)
-                sleep_remaining -= sleep_duration
+                time.sleep(5)
 
         except KeyboardInterrupt:
             print("\n\nKeyboard interrupt received. Shutting down loop mode...")

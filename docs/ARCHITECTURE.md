@@ -64,6 +64,101 @@ established behavior.
 
 ---
 
+## Runtime Override System
+
+### Effective Risk Settings Resolution (`src/app/runtime_overrides.py`)
+
+A canonical resolver layer sits between the active mode profile and the allocator.  It
+reads two runtime files and produces an `EffectiveRiskSettings` object that the allocator
+uses **instead of reading config directly** for the five deployment controls.
+
+#### The five deployment controls (registry mode)
+
+| Control | Profile field | Can be overridden |
+|---|---|---|
+| `max_portfolio_exposure_pct` | `risk_limits.max_portfolio_exposure_pct` | Yes |
+| `max_per_position_pct` | `risk_limits.max_per_position_pct` | Yes |
+| `max_positions` | `risk_limits.max_positions` | Yes |
+| `allow_position_adds` | `allocation.allow_position_adds` | Yes |
+| `enable_target_utilization` | `allocation.enable_target_utilization` | Yes |
+
+Hard safety gates (daily loss, order slicing, execution gate, spread guard,
+risk-reducing sells) are **never** modified by this layer.
+
+#### Precedence (highest wins)
+
+1. **Market regime** – non-zero `target_portfolio_exposure_pct / max_per_position_pct / max_positions` from `data/market_regime.json`
+2. **Capital override** – when `bypass_capital_limit=true` in `data/ui_runtime_overrides.json`, raises ceilings per regime tier from the `capital_override` block
+3. **Active mode profile** – baseline from `config/modes.yaml`
+
+#### Aggressive Capital Deployment (UI checkbox)
+
+The "Aggressive Capital Deployment" checkbox (previously "Bypass Capital Limit") writes
+`allocator.bypass_capital_limit` **and** the `capital_override` block to
+`data/ui_runtime_overrides.json`.
+
+**When ON:**
+- Applies regime-tier ceiling overrides from `capital_override`:
+  - `bullish`: `bullish_exposure_pct` / `bullish_max_per_position_pct` / `bullish_max_positions`
+  - `neutral`: `neutral_exposure_pct` / `neutral_max_per_position_pct`
+  - `risk_off`: `risk_off_exposure_pct` / `risk_off_max_per_position_pct`
+- Forces `allow_position_adds=True` and `enable_target_utilization=True`
+- Does **not** use margin/buying-power or remove any hard safety gate
+
+**When OFF:**
+- Allocator uses profile values exactly
+
+**Suggested defaults** (set in `capital_override` block):
+
+| Regime | exposure_pct | per_position_pct | max_positions |
+|---|---|---|---|
+| bullish | 0.85 | 0.18 | 12 |
+| neutral | 0.70 | 0.20 | (profile) |
+| risk_off | 0.25 | 0.06 | (profile) |
+
+Legacy behavior: `max_positions_notional` cap in `_apply_risk_caps()` is also bypassed
+for backward compatibility with the legacy allocator path.
+
+#### Market Regime (`data/market_regime.json`)
+
+Written by the operator (or a future LLM advisor) via `POST /config/market-regime`.
+Read by the allocator each loop iteration.
+
+```json
+{
+  "market_regime": "neutral",        // bullish | neutral | risk_off
+  "regime_confidence": 0.5,
+  "action_bias": "hold",             // add_risk | hold | reduce_risk | exit_fast
+  "allow_new_longs": true,
+  "allow_position_adds": true,
+  "target_portfolio_exposure_pct": 0.0,  // 0 = use profile/bypass value
+  "max_per_position_pct": 0.0,
+  "max_positions": 0,
+  "exit_policy": { "tighten_exits": false, "stop_loss_pct": 0.0, ... },
+  "sector_bias": { "automation": 0.15 },
+  "symbols_to_reduce_first": [],
+  "symbols_to_exit_immediately": []
+}
+```
+
+**Safety constraints for market regime:**
+- May NOT expand trading outside enabled universe sectors
+- May NOT bypass hard execution/risk guards
+- `risk_off` always sets `allow_new_longs=False` and `allow_position_adds=False`
+- Exit recommendations route through the normal execution path
+
+#### API endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/config/bypass-capital-limit` | Read current bypass flag |
+| POST | `/config/bypass-capital-limit` | Toggle aggressive capital deployment |
+| GET | `/config/market-regime` | Read current market regime |
+| POST | `/config/market-regime` | Set market regime (validated: bullish/neutral/risk_off) |
+| GET | `/config/effective-risk-settings` | View resolved effective deployment controls |
+
+---
+
 ## Capital Allocation & Position Sizing
 
 ### Overview
@@ -77,6 +172,7 @@ The allocation engine distributes account capital across multiple strategies usi
 - **Deterministic netting**: Combines multi-strategy intents for same symbol using signed notionals
 - **Centralized sizing**: Position sizing logic centralized in allocation module (not in strategies)
 - **Backward compatibility**: Falls back to legacy equal-weight allocation if registry/broker unavailable
+- **Effective risk settings**: Registry mode reads deployment controls from `resolve_effective_risk_settings()` (runtime_overrides) instead of config directly
 
 ### Allocation Modes
 
@@ -272,8 +368,15 @@ When `enable_target_utilization: true` in mode config, after netting intents the
    factor**: strategies produce tiny intent notionals (e.g. qty=1 × $150 = $150) but the
    remaining budget may be large ($20 k+); the scale-up is intentional and bounded only by step 6
 6. Caps each position at `max_per_position_pct × equity` (the effective ceiling per symbol)
-7. Filters orders below `min_order_notional`
-8. Blocks all orders if budget or position slots are exhausted
+7. **Converts incremental scaler output to absolute targets**: adds current holdings to each
+   buy symbol's net_quantity (`absolute_qty = incremental_qty + current_holdings`), then
+   clamps to `max_per_position_pct × equity / price`.  Without this step the portfolio
+   converges to ~23% deployment because scale_factor = remaining_budget / sum_notionals shrinks
+   as positions grow, eventually equalling current holdings and producing delta ≈ 0 (tiny orders).
+   Adding current holdings ensures each buy symbol targets its full per-position cap until the
+   cap is reached, driving the portfolio toward the configured exposure target every cycle.
+8. Filters orders below `min_order_notional`
+9. Blocks all orders if budget or position slots are exhausted
 
 **Exit intents**: AI Copilot generates `target_quantity=0, conviction=0` for positions from
 disabled sectors. Zero quantity produces `net_notional=0` → `final_direction=neutral` in
@@ -281,6 +384,11 @@ disabled sectors. Zero quantity produces `net_notional=0` → `final_direction=n
 slot count so they don't block sizing of remaining positions.
 
 Relevant config fields: `enable_target_utilization`, `min_order_notional`, `allow_position_adds`, `max_portfolio_exposure_pct`, `max_per_position_pct`, `max_positions`
+
+**`max_per_position_pct` sizing rule**: to reach `max_portfolio_exposure_pct` the per-position cap
+must satisfy `n_symbols × max_per_position_pct ≥ max_portfolio_exposure_pct`.  For the
+`aggressive_small_mid_sentiment` profile (3 symbols, 60% target) the value is set to `0.20`
+(3 × 20% = 60%).
 
 **Config loading — mode profile auto-apply**:
 `load_config_with_yaml()` now automatically applies the active mode profile's `allocation` and
@@ -1000,6 +1108,50 @@ Order management commands enforce mode-appropriate safety gates:
 - After-hours order submission blocked by default (use `--allow-after-hours-orders` in paper/dry-run only)
 - Paper test order cannot run in live mode
 - Live mode cannot use `--allow-after-hours-orders`
+- **Loop runner live-endpoint guard:** `run_paper_mode()` is paper-only by design (the
+  runner CLI exposes only `shadow`/`paper`). If the resolved `ALPACA_TRADING_BASE_URL`
+  points at the live Alpaca API and orders would be placed, it refuses to run unless
+  `ENABLE_LIVE_TRADING=true` and `I_UNDERSTAND_LIVE_TRADING_RISK=true` are both set.
+  This prevents accidental live trading through a loop that does not enforce the
+  daily-loss kill switch.
+- **Execution-gate fail-closed:** if the active mode profile's execution-gate config
+  fails to load, `run_paper_mode()` aborts the tick (raises) rather than placing orders
+  without tradability/price/liquidity/spread filters. Tolerated only in dry-run or when
+  paused (no orders submitted in either case).
+
+### Runner Loss Kill Switch (account-equity drawdown)
+
+The runner execution path (`run_paper_mode`, used by the `--loop`/`--once` paper and
+live-capable loop) enforces the daily and session loss limits directly, independent of
+the `RiskManager` used by the legacy `__main__.py` path. It is implemented in
+`src/app/loss_limits.py` (`LossLimitGuard`) and wired into `run_paper_mode` →
+`AlpacaExecutor`.
+
+**What it does:**
+- Reads **broker account equity** (reflects realized PnL, unrealized PnL, and fees) at
+  the start of each tick via `fetch_account_equity(broker)`.
+- Compares equity against two baselines:
+  - `session_start_equity` — captured once per process (resets on restart, mirroring
+    session-PnL semantics); held in memory by the process-lifetime guard singleton.
+  - `day_start_equity` — persisted per US/Eastern trading date in `state/loss_limits.json`,
+    so the **daily** limit cannot be reset by restarting the bot mid-day.
+- Trips when `day_start_equity - equity >= MAX_DAILY_LOSS` or
+  `session_start_equity - equity >= MAX_SESSION_LOSS` (session leg only when
+  `MAX_SESSION_LOSS` is set).
+
+**Enforcement (fail-closed, exits-allowed):**
+- When tripped, `AlpacaExecutor` blocks every **risk-increasing** order
+  (`is_risk_reducing == False`, i.e. BUYs / adds) and records them as skipped.
+- **Risk-reducing SELL / flatten orders always pass** — the switch never prevents
+  closing or reducing a position.
+- If account equity **cannot be read** while real orders would be placed, the guard
+  fails closed (treats the switch as tripped) so no new risk is added on uncertainty.
+- Only evaluated when real orders may be submitted; it is skipped in dry-run and while
+  paused (neither reaches the broker).
+
+**Baseline note:** `day_start_equity` is anchored at the first observation of each
+Eastern date (typically the first tick of the day), not the exact 9:30 ET open. This is
+the first-pass account-equity source; a true open-equity snapshot can refine it later.
 
 ### Session Kill Switch (MAX_SESSION_LOSS)
 The session kill switch is an in-session safety feature that stops all new order submissions once session losses exceed a threshold.
@@ -1081,6 +1233,11 @@ When paused (`state/pause_trading.flag` exists):
 When unpaused (`state/pause_trading.flag` removed):
 7. Next loop iteration resumes normal order submission
 8. No restart required
+
+**Enforcement:** `run_paper_mode()` (the loop runner) checks `state/pause_trading.flag`
+immediately before constructing the executor. When the flag is present it forces the
+executor into dry-run (`dry_run=dry_run or trading_paused`), so the broker's
+`submit_order` is never called for that tick while all upstream logic still runs.
 
 **Control Methods:**
 
@@ -1265,6 +1422,12 @@ Daily loss enforcement must persist across bot restarts to prevent circumvention
 
 ### Critical Safety Requirement
 **The bot MUST NOT allow users to bypass daily loss limits by restarting.** If a bot accumulates -$100 loss (approaching the limit), restarting the bot must NOT reset that counter to $0.
+
+> The runner execution path enforces this via account-equity baselines rather than the
+> `RiskManager` PnL counter. Its `day_start_equity` baseline is persisted per Eastern
+> date in `state/loss_limits.json` (see "Runner Loss Kill Switch" under Safety Gates),
+> so the daily drawdown limit also survives restarts on that path. `session_start_equity`
+> is intentionally in-memory and resets per process.
 
 ### Persisted State Fields
 The following fields are persisted in `state.json` (located at `out/state.json`):
